@@ -1,0 +1,5 @@
+variable "tags" {
+}
+
+variable "email" {
+}
