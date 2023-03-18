@@ -1,25 +1,19 @@
-import os
-import json
 import base64
-import boto3
-
+import json
 import logging
+import os
+from urllib import parse as urlparse
+
+import boto3
+import layer as base  # pylint: disable=import-error
 
 from config import config_lookup
-
-from slack_helpers import post_slack_message
-from slack_helpers import prepare_slack_initial_form
-from slack_helpers import prepare_slack_approval_request
-from slack_helpers import prepare_slack_approval_request_update
-from slack_helpers import find_value_in_content_block
-
 from dynamodb import log_operation_to_dynamodb
-
-from sso import list_sso_instances
-from sso import create_account_assigment
-
-from urllib import parse as urlparse
-import layer as base  # pylint: disable=import-error
+from slack_helpers import (find_value_in_content_block, post_slack_message,
+                           prepare_slack_approval_request,
+                           prepare_slack_approval_request_update,
+                           prepare_slack_initial_form)
+from sso import create_account_assigment, list_sso_instances
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)

@@ -29,7 +29,7 @@ module "access_requester_slack_handler" {
   }
 
   attach_policy_json = true
-  policy_json = data.aws_iam_policy_document.slack_handler.json
+  policy_json        = data.aws_iam_policy_document.slack_handler.json
 
   dead_letter_target_arn    = aws_sns_topic.dlq.arn
   attach_dead_letter_policy = true
@@ -44,19 +44,19 @@ module "access_requester_slack_handler" {
 
 data "aws_iam_policy_document" "slack_handler" {
   statement {
-    sid       = "AllowListSSOInstances"
-    effect    = "Allow"
-    actions   = [
-        "sso:ListInstances"
+    sid    = "AllowListSSOInstances"
+    effect = "Allow"
+    actions = [
+      "sso:ListInstances"
     ]
     resources = ["*"]
   }
   statement {
-    sid       = "AllowSSO"
-    effect    = "Allow"
-    actions   = [
-        "sso:CreateAccountAssignment",
-        "sso:DescribeAccountAssignmentCreationStatus"
+    sid    = "AllowSSO"
+    effect = "Allow"
+    actions = [
+      "sso:CreateAccountAssignment",
+      "sso:DescribeAccountAssignmentCreationStatus"
     ]
     resources = [
       "arn:aws:sso:::instance/*",
