@@ -6,5 +6,5 @@ resource "aws_sns_topic" "dlq" {
 resource "aws_sns_topic_subscription" "dlq" {
   topic_arn = aws_sns_topic.dlq.arn
   protocol  = "email"
-  endpoint  = var.email
+  endpoint  = var.aws_sns_topic_subscription_email
 }

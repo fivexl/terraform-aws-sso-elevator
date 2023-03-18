@@ -4,9 +4,8 @@ import logging
 import os
 from urllib import parse as urlparse
 
+import base
 import boto3
-import layer as base  # pylint: disable=import-error
-
 from config import config_lookup
 from dynamodb import log_operation_to_dynamodb
 from slack_helpers import (
@@ -18,7 +17,9 @@ from slack_helpers import (
 )
 from sso import create_account_assigment, list_sso_instances
 
-logging.basicConfig()
+logging.basicConfig(
+    format="[%(asctime)s] p%(process)s {%(pathname)s:%(lineno)d} %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger.setLevel(logging.getLevelName(log_level))

@@ -2,9 +2,8 @@ import json
 import logging
 import os
 
+import base
 import boto3
-import layer as base  # pylint: disable=import-error
-
 from config import config_lookup
 from dynamodb import log_operation_to_dynamodb
 from slack_helpers import post_slack_message
