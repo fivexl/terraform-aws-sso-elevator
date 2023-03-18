@@ -12,10 +12,10 @@ module "access_revoker" {
   source_path = "${path.module}/src/"
 
   environment_variables = {
-    SLACK_BOT_TOKEN      = data.aws_ssm_parameter.slack_bot_token.value
-    LOG_LEVEL            = "INFO" # FIXME
-    DYNAMODB_TABLE_NAME  = module.dynamodb_table_requests.dynamodb_table_id
-    SLACK_CHANNEL_ID     = "C8GT89CQ0" # FIXME
+    SLACK_BOT_TOKEN     = data.aws_ssm_parameter.slack_bot_token.value
+    LOG_LEVEL           = "INFO" # FIXME
+    DYNAMODB_TABLE_NAME = module.dynamodb_table_requests.dynamodb_table_id
+    SLACK_CHANNEL_ID    = "C8GT89CQ0" # FIXME
   }
 
   allowed_triggers = {
@@ -26,7 +26,7 @@ module "access_revoker" {
   }
 
   attach_policy_json = true
-  policy_json = data.aws_iam_policy_document.revoker.json
+  policy_json        = data.aws_iam_policy_document.revoker.json
 
   dead_letter_target_arn    = aws_sns_topic.dlq.arn
   attach_dead_letter_policy = true
@@ -41,20 +41,20 @@ module "access_revoker" {
 
 data "aws_iam_policy_document" "revoker" {
   statement {
-    sid       = "AllowListSSOInstances"
-    effect    = "Allow"
-    actions   = [
-        "sso:ListInstances"
+    sid    = "AllowListSSOInstances"
+    effect = "Allow"
+    actions = [
+      "sso:ListInstances"
     ]
     resources = ["*"]
   }
   statement {
-    sid       = "AllowSSO"
-    effect    = "Allow"
-    actions   = [
-        "sso:ListAccountAssignments",
-        "sso:DeleteAccountAssignment",
-        "sso:DescribeAccountAssignmentDeletionStatus"
+    sid    = "AllowSSO"
+    effect = "Allow"
+    actions = [
+      "sso:ListAccountAssignments",
+      "sso:DeleteAccountAssignment",
+      "sso:DescribeAccountAssignmentDeletionStatus"
     ]
     resources = [
       "arn:aws:sso:::instance/*",

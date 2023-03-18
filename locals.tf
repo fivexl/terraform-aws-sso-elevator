@@ -1,3 +1,3 @@
 locals {
-    name = "access-requester"
+  name = "access-requester"
 }

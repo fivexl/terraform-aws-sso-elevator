@@ -2,8 +2,8 @@ module "dynamodb_table_requests" {
   source  = "terraform-aws-modules/dynamodb-table/aws"
   version = "1.2.2"
 
-  name     = "${local.name}-audit-trail"
-  hash_key = "request_id"
+  name      = "${local.name}-audit-trail"
+  hash_key  = "request_id"
   range_key = "timestamp"
 
   attributes = [
@@ -39,34 +39,34 @@ module "dynamodb_table_requests" {
 
   local_secondary_indexes = [
     {
-      name               = "SortByTime"
-      hash_key           = "request_id"
-      range_key          = "time"
-      projection_type    = "ALL"
+      name            = "SortByTime"
+      hash_key        = "request_id"
+      range_key       = "time"
+      projection_type = "ALL"
     },
     {
-      name               = "SortByAccountId"
-      hash_key           = "request_id"
-      range_key          = "account_id"
-      projection_type    = "ALL"
+      name            = "SortByAccountId"
+      hash_key        = "request_id"
+      range_key       = "account_id"
+      projection_type = "ALL"
     },
     {
-      name               = "SortByRequester"
-      hash_key           = "request_id"
-      range_key          = "requester_email"
-      projection_type    = "ALL"
+      name            = "SortByRequester"
+      hash_key        = "request_id"
+      range_key       = "requester_email"
+      projection_type = "ALL"
     },
     {
-      name               = "SortByApprover"
-      hash_key           = "request_id"
-      range_key          = "approver_email"
-      projection_type    = "ALL"
+      name            = "SortByApprover"
+      hash_key        = "request_id"
+      range_key       = "approver_email"
+      projection_type = "ALL"
     },
     {
-      name               = "SortByRoleName"
-      hash_key           = "request_id"
-      range_key          = "role_name"
-      projection_type    = "ALL"
+      name            = "SortByRoleName"
+      hash_key        = "request_id"
+      range_key       = "role_name"
+      projection_type = "ALL"
     }
   ]
 
