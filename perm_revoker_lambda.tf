@@ -12,10 +12,11 @@ module "access_revoker" {
   source_path = "${path.module}/src/"
 
   environment_variables = {
-    SLACK_BOT_TOKEN     = data.aws_ssm_parameter.slack_bot_token.value
-    LOG_LEVEL           = "INFO" # FIXME
+    SLACK_BOT_TOKEN     = var.slack_bot_token
+    LOG_LEVEL           = var.log_level
     DYNAMODB_TABLE_NAME = module.dynamodb_table_requests.dynamodb_table_id
-    SLACK_CHANNEL_ID    = "C8GT89CQ0" # FIXME
+    SLACK_CHANNEL_ID    = var.slack_channel_id
+    CONFIG              = local.sso_elevator_config
   }
 
   allowed_triggers = {
@@ -73,7 +74,7 @@ data "aws_iam_policy_document" "revoker" {
 resource "aws_cloudwatch_event_rule" "every_night" {
   name                = "every-night"
   description         = "Trigger every night"
-  schedule_expression = "cron(0 23 * * ? *)" # FIXME
+  schedule_expression = var.schedule_expression
   tags                = var.tags
 }
 
