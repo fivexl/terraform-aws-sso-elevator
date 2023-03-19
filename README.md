@@ -32,3 +32,50 @@ settings:
   socket_mode_enabled: false
   token_rotation_enabled: false
 ```
+## Deploying
+```terraform
+
+module "aws_sso_elevator" {
+  source                           = "./aws-sso-elevator"
+  
+  slack_signing_secret             = "********************************"
+  slack_bot_token                  = "xoxb-************-*************-************************"
+  slack_channel_id                 = "***********"
+  schedule_expression              = "cron(0 23 * * ? *)" # revoke access shedule expression
+  identity_provider_arn = "arn:aws:iam::************:saml-provider/*************************************"
+  # IAM > Identity provider > MyIdentityProvider > Summary > ARN
+ 
+  config = {
+      "users" : [
+        {
+          "sso_id" : "**********-********-****-****-****-************",
+          # IAM Identity Center > Users > MyUserName > General information > User ID
+          "email" : "email",
+          "slack_id" : "***********",
+          "can_approve" : true
+        },
+        {
+          "sso_id" : "**********-********-****-****-****-************",
+          "email" : "email",
+          "slack_id" : "***********",
+          "can_approve" : false
+        },
+      ],
+      "permission_sets" : [
+        { "name" : "ReadOnlyPlus",
+        "arn" : "arn:aws:sso:::permissionSet/ssoins-****************/ps-****************"},
+        # IAM Identity Center > Permission sets > MyPermissionSet > General settings > ARN
+      ], 
+      "accounts" : [
+        {
+          "name" : "AWS account name"
+          "id" : "************",
+          "approvers" : ["email"]
+        }
+      ]
+    }
+    
+    aws_sns_topic_subscription_email = "email"
+}
+```
+
