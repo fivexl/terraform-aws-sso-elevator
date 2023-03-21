@@ -7,8 +7,8 @@ Slack bot to temporary assign AWS SSO Permission set to a user
 module "aws_sso_elevator" {
   source                           = "./aws-sso-elevator"
   
-  slack_signing_secret             = "********************************"
-  slack_bot_token                  = "xoxb-************-*************-************************"
+  slack_signing_secret             = "********************************" # you will get it after app creation
+  slack_bot_token                  = "xoxb-************-*************-************************" # you will get it after app creation
   slack_channel_id                 = "***********"
   schedule_expression              = "cron(0 23 * * ? *)" # revoke access shedule expression
   identity_provider_arn = "arn:aws:iam::************:saml-provider/*************************************"
@@ -46,12 +46,20 @@ module "aws_sso_elevator" {
     
     aws_sns_topic_subscription_email = "email"
 }
+
+output "aws_sso_elevator_lambda_function_url" {
+  value = module.aws_sso_elevator.lambda_function_url
+}
+
 ```
 
-### Slack App manifest
-
-Make sure to paste Lambda URL (from module output `lambda_function_url`) to `request_url` field
-
+### Slack App creation
+1. Go to https://api.slack.com/
+2. Click `create an app`
+3. Click `From an app manifest`
+4. Select workspace, click `next`
+5. Choose `yaml` for app manifest format
+6. Update lambda url (from output `aws_sso_elevator_lambda_function_url`) to `request_url` field and paste the following into the text box: 
 ```yaml
 display_information:
   name: AWS SSO access elevator
@@ -77,4 +85,7 @@ settings:
   socket_mode_enabled: false
   token_rotation_enabled: false
 ```
-
+7. Check permissions and click `create`
+8. Click `install to workspace`
+9. Copy `Signing Secret` # for `slack_signing_secret` module input
+10. Copy `Bot User OAuth Token` # for `slack_bot_token` module input
