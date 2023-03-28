@@ -1,13 +1,13 @@
-import json
 import logging
 import os
 
-import base
 import boto3
-from config import config_lookup
+
+import sso
+import organizations
+import config
 from dynamodb import log_operation_to_dynamodb
-from slack_helpers import post_slack_message
-from sso import delete_account_assigment, list_sso_instances
+import slack
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -15,94 +15,84 @@ log_level = os.environ.get("LOG_LEVEL", "INFO")
 logger.setLevel(logging.getLevelName(log_level))
 
 
-def lambda_handler(event, context):
-    # parameters
-
-    DYNAMODB_TABLE_NAME = base.read_env_variable_or_die("DYNAMODB_TABLE_NAME")
-
-    POST_UPDATE_TO_SLACK = os.environ.get("POST_UPDATE_TO_SLACK", "")
-    POST_UPDATE_TO_SLACK = True if POST_UPDATE_TO_SLACK != "" else False
-    SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "")
-    if POST_UPDATE_TO_SLACK and SLACK_CHANNEL_ID == "":
-        error = f"POST_UPDATE_TO_SLACK is set and thus SLACK_CHANNEL_ID is required but it is empty"
-        logger.error(error)
-        raise Exception(error)
-
-    TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
-    if POST_UPDATE_TO_SLACK and TOKEN == "":
-        error = (
-            f"POST_UPDATE_TO_SLACK is set and thus TOKEN is required but it is empty"
-        )
-        logger.error(error)
-        raise Exception(error)
-
-    client = boto3.client("sso-admin")
-    sso_instances = list_sso_instances(client, logger)
-    sso_instance_arn = sso_instances["Instances"][0]["InstanceArn"]
+def lambda_handler(_, __):
+    cfg = config.Config()  # type: ignore
+    client = boto3.client("sso-admin")  # type: ignore
+    sso_instance_arn = sso.get_sso_instance_arn(client, cfg)
     logger.debug(f"selected SSO instance: {sso_instance_arn}")
 
-    for account in config_lookup("accounts"):
+    for account in cfg.lookup("accounts"):
         logger.info(f'Revoking tmp permissions for account {account["id"]}')
-        for permision_set in config_lookup("permission_sets"):
-            response = client.list_account_assignments(
-                InstanceArn=sso_instance_arn,
-                AccountId=account["id"],
-                PermissionSetArn=permision_set["arn"],
+        for permision_set in cfg.lookup("permission_sets"):
+            account_assignments = sso.list_account_assignments(
+                client=client,
+                instance_arn=sso_instance_arn,
+                account_id=account["id"],
+                permission_set_arn=permision_set["arn"],
             )
-            logger.debug(response)
-            for account_assigment in response["AccountAssignments"]:
-                logger.debug(f"handle: {account_assigment}")
-                if account_assigment["PrincipalType"] == "GROUP":
-                    # skip groups
+            for account_assigment in account_assignments:
+                if account_assigment.principal_type == "GROUP":
                     continue
-                role_name = config_lookup(
-                    "permission_sets",
-                    "arn",
-                    account_assigment["PermissionSetArn"],
-                    "name",
-                )
-                email = config_lookup(
-                    "users", "sso_id", account_assigment["PrincipalId"], "email"
-                )
-                slack_id = config_lookup(
-                    "users", "sso_id", account_assigment["PrincipalId"], "slack_id"
-                )
-                logger.info(f"revoking role {role_name} for user {email}")
-                request_id = delete_account_assigment(
-                    logger,
-                    client,
-                    sso_instance_arn,
-                    account["id"],
-                    account_assigment["PermissionSetArn"],
-                    account_assigment["PrincipalId"],
+
+                slack_id = cfg.lookup("users", "sso_id", account_assigment.principal_id, "slack_id")
+                handle_account_assignment_deletion(
+                    slack_id=slack_id,
+                    account_assigment=sso.UserAccountAssignment(
+                        account_id=account["id"],
+                        permission_set_arn=account_assigment.permission_set_arn,
+                        user_principal_id=account_assigment.principal_id,
+                        instance_arn=sso_instance_arn,
+                    ),
                 )
 
-                audit_entry = {
-                    "role_name": role_name,
-                    "account_id": account["id"],
-                    "reason": "automated revocation",
-                    "requester_slack_id": "NA",
-                    "requester_email": "NA",
-                    "request_id": request_id,
-                    "approver_slack_id": "NA",
-                    "approver_email": "NA",
-                    "operation_type": "revoke",
-                }
 
-                response = log_operation_to_dynamodb(
-                    logger, DYNAMODB_TABLE_NAME, audit_entry
-                )
-                logger.debug(response)
+def handle_account_assignment_deletion(
+    account_assigment: sso.UserAccountAssignment,
+    slack_id: str,
+):
+    logger.info(f"Got account assignment for deletion: {account_assigment}")
 
-                if POST_UPDATE_TO_SLACK:
-                    status_message = {
-                        "channel": SLACK_CHANNEL_ID,
-                        "text": f'Revoked role {role_name} for user <@{slack_id}> in account {account["name"]}',
-                    }
-                    post_slack_message("/api/chat.postMessage", status_message, TOKEN)
+    sso_client = boto3.client("sso-admin")  # type: ignore
+    assignment_status = sso.delete_account_assignment_and_wait_for_result(
+        sso_client,
+        account_assigment,
+    )
 
-    print("Done")
+    org_client = boto3.client("organizations")  # type: ignore
+    account = organizations.describe_account(org_client, account_assigment.account_id)
 
+    permission_set = sso.describe_permission_set(
+        sso_client,
+        account_assigment.instance_arn,
+        account_assigment.permission_set_arn,
+    )
 
-if __name__ == "__main__":
-    lambda_handler(None, None)
+    cfg = config.Config()  # type: ignore
+    response = log_operation_to_dynamodb(
+        logger,
+        cfg.dynamodb_table_name,
+        audit_entry={
+            "role_name": permission_set.name,
+            "account_id": account_assigment.account_id,
+            "reason": "automated revocation",
+            "requester_slack_id": "NA",
+            "requester_email": "NA",
+            "request_id": assignment_status.request_id,
+            "approver_slack_id": "NA",
+            "approver_email": "NA",
+            "operation_type": "revoke",
+        },
+    )
+    logger.debug(response)
+
+    if cfg.post_update_to_slack:
+        slack_cfg = config.SlackConfig()  # type: ignore
+        slack.post_message(
+            api_path="/api/chat.postMessage",
+            message={
+                "channel": slack_cfg.channel_id,
+                "text": f"Revoked role {permission_set.name} for user <@{slack_id}> in account {account.name}",
+            },
+            token=slack_cfg.bot_token,
+        )
+

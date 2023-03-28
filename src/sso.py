@@ -1,106 +1,278 @@
+from __future__ import annotations
+
+import datetime
 import time
 from dataclasses import dataclass
-from enum import Enum
+from typing import Callable, Generator, Optional, TypeVar
+from mypy_boto3_sso_admin import SSOAdminClient, type_defs
+import config
+
+T = TypeVar("T")
 
 
-class RequestType(Enum):
-    create = 1
-    delete = 2
+def get_sso_instance_arn(client: SSOAdminClient, cfg: config.Config) -> str:
+    """Select the SSO instance to use
+    If the SSO instance ARN is specified in the config, use that.
+    Otherwise, get sso instances and if there is only one, use that.
+    Args:
+        client (SSOAdminClient)
+        cfg (config.Config)
+    Raises:
+        EnvironmentError: If no SSO instances are found or more than one is found and none is specified in the config
+    """
+    if cfg.sso_instance_arn:
+        return cfg.sso_instance_arn
+
+    sso_instances = list_sso_instances(client)
+    if len(sso_instances) == 0:
+        raise EnvironmentError("No SSO instances found. Are you in the correct account?")
+    if len(sso_instances) > 1:
+        raise EnvironmentError("More than one SSO instance found, please specify one in the config")
+    return sso_instances[0].arn
 
 
 @dataclass
-class AccountAssigmentRequestInput:
-    sso_instance_arn: str
-    account_id: str
-    permission_set: str
-    user_id: str
-    request_type: RequestType
+class AccountAssignmentStatus:
+    status: str
+    request_id: str
+    failure_reason: Optional[str]
+    target_id: str
+    target_type: str
+    permission_set_arn: str
+    principal_type: str
+    principal_id: str
+    created_date: Optional[str]
 
-
-def list_sso_instances(client, logger):
-    sso_instances = client.list_instances()
-    logger.debug(f"All sso instances: {sso_instances}")
-    if len(sso_instances["Instances"]) == 0:
-        raise EnvironmentError(
-            "No SSO instances found. Are you in the correct account?"
+    @staticmethod
+    def from_dict(d: type_defs.AccountAssignmentOperationStatusTypeDef) -> AccountAssignmentStatus:
+        return AccountAssignmentStatus(
+            status=d["Status"],  # type: ignore
+            request_id=d["RequestId"],  # type: ignore
+            failure_reason=d.get("FailureReason"),  # type: ignore
+            target_id=d["TargetId"],  # type: ignore
+            target_type=d["TargetType"],  # type: ignore
+            permission_set_arn=d["PermissionSetArn"],  # type: ignore
+            principal_type=d["PrincipalType"],  # type: ignore
+            principal_id=d["PrincipalId"],  # type: ignore
+            created_date=d.get("CreatedDate"),  # type: ignore
         )
-    return sso_instances
+
+    @staticmethod
+    def is_in_progress(status: AccountAssignmentStatus) -> bool:
+        return status.status == "IN_PROGRESS"
+
+    @staticmethod
+    def is_ready(status: AccountAssignmentStatus) -> bool:
+        return status.status == "SUCCEEDED"
+
+    @staticmethod
+    def is_failed(status: AccountAssignmentStatus) -> bool:
+        return status.status == "FAILED"
 
 
-def wait_for_account_assigment_operation(
-    logger, status_func, input, account_assigment_request
-):
-    response_key = (
-        "AccountAssignmentCreationStatus"
-        if input.request_type == RequestType.create
-        else "AccountAssignmentDeletionStatus"
+@dataclass
+class UserAccountAssignment:
+    instance_arn: str
+    account_id: str
+    permission_set_arn: str
+    user_principal_id: str
+
+    def as_dict(self) -> dict:
+        return {
+            "InstanceArn": self.instance_arn,
+            "TargetId": self.account_id,
+            "PermissionSetArn": self.permission_set_arn,
+            "PrincipalId": self.user_principal_id,
+            "TargetType": "AWS_ACCOUNT",
+            "PrincipalType": "USER",
+        }
+
+
+def create_account_assignment(client: SSOAdminClient, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
+    response = client.create_account_assignment(**assignment.as_dict())
+    return AccountAssignmentStatus.from_dict(response["AccountAssignmentCreationStatus"])
+
+
+def delete_account_assignment(client: SSOAdminClient, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
+    response = client.delete_account_assignment(**assignment.as_dict())
+    return AccountAssignmentStatus.from_dict(response["AccountAssignmentDeletionStatus"])
+
+
+def describe_account_assignment_creation_status(client: SSOAdminClient, assignment: UserAccountAssignment, request_id):
+    response = client.describe_account_assignment_creation_status(
+        InstanceArn=assignment.instance_arn,
+        AccountAssignmentCreationRequestId=request_id,
     )
-    request_id = account_assigment_request[response_key]["RequestId"]
-    request_key = (
-        "AccountAssignmentCreationRequestId"
-        if input.request_type == RequestType.create
-        else "AccountAssignmentDeletionRequestId"
+    return AccountAssignmentStatus.from_dict(response["AccountAssignmentCreationStatus"])
+
+
+def describe_account_assignment_deletion_status(client: SSOAdminClient, assignment: UserAccountAssignment, request_id):
+    response = client.describe_account_assignment_deletion_status(
+        InstanceArn=assignment.instance_arn,
+        AccountAssignmentDeletionRequestId=request_id,
     )
-    kwargs = {
-        "InstanceArn": input.sso_instance_arn,
-        request_key: request_id,
-    }
+    return AccountAssignmentStatus.from_dict(response["AccountAssignmentDeletionStatus"])
+
+
+def retry_while(
+    fn: Callable[[], T],
+    condition: Callable[[T], bool],
+    retry_period_seconds: int = 1,
+    timeout_seconds: int = 20,
+) -> T:
+    # If timeout_seconds -1, then retry forever.
+    start = datetime.datetime.now()
+
+    def is_timeout(timeout_seconds: int) -> bool:
+        if timeout_seconds == -1:
+            return False
+        return datetime.datetime.now() - start >= datetime.timedelta(seconds=timeout_seconds)
+
     while True:
-        status = status_func(**kwargs)
-        if status[response_key]["Status"] == "IN_PROGRESS":
-            logger.debug("Still in progress")
-            time.sleep(10)
+        response = fn()
+        if is_timeout(timeout_seconds):
+            return response
+
+        if condition(response):
+            time.sleep(retry_period_seconds)
             continue
-        elif status[response_key]["Status"] == "SUCCEEDED":
-            return request_id
-        elif status[response_key]["Status"] == "FAILED":
-            logger.error(status)
-            raise RuntimeError
+        else:
+            return response
 
 
-def modify_account_assigment(
-    logger, mod_func, status_func, input: AccountAssigmentRequestInput
-):
-    account_assigment_request = mod_func(
-        InstanceArn=input.sso_instance_arn,
-        TargetId=input.account_id,
-        TargetType="AWS_ACCOUNT",
-        PermissionSetArn=input.permission_set,
-        PrincipalType="USER",
-        PrincipalId=input.user_id,
-    )
-    logger.debug(f"account_assigment_request: {account_assigment_request}")
-    request_id = wait_for_account_assigment_operation(
-        logger, status_func, input, account_assigment_request
-    )
-    return request_id
+def create_account_assignment_and_wait_for_result(client: SSOAdminClient, assignment: UserAccountAssignment):
+    response = create_account_assignment(client, assignment)
+    if AccountAssignmentStatus.is_ready(response):
+        return response
+    else:
+
+        def fn():
+            return describe_account_assignment_creation_status(client, assignment, response.request_id)
+
+        result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
+    return result
 
 
-def create_account_assigment(
-    logger, client, sso_instance_arn, account_id, permission_set, user_id
-):
-    mod_func = getattr(client, "create_account_assignment")
-    status_func = getattr(client, "describe_account_assignment_creation_status")
-    logger.info(
-        f"Add permission set {permission_set} for {user_id} to account {account_id}"
-    )
-    input = AccountAssigmentRequestInput(
-        sso_instance_arn, account_id, permission_set, user_id, RequestType.create
-    )
-    request_id = modify_account_assigment(logger, mod_func, status_func, input)
-    return request_id
+def delete_account_assignment_and_wait_for_result(client: SSOAdminClient, assignment: UserAccountAssignment):
+    response = delete_account_assignment(client, assignment)
+    if AccountAssignmentStatus.is_ready(response):
+        return response
+    else:
+
+        def fn():
+            return describe_account_assignment_deletion_status(client, assignment, response.request_id)
+
+        result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
+    return result
 
 
-def delete_account_assigment(
-    logger, client, sso_instance_arn, account_id, permission_set, user_id
-):
-    mod_func = getattr(client, "delete_account_assignment")
-    status_func = getattr(client, "describe_account_assignment_deletion_status")
-    logger.info(
-        f"Delete permission set {permission_set} for {user_id} from account {account_id}"
-    )
-    input = AccountAssigmentRequestInput(
-        sso_instance_arn, account_id, permission_set, user_id, RequestType.delete
-    )
-    request_id = modify_account_assigment(logger, mod_func, status_func, input)
-    return request_id
+@dataclass
+class IAMIdentityCenterInstance:
+    """IAM Identity Center Instance
+
+    Attributes:
+        arn (str): ARN of the IAM Identity Center Instance
+        identity_store_id (str): ID of the Identity Store
+    """
+
+    arn: str
+    identity_store_id: str
+
+    @staticmethod
+    def from_instance_metadata_type_def(td: type_defs.InstanceMetadataTypeDef) -> "IAMIdentityCenterInstance":
+        return IAMIdentityCenterInstance(
+            arn=td["InstanceArn"],  # type: ignore
+            identity_store_id=td["IdentityStoreId"],  # type: ignore
+        )
+
+
+def list_sso_instances(client: SSOAdminClient) -> list[IAMIdentityCenterInstance]:
+    """List all IAM Identity Center Instances
+
+    Returns:
+        list[IAMIdentityCenterInstance]: List of IAM Identity Center Instances
+    """
+    instances: list[IAMIdentityCenterInstance] = []
+    paginator = client.get_paginator("list_instances")
+    for page in paginator.paginate():
+        instances.extend(
+            IAMIdentityCenterInstance.from_instance_metadata_type_def(instance) for instance in page["Instances"]
+        )
+    return instances
+
+
+@dataclass
+class AccountAssignment:
+    account_id: str
+    permission_set_arn: str
+    principal_id: str
+    principal_type: str
+
+    @staticmethod
+    def from_type_def(td: type_defs.AccountAssignmentTypeDef) -> AccountAssignment:
+        return AccountAssignment(
+            account_id=td["AccountId"],  # type: ignore
+            permission_set_arn=td["PermissionSetArn"],  # type: ignore
+            principal_id=td["PrincipalId"],  # type: ignore
+            principal_type=td["PrincipalType"],  # type: ignore
+        )
+
+
+def list_account_assignments(
+    client: SSOAdminClient,
+    instance_arn: str,
+    account_id: str,
+    permission_set_arn: str,
+) -> list["AccountAssignment"]:
+    paginator = client.get_paginator("list_account_assignments")
+    account_assignments: list[AccountAssignment] = []
+
+    for page in paginator.paginate(
+        InstanceArn=instance_arn,
+        AccountId=account_id,
+        PermissionSetArn=permission_set_arn,
+    ):
+        account_assignments.extend(
+            AccountAssignment.from_type_def(account_assignment) for account_assignment in page["AccountAssignments"]
+        )
+    return account_assignments
+
+
+@dataclass
+class PermissionSet:
+    """Permission Set
+
+    Attributes:
+        name (str): Name of the Permission Set
+        arn (str): ARN of the Permission Set
+        description (Optional[str]): Description of the Permission Set
+    """
+
+    name: str
+    arn: str
+    description: Optional[str]
+
+    @staticmethod
+    def from_type_def(td: type_defs.DescribePermissionSetResponseTypeDef) -> "PermissionSet":
+        ps = td["PermissionSet"]
+        return PermissionSet(
+            name=ps["Name"],  # type: ignore
+            arn=ps["PermissionSetArn"],  # type: ignore
+            description=ps.get("Description"),
+        )
+
+
+def describe_permission_set(client: SSOAdminClient, sso_instance_arn: str, permission_set_arn: str):
+    td = client.describe_permission_set(InstanceArn=sso_instance_arn, PermissionSetArn=permission_set_arn)
+    return PermissionSet.from_type_def(td)
+
+
+def list_permission_sets_arns(client: SSOAdminClient, sso_instance_arn: str) -> Generator[str, None, None]:
+    paginator = client.get_paginator("list_permission_sets")
+    for page in paginator.paginate(InstanceArn=sso_instance_arn):
+        yield from page["PermissionSets"]
+
+
+def list_permission_sets(client: SSOAdminClient, sso_instance_arn: str) -> Generator[PermissionSet, None, None]:
+    for permission_set_arn in list_permission_sets_arns(client, sso_instance_arn):
+        yield describe_permission_set(client, sso_instance_arn, permission_set_arn)
