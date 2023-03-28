@@ -6,11 +6,11 @@ Slack bot to temporary assign AWS SSO Permission set to a user
 
 module "aws_sso_elevator" {
   source                           = "./aws-sso-elevator"
-  aws_sns_topic_subscription_email = "mobessona2@gmail.com"
+  aws_sns_topic_subscription_email = "email"
 
   slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
   slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
-  slack_channel_id     = "C04V34WDEQZ"
+  slack_channel_id     = "***********"
   schedule_expression  = "cron(0 23 * * ? *)" # revoke access shedule expression
 
   identity_provider_arn = "arn:aws:iam::************:saml-provider/*************************************"
