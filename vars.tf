@@ -36,3 +36,23 @@ variable "identity_provider_arn" {
   type        = string
   description = "ARN of the identity provider. IAM > Identity providers > {Name} > Summary > ARN"
 }
+
+variable "revoker_lambda_name" {
+  type    = string
+  default = "access-revoker"
+}
+
+variable "requester_lambda_name" {
+  type    = string
+  default = "access-requester"
+}
+
+variable "revoker_lambda_name_postfix" {
+  type    = string
+  default = ""
+}
+
+variable "requester_lambda_name_postfix" {
+  type    = string
+  default = ""
+}

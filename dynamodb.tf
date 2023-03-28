@@ -2,7 +2,7 @@ module "dynamodb_table_requests" {
   source  = "terraform-aws-modules/dynamodb-table/aws"
   version = "1.2.2"
 
-  name      = "${local.name}-audit-trail"
+  name      = "${local.requester_lambda_name}-audit-trail"
   hash_key  = "request_id"
   range_key = "timestamp"
 

@@ -2,14 +2,24 @@ module "access_revoker" {
   source  = "terraform-aws-modules/lambda/aws"
   version = "4.10.1"
 
-  function_name = "access-revoker"
+  function_name = local.revoker_lambda_name
   description   = "Revokes temporary permissions"
   handler       = "revoker.lambda_handler"
   runtime       = "python3.9"
   publish       = true
   timeout       = 300
 
-  source_path = "${path.module}/src/"
+  hash_extra = local.revoker_lambda_name
+  source_path = [
+    {
+      path           = "${path.module}/sso-elevator/"
+      poetry_install = true
+      artifacts_dir  = "${path.root}/builds/"
+      patterns = [
+        "!.venv/.*",
+      ]
+    }
+  ]
 
   environment_variables = {
     SLACK_BOT_TOKEN     = var.slack_bot_token

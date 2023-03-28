@@ -1,10 +1,13 @@
 import http.client
 import json
-
+import hashlib
+import hmac
+import logging
+import time
 
 # https://api.slack.com/surfaces/modals/using
 # https://app.slack.com/block-kit-builder/
-def prepare_slack_initial_form(trigger_id, permission_sets, accounts):
+def prepare_initial_form(trigger_id, permission_sets, accounts):
     return {
         "trigger_id": trigger_id,
         "view": {
@@ -87,9 +90,7 @@ def prepare_slack_initial_form(trigger_id, permission_sets, accounts):
     }
 
 
-def prepare_slack_approval_request(
-    channel, requester_slack_id, account_id, requires_approval, role_name, reason
-):
+def prepare_approval_request(channel, requester_slack_id, account_id, requires_approval, role_name, reason):
     header_text = "AWS account access request."
     if requires_approval:
         header_text += "\n⚠️ This account does not allow self-approval ⚠️"
@@ -146,15 +147,14 @@ def find_value_in_content_block(blocks, key):
             if field["text"].startswith(key):
                 value = field["text"].split(": ")[1]
                 return value.strip()
-        else:
-            raise KeyError(f"Can not find filed with key={key} in block {block}")
+        raise KeyError(f"Can not find filed with key={key} in block {block}")
 
 
-def prepare_slack_approval_request_update(channel, ts, approver, action, blocks):
+def prepare_approval_request_update(channel, ts, approver, action, blocks):
     message = {"channel": channel, "ts": ts, "blocks": []}
     # loop through original message and take header and content blocks to drop buttons
     for block in blocks:
-        if block["block_id"] == "header" or block["block_id"] == "content":
+        if block["block_id"] in ["header", "content"]:
             message["blocks"].append(block)
     # add information about approver
     message["blocks"].append(
@@ -170,12 +170,10 @@ def prepare_slack_approval_request_update(channel, ts, approver, action, blocks)
     return message
 
 
-# POST https://slack.com/api/views.open
-# Content-type: application/json
-# Authorization: Bearer YOUR_ACCESS_TOKEN_HERE
-
-
-def post_slack_message(api_path, message, token):
+def post_message(api_path: str, message: dict, token: str):
+    # POST https://slack.com/api/views.open
+    # Content-type: application/json
+    # Authorization: Bearer YOUR_ACCESS_TOKEN_HERE
     print(f"Sending message: {json.dumps(message)}")
     headers = {"Content-type": "application/json", "Authorization": f"Bearer {token}"}
     connection = http.client.HTTPSConnection("slack.com")
@@ -183,5 +181,47 @@ def post_slack_message(api_path, message, token):
     response = connection.getresponse()
     response_status = response.status
     response_body = json.loads(response.read().decode())
-    print("Response: {}, message: {}".format(response_status, response_body))
+    print(f"Response: {response_status}, message: {response_body}")
     return response_status, response_body
+
+
+def verify_request(headers, signing_secret, body, age=60):
+    """Method to verifty slack requests
+    Read more here https://api.slack.com/authentication/verifying-requests-from-slack
+    """
+    timestamp = None
+    if "X-Slack-Request-Timestamp" in headers:
+        timestamp = headers["X-Slack-Request-Timestamp"]
+    elif "x-slack-request-timestamp" in headers:
+        timestamp = headers["x-slack-request-timestamp"]
+    else:
+        raise ValueError("Request does not have X-Slack-Request-Timestamp or x-slack-request-timestamp")
+    if not timestamp.isdigit():
+        raise ValueError("Value of X-Slack-Request-Timestamp does not appear to be a digit")
+
+    request_signature = None
+    if "X-Slack-Signature" in headers:
+        request_signature = headers["X-Slack-Signature"]
+    elif "x-slack-signature" in headers:
+        request_signature = headers["x-slack-signature"]
+    else:
+        raise ValueError("Request does not have X-Slack-Signature or x-slack-signature")
+    if abs(time.time() - int(timestamp)) > age:
+        # The request timestamp is more than five minutes from local time.
+        # It could be a replay attack, so let's ignore it.
+        raise ValueError("Request is older than one minute")
+
+    sig_basestring = f"v0:{timestamp}:{body}"
+    signature = hmac.new(
+        bytes(signing_secret, "utf8"),
+        msg=bytes(sig_basestring, "utf-8"),
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+
+    logging.info(f"computed signature = {signature}")
+    if f"v0={signature}" != request_signature:
+        raise ValueError(
+            f"Request computed signature v0={signature} " + f"is not equal to received one {request_signature}"
+        )
+    else:
+        logging.info("Request looks legit. It is safe to process it")

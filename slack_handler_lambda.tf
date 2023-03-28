@@ -2,14 +2,24 @@ module "access_requester_slack_handler" {
   source  = "terraform-aws-modules/lambda/aws"
   version = "4.10.1"
 
-  function_name = local.name
+  function_name = local.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"
   handler       = "main.lambda_handler"
   runtime       = "python3.9"
   publish       = true
   timeout       = 30
 
-  source_path = "${path.module}/src/"
+  hash_extra = local.requester_lambda_name
+  source_path = [
+    {
+      path           = "${path.module}/sso-elevator/"
+      poetry_install = true
+      artifacts_dir  = "${path.root}/builds/"
+      patterns = [
+        "!.venv/.*",
+      ]
+    }
+  ]
 
   environment_variables = {
     SLACK_SIGNING_SECRET = var.slack_signing_secret
@@ -87,7 +97,7 @@ data "aws_iam_policy_document" "slack_handler" {
     content {
       effect = "Allow"
       actions = [
-        "iam:PutRolePolicy", "iam:CreateRole", "iam:GetRole", "iam:ListAttachedRolePolicies"
+        "iam:PutRolePolicy", "iam:CreateRole", "iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies"
       ]
       resources = [statement.value]
     }
@@ -112,4 +122,40 @@ locals {
   allow_access_to_roles_with_names = [
     for v in local.account_ids_permission_sets_combinations :
   "arn:aws:iam::${v.account_id}:role/aws-reserved/sso.amazonaws.com/${data.aws_region.current.name}/AWSReservedSSO_${v.permission_set_name}_*"]
+}
+
+locals {
+  user_emails = toset(var.config.users[*].email)
+}
+
+locals {
+  filter_by_user_emails = { for k in local.user_emails : k => { attribute_path = "UserName", attribute_value = k } }
+}
+
+data "aws_ssoadmin_instances" "all" {}
+
+locals {
+  identity_store_id = tolist(data.aws_ssoadmin_instances.all.identity_store_ids)[0] # TODO: is there always only one? 
+}
+
+data "aws_identitystore_user" "all" {
+  for_each          = local.filter_by_user_emails
+  identity_store_id = local.identity_store_id
+
+  alternate_identifier {
+    unique_attribute {
+      attribute_path  = each.value.attribute_path
+      attribute_value = each.value.attribute_value
+    }
+  }
+}
+
+locals {
+  names_of_permission_sets = toset(var.config.permission_sets[*].name)
+}
+
+data "aws_ssoadmin_permission_set" "all" {
+  instance_arn = tolist(data.aws_ssoadmin_instances.all.arns)[0]
+  for_each     = local.names_of_permission_sets
+  name         = each.key
 }

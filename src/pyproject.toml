@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "sso-elevator"
+version = "0.1.0"
+description = ""
+authors = ["EreminAnton <mobessona2@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9.16"
+boto3-stubs = {extras = ["dynamodb", "organizations", "sso-admin"], version = "^1.26.99"}
+pydantic = "^1.10.7"
+
+[tool.poetry.group.dev.dependencies]
+boto3 = "^1.26.97"
+pytest = "^7.2.2"
+black = "^23.1.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.black]
+line-length = 119
+
+[tool.ruff]
+line-length = 119
+

@@ -6,45 +6,52 @@ Slack bot to temporary assign AWS SSO Permission set to a user
 
 module "aws_sso_elevator" {
   source                           = "./aws-sso-elevator"
-  
-  slack_signing_secret             = "********************************" # you will get it after app creation
-  slack_bot_token                  = "xoxb-************-*************-************************" # you will get it after app creation
-  slack_channel_id                 = "***********"
-  schedule_expression              = "cron(0 23 * * ? *)" # revoke access shedule expression
+  aws_sns_topic_subscription_email = "mobessona2@gmail.com"
+
+  slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
+  slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
+  slack_channel_id     = "C04V34WDEQZ"
+  schedule_expression  = "cron(0 23 * * ? *)" # revoke access shedule expression
+
   identity_provider_arn = "arn:aws:iam::************:saml-provider/*************************************"
-  # IAM > Identity provider > MyIdentityProvider > Summary > ARN
- 
+
   config = {
-      "users" : [
-        {
-          "sso_id" : "**********-********-****-****-****-************",
-          # IAM Identity Center > Users > MyUserName > General information > User ID
-          "email" : "email",
-          "slack_id" : "***********",
-          "can_approve" : true
-        },
-        {
-          "sso_id" : "**********-********-****-****-****-************",
-          "email" : "email",
-          "slack_id" : "***********",
-          "can_approve" : false
-        },
-      ],
-      "permission_sets" : [
-        { "name" : "ReadOnlyPlus",
-        "arn" : "arn:aws:sso:::permissionSet/ssoins-****************/ps-****************"},
-        # IAM Identity Center > Permission sets > MyPermissionSet > General settings > ARN
-      ], 
-      "accounts" : [
-        {
-          "name" : "AWS account name"
-          "id" : "************",
-          "approvers" : ["email"]
-        }
-      ]
-    }
-    
-    aws_sns_topic_subscription_email = "email"
+    "users" : [
+      {
+        "email" : "email",
+        "slack_id" : "***********",
+        "can_approve" : true
+      },
+    ],
+    "permission_sets" : [
+      {
+        "name" : "ReadOnly"
+      },
+      {
+        "name" : "AdministratorAccess"
+      },
+    ],
+    "accounts" : [
+      {
+        "name" : "account-name",
+        "id" : "************",
+        "approvers" : ["email"]
+      },
+      {
+        "name" : "account-name",
+        "id" : "************",
+        "approvers" : ["email"]
+      }
+    ]
+  }
+}
+
+data "aws_ssm_parameter" "sso_elevator_slack_signing_secret" {
+  name = "/sso-elevator/slack-signing-secret"
+}
+
+data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
+  name = "/sso-elevator/slack-bot-token"
 }
 
 output "aws_sso_elevator_lambda_function_url" {

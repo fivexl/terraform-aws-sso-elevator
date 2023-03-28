@@ -1,5 +1,5 @@
 resource "aws_sns_topic" "dlq" {
-  name = local.name
+  name = local.requester_lambda_name
   tags = var.tags
 }
 
