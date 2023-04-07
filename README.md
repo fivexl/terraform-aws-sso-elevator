@@ -15,14 +15,14 @@ module "aws_sso_elevator" {
 
   sso_instance_arn = "arn:aws:sso:::instance/ssoins-***********"
 
+  # "Resource", "PermissionSet", "Approvers" can be a string or a list of strings
+  # "Resource" & "PermissionSet" can be set to "*" to match all
 
-  #class Statement:
-  #  resource_type: list["Account"]
-  #  resource: list[Union[str, Literal["*"]]]
-  #  permission_set: list[Union[str, Literal["*"]]]
-  #  approvers: Optional[list[str]]
-  #  approval_is_not_required: bool = False
-  #  allow_self_approval: bool = False
+  # Request will be approved automatically if:
+  # - "AllowSelfApproval" is set to true, and requester is in "Approvers" list
+  # - "ApprovalIsNotRequired" is set to true
+
+  # If there is only one approver, and "AllowSelfApproval" isn't set to true, nobody will be able to approve the request
 
   config = [
     {
@@ -59,15 +59,17 @@ module "aws_sso_elevator" {
       "AllowSelfApproval" : true,
     },
     {
-      # # No rescuer hath the rescuer.
-      # # No Lord hath the champion,
-      # # no mother and no father,
-      # # only nothingness above.
-      # "ResourceType" : "Account",
-      # "Resource" : "*",
-      # "PermissionSet" : "*",
-      # "Approvers" : "org_wide_approver@gmail.com",
-      # "AllowSelfApproval" : true,
+
+      # No rescuer hath the rescuer.
+      # No Lord hath the champion,
+      # no mother and no father,
+      # only nothingness above.
+
+      "ResourceType" : "Account",
+      "Resource" : "*",
+      "PermissionSet" : "*",
+      "Approvers" : "org_wide_approver@gmail.com",
+      "AllowSelfApproval" : true,
     },
   ]
 }
