@@ -1,34 +1,19 @@
 from __future__ import annotations
 
 import datetime
+import os
 import time
 from dataclasses import dataclass
 from typing import Callable, Generator, Optional, TypeVar
+
+from aws_lambda_powertools import Logger
+from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_sso_admin import SSOAdminClient, type_defs
-import config
 
 T = TypeVar("T")
 
-
-def get_sso_instance_arn(client: SSOAdminClient, cfg: config.Config) -> str:
-    """Select the SSO instance to use
-    If the SSO instance ARN is specified in the config, use that.
-    Otherwise, get sso instances and if there is only one, use that.
-    Args:
-        client (SSOAdminClient)
-        cfg (config.Config)
-    Raises:
-        EnvironmentError: If no SSO instances are found or more than one is found and none is specified in the config
-    """
-    if cfg.sso_instance_arn:
-        return cfg.sso_instance_arn
-
-    sso_instances = list_sso_instances(client)
-    if len(sso_instances) == 0:
-        raise EnvironmentError("No SSO instances found. Are you in the correct account?")
-    if len(sso_instances) > 1:
-        raise EnvironmentError("More than one SSO instance found, please specify one in the config")
-    return sso_instances[0].arn
+log_level = os.environ.get("LOG_LEVEL", "DEBUG")
+logger = Logger(level=log_level)
 
 
 @dataclass
@@ -195,10 +180,21 @@ def list_sso_instances(client: SSOAdminClient) -> list[IAMIdentityCenterInstance
     instances: list[IAMIdentityCenterInstance] = []
     paginator = client.get_paginator("list_instances")
     for page in paginator.paginate():
-        instances.extend(
-            IAMIdentityCenterInstance.from_instance_metadata_type_def(instance) for instance in page["Instances"]
-        )
+        instances.extend(IAMIdentityCenterInstance.from_instance_metadata_type_def(instance) for instance in page["Instances"])
     return instances
+
+
+def describe_sso_instance(client: SSOAdminClient, instance_arn: str) -> IAMIdentityCenterInstance:
+    """Describe IAM Identity Center Instance
+
+    Args:
+        instance_arn (str): ARN of the IAM Identity Center Instance
+
+    Returns:
+        IAMIdentityCenterInstance: IAM Identity Center Instance
+    """
+    sso_instances = list_sso_instances(client)
+    return next(instance for instance in sso_instances if instance.arn == instance_arn)
 
 
 @dataclass
@@ -232,9 +228,7 @@ def list_account_assignments(
         AccountId=account_id,
         PermissionSetArn=permission_set_arn,
     ):
-        account_assignments.extend(
-            AccountAssignment.from_type_def(account_assignment) for account_assignment in page["AccountAssignments"]
-        )
+        account_assignments.extend(AccountAssignment.from_type_def(account_assignment) for account_assignment in page["AccountAssignments"])
     return account_assignments
 
 
@@ -267,6 +261,13 @@ def describe_permission_set(client: SSOAdminClient, sso_instance_arn: str, permi
     return PermissionSet.from_type_def(td)
 
 
+def get_permission_set_by_name(client: SSOAdminClient, sso_instance_arn: str, permission_set_name: str) -> Optional[PermissionSet]:
+    return next(
+        (permission_set for permission_set in list_permission_sets(client, sso_instance_arn) if permission_set.name == permission_set_name),
+        None,
+    )
+
+
 def list_permission_sets_arns(client: SSOAdminClient, sso_instance_arn: str) -> Generator[str, None, None]:
     paginator = client.get_paginator("list_permission_sets")
     for page in paginator.paginate(InstanceArn=sso_instance_arn):
@@ -276,3 +277,24 @@ def list_permission_sets_arns(client: SSOAdminClient, sso_instance_arn: str) -> 
 def list_permission_sets(client: SSOAdminClient, sso_instance_arn: str) -> Generator[PermissionSet, None, None]:
     for permission_set_arn in list_permission_sets_arns(client, sso_instance_arn):
         yield describe_permission_set(client, sso_instance_arn, permission_set_arn)
+
+
+def get_user_principal_id_by_email(identity_center_client: IdentityStoreClient, identity_store_id: str, email: str) -> Optional[str]:
+    response = identity_center_client.list_users(
+        IdentityStoreId=identity_store_id,
+    )
+    for user in response["Users"]:
+        logger.debug(user)
+        for user_email in user.get("Emails", []):
+            if user_email.get("Value") == email:
+                return user["UserId"]
+    logger.info(f"SSO User with email {email} not found")
+    return None
+
+
+def get_user_emails(identity_center_client: IdentityStoreClient, identity_store_id: str, user_id: str) -> list[str]:
+    user = identity_center_client.describe_user(
+        IdentityStoreId=identity_store_id,
+        UserId=user_id,
+    )
+    return [email["Value"] for email in user["Emails"] if "Value" in email]

@@ -20,6 +20,28 @@ tests = ["attrs[tests-no-zope]", "zope.interface"]
 tests-no-zope = ["cloudpickle", "cloudpickle", "hypothesis", "hypothesis", "mypy (>=0.971,<0.990)", "mypy (>=0.971,<0.990)", "pympler", "pympler", "pytest (>=4.3.0)", "pytest (>=4.3.0)", "pytest-mypy-plugins", "pytest-mypy-plugins", "pytest-xdist[psutil]", "pytest-xdist[psutil]"]
 
 [[package]]
+name = "aws-lambda-powertools"
+version = "2.11.0"
+description = "AWS Lambda Powertools is a developer toolkit to implement Serverless best practices and increase developer velocity."
+category = "main"
+optional = false
+python-versions = ">=3.7.4,<4.0.0"
+files = [
+    {file = "aws_lambda_powertools-2.11.0-py3-none-any.whl", hash = "sha256:8a6515d8bef2e63d0e6ebf81291030681da86a10cbf1138d1577a220e446ef99"},
+    {file = "aws_lambda_powertools-2.11.0.tar.gz", hash = "sha256:d74e285532090e9b08cf349858d0712d33b70ed69cd65cb0f385304247393c6c"},
+]
+
+[package.dependencies]
+typing-extensions = ">=4.4.0,<5.0.0"
+
+[package.extras]
+all = ["aws-xray-sdk (>=2.8.0,<3.0.0)", "fastjsonschema (>=2.14.5,<3.0.0)", "pydantic (>=1.8.2,<2.0.0)"]
+aws-sdk = ["boto3 (>=1.20.32,<2.0.0)"]
+parser = ["pydantic (>=1.8.2,<2.0.0)"]
+tracer = ["aws-xray-sdk (>=2.8.0,<3.0.0)"]
+validation = ["fastjsonschema (>=2.14.5,<3.0.0)"]
+
+[[package]]
 name = "black"
 version = "23.1.0"
 description = "The uncompromising code formatter."
@@ -73,7 +95,7 @@ uvloop = ["uvloop (>=0.15.2)"]
 name = "boto3"
 version = "1.26.99"
 description = "The AWS SDK for Python"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">= 3.7"
 files = [
@@ -104,6 +126,7 @@ files = [
 [package.dependencies]
 botocore-stubs = "*"
 mypy-boto3-dynamodb = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"dynamodb\""}
+mypy-boto3-identitystore = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"identitystore\""}
 mypy-boto3-organizations = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"organizations\""}
 mypy-boto3-sso-admin = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"sso-admin\""}
 types-s3transfer = "*"
@@ -459,7 +482,7 @@ xray = ["mypy-boto3-xray (>=1.26.0,<1.27.0)"]
 name = "botocore"
 version = "1.29.99"
 description = "Low-level, data-driven core of boto 3."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">= 3.7"
 files = [
@@ -548,7 +571,7 @@ files = [
 name = "jmespath"
 version = "1.0.1"
 description = "JSON Matching Expressions"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
@@ -566,6 +589,18 @@ python-versions = ">=3.7"
 files = [
     {file = "mypy-boto3-dynamodb-1.26.97.post1.tar.gz", hash = "sha256:d7a53eda6b185737ad7718d3b46fd0cb0b4cf1b854c0b259754cd9060baef7d2"},
     {file = "mypy_boto3_dynamodb-1.26.97.post1-py3-none-any.whl", hash = "sha256:291700151a786e5ecb7274a9f7dbfda326419bab990b88e6299f4b8ee62473f6"},
+]
+
+[[package]]
+name = "mypy-boto3-identitystore"
+version = "1.26.107"
+description = "Type annotations for boto3.IdentityStore 1.26.107 service generated with mypy-boto3-builder 7.14.5"
+category = "main"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "mypy-boto3-identitystore-1.26.107.tar.gz", hash = "sha256:503cca13a4bc17df561da7f414bd1ea9dc272127a82b9eed252f633085244463"},
+    {file = "mypy_boto3_identitystore-1.26.107-py3-none-any.whl", hash = "sha256:f4ef30c457d90a5d82ce594af1074e7ab33488169c3e27da655331dfc47a9693"},
 ]
 
 [[package]]
@@ -747,7 +782,7 @@ testing = ["argcomplete", "hypothesis (>=3.56)", "mock", "nose", "pygments (>=2.
 name = "python-dateutil"
 version = "2.8.2"
 description = "Extensions to the standard Python datetime module"
-category = "dev"
+category = "main"
 optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
 files = [
@@ -762,7 +797,7 @@ six = ">=1.5"
 name = "s3transfer"
 version = "0.6.0"
 description = "An Amazon S3 Transfer Manager"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">= 3.7"
 files = [
@@ -780,7 +815,7 @@ crt = ["botocore[crt] (>=1.20.29,<2.0a.0)"]
 name = "six"
 version = "1.16.0"
 description = "Python 2 and 3 compatibility utilities"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*"
 files = [
@@ -843,7 +878,7 @@ files = [
 name = "urllib3"
 version = "1.26.15"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*"
 files = [
@@ -859,4 +894,4 @@ socks = ["PySocks (>=1.5.6,!=1.5.7,<2.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9.16"
-content-hash = "d04c0e07ce80433ccd2398abc350d5bf87957b1af04e9932cda5261e03b8bae3"
+content-hash = "929cab31425cd24cf138648ee8a417d16e5795b4de995837d16ffb8201c4c8bf"

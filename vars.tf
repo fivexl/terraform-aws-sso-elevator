@@ -28,13 +28,13 @@ variable "schedule_expression" {
   default = "cron(0 23 * * ? *)"
 }
 
-variable "config" {
-  type = any
+variable "sso_instance_arn" {
+  type    = string
+  default = ""
 }
 
-variable "identity_provider_arn" {
-  type        = string
-  description = "ARN of the identity provider. IAM > Identity providers > {Name} > Summary > ARN"
+variable "config" {
+  type = any
 }
 
 variable "revoker_lambda_name" {

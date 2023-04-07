@@ -22,11 +22,13 @@ module "access_revoker" {
   ]
 
   environment_variables = {
-    SLACK_BOT_TOKEN     = var.slack_bot_token
-    LOG_LEVEL           = var.log_level
-    DYNAMODB_TABLE_NAME = module.dynamodb_table_requests.dynamodb_table_id
-    SLACK_CHANNEL_ID    = var.slack_channel_id
-    CONFIG              = local.sso_elevator_config
+    SLACK_BOT_TOKEN             = var.slack_bot_token
+    LOG_LEVEL                   = var.log_level
+    DYNAMODB_TABLE_NAME         = module.dynamodb_table_requests.dynamodb_table_id
+    SLACK_CHANNEL_ID            = var.slack_channel_id
+    SSO_INSTANCE_ARN            = local.sso_instance_arn
+    CONFIG                      = jsonencode(var.config)
+    POWERTOOLS_LOGGER_LOG_EVENT = true
   }
 
   allowed_triggers = {

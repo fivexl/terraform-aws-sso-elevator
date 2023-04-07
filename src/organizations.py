@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+
 from mypy_boto3_organizations import OrganizationsClient, type_defs
 
 
@@ -14,14 +15,14 @@ class AWSAccount:
 
     name: str
     id: str
-    organization_unit_id: str
+    organization_id: str
 
     @staticmethod
     def from_type_def(td: type_defs.AccountTypeDef) -> "AWSAccount":
         return AWSAccount(
             name=td["Name"],  # type: ignore
             id=td["Id"],  # type: ignore
-            organization_unit_id=td["Arn"].split("/")[1],  # type: ignore
+            organization_id=td["Arn"].split("/")[1],  # type: ignore
         )
 
 

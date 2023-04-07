@@ -6,44 +6,70 @@ Slack bot to temporary assign AWS SSO Permission set to a user
 
 module "aws_sso_elevator" {
   source                           = "./aws-sso-elevator"
-  aws_sns_topic_subscription_email = "email"
+  aws_sns_topic_subscription_email = "email@gmail.com"
 
   slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
   slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
   slack_channel_id     = "***********"
   schedule_expression  = "cron(0 23 * * ? *)" # revoke access shedule expression
 
-  identity_provider_arn = "arn:aws:iam::************:saml-provider/*************************************"
+  sso_instance_arn = "arn:aws:sso:::instance/ssoins-***********"
 
-  config = {
-    "users" : [
-      {
-        "email" : "email",
-        "slack_id" : "***********",
-        "can_approve" : true
-      },
-    ],
-    "permission_sets" : [
-      {
-        "name" : "ReadOnly"
-      },
-      {
-        "name" : "AdministratorAccess"
-      },
-    ],
-    "accounts" : [
-      {
-        "name" : "account-name",
-        "id" : "************",
-        "approvers" : ["email"]
-      },
-      {
-        "name" : "account-name",
-        "id" : "************",
-        "approvers" : ["email"]
-      }
-    ]
-  }
+
+  #class Statement:
+  #  resource_type: Literal["Account", "OU"]
+  #  resource: list[Union[str, Literal["*"]]]
+  #  permission_set: list[Union[str, Literal["*"]]]
+  #  approvers: Optional[list[str]]
+  #  approval_is_not_required: bool = False
+  #  allow_self_approval: bool = False
+
+  config = [
+    {
+      "ResourceType" : "Account",
+      "Resource" : "account_id",
+      "PermissionSet" : "*",
+      "Approvers" : "email@gmail.com",
+      "AllowSelfApproval" : true,
+    },
+    {
+      "ResourceType" : "Account",
+      "Resource" : "account_id",
+      "PermissionSet" : "Billing",
+      "Approvers" : "email@gmail.com",
+      "AllowSelfApproval" : true,
+    },
+    {
+      "ResourceType" : "Account",
+      "Resource" : ["account_id", "account_id"],
+      "PermissionSet" : "ReadOnlyPlus",
+      "Approvers" : "email@gmail.com",
+    },
+    {
+      "ResourceType" : "Account",
+      "Resource" : "*",
+      "PermissionSet" : "ReadOnlyPlus",
+      "ApprovalIsNotRequired" : true,
+    },
+    {
+      "ResourceType" : "Account",
+      "Resource" : "account_id",
+      "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
+      "Approvers" : ["email@gmail.com"], 
+      "AllowSelfApproval" : true,
+    },
+    {
+      # # No rescuer hath the rescuer.
+      # # No Lord hath the champion,
+      # # no mother and no father,
+      # # only nothingness above.
+      # "ResourceType" : "Account",
+      # "Resource" : "*",
+      # "PermissionSet" : "*",
+      # "Approvers" : "org_wide_approver@gmail.com",
+      # "AllowSelfApproval" : true,
+    },
+  ]
 }
 
 data "aws_ssm_parameter" "sso_elevator_slack_signing_secret" {

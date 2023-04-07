@@ -4,7 +4,7 @@ import sys
 import boto3
 import pytest
 
-sys.path.append("../sso-elevator")
+sys.path.append("../sso-elevator")  # TODO: move to nornal module structure, and remove
 
 import sso
 
