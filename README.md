@@ -112,6 +112,8 @@ oauth_config:
     bot:
       - commands
       - chat:write
+      - users:read.email
+      - users:read
 settings:
   interactivity:
     is_enabled: true
