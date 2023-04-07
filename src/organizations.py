@@ -5,14 +5,6 @@ from mypy_boto3_organizations import OrganizationsClient, type_defs
 
 @dataclass
 class AWSAccount:
-    """AWS Account
-
-    Attributes:
-        name (str): Name of the AWS Account
-        id (str): ID of the AWS Account
-        organization_unit_id (str): ID of the OU the AWS Account is in
-    """
-
     name: str
     id: str
     organization_id: str

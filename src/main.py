@@ -21,7 +21,7 @@ sso_client = boto3.client("sso-admin")  # type: ignore
 identity_center_client = boto3.client("identitystore")  # type: ignore
 
 
-def lambda_handler(event, context):
+def lambda_handler(event, _):
     print(f"event: {json.dumps(event)}")
     cfg = config.Config()  # type: ignore
     # Get body and headers
