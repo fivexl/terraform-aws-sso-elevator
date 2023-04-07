@@ -12,7 +12,7 @@ module "access_revoker" {
   hash_extra = local.revoker_lambda_name
   source_path = [
     {
-      path           = "${path.module}/sso-elevator/"
+      path           = "${path.module}/src/"
       poetry_install = true
       artifacts_dir  = "${path.root}/builds/"
       patterns = [
