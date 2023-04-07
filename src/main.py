@@ -40,8 +40,8 @@ def lambda_handler(event, context):
     slack_cfg = config.SlackConfig()  # type: ignore
     try:
         slack.verify_request(request_headers, slack_cfg.signing_secret, body_as_string)
-    except Exception as error:
-        logger.error(error)
+    except Exception as e:
+        logger.exception(e)
         return {"statusCode": 400}
 
     # Parse payload
@@ -54,7 +54,7 @@ def lambda_handler(event, context):
     try:
         main(actual_payload, cfg, slack_cfg)
     except Exception as e:
-        logger.error(e)
+        logger.exception(e)
         return {"statusCode": 500}
 
     return {"statusCode": 200}
@@ -86,8 +86,12 @@ def handle_shortcut(payload: dict, cfg: config.Config, slack_cfg: config.SlackCo
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     statements = cfg.get_statements()
     avialable_accounts = config.get_accounts_from_statements(statements, org_client)
-    avialable_permission_sets = config.get_permission_sets_from_statements(statements, sso_client, sso_instance.arn)
-    inital_form = slack.prepare_initial_form(payload["trigger_id"], avialable_permission_sets, avialable_accounts)
+    avialable_permission_sets = config.get_permission_sets_from_statements(
+        statements, sso_client, sso_instance.arn
+    )
+    inital_form = slack.prepare_initial_form(
+        payload["trigger_id"], avialable_permission_sets, avialable_accounts
+    )
     return slack.post_message("/api/views.open", inital_form, slack_cfg.bot_token)
 
 
@@ -103,7 +107,9 @@ def handle_button_click(
         return {"statusCode": 500}
 
     account_id = slack.find_value_in_content_block(payload["message"]["blocks"], "AccountId")  # type: ignore
-    permission_set_name = slack.find_value_in_content_block(payload["message"]["blocks"], "Role name")
+    permission_set_name = slack.find_value_in_content_block(
+        payload["message"]["blocks"], "Role name"
+    )
 
     if not account_id or not permission_set_name:
         logger.error(f"Unsupported type. payload: {payload}")
@@ -146,26 +152,38 @@ def handle_button_click(
     )
 
     if user_action == "approve":
-        slack_client.post_message(text="Updating permissions as requested...", thread_ts=thread_ts)
+        slack_client.post_message(
+            text="Updating permissions as requested...", thread_ts=thread_ts
+        )
 
         if requester_slack_id_from_msg := slack.find_value_in_content_block(payload["message"]["blocks"], "Requester"):  # type: ignore
             # slack id will come with <@{requester_slack_id}> so we need to clean it
-            requester_slack_id = requester_slack_id_from_msg.removeprefix("<@").removesuffix(">")
+            requester_slack_id = requester_slack_id_from_msg.removeprefix(
+                "<@"
+            ).removesuffix(">")
             requester = slack_client.get_user_by_id(requester_slack_id)
             if requester is None:
-                raise ValueError(f"Requester with slack id {requester_slack_id} not found")
+                raise ValueError(
+                    f"Requester with slack id {requester_slack_id} not found"
+                )
             elif requester.email is None:
-                raise ValueError(f"Requester with slack id {requester_slack_id} has no email")
+                raise ValueError(
+                    f"Requester with slack id {requester_slack_id} has no email"
+                )
         else:
             raise ValueError("Requester not found in message")
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
-        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
+        permission_set = sso.get_permission_set_by_name(
+            sso_client, sso_instance.arn, permission_set_name
+        )
         if permission_set is None:
             raise ValueError(f"Permission set {permission_set_name} not found")
 
-        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
+        user_principal_id = sso.get_user_principal_id_by_email(
+            identity_center_client, sso_instance.identity_store_id, requester.email
+        )
         if user_principal_id is None:
             raise ValueError(f"User with email {requester.email} not found")
 
@@ -179,7 +197,9 @@ def handle_button_click(
             ),
         )
 
-        reason = slack.find_value_in_content_block(payload["message"]["blocks"], "Reason")
+        reason = slack.find_value_in_content_block(
+            payload["message"]["blocks"], "Reason"
+        )
         if reason is None:
             raise ValueError("Reason not found in message")
 
@@ -218,10 +238,14 @@ class SelfApprovalIsAllowedAndRequesterIsApprover:
     ...
 
 
-DecisionOnRequest = Union[RequiresApproval, ApprovalIsNotRequired, SelfApprovalIsAllowedAndRequesterIsApprover]
+DecisionOnRequest = Union[
+    RequiresApproval, ApprovalIsNotRequired, SelfApprovalIsAllowedAndRequesterIsApprover
+]
 
 
-def get_affected_statements(statements: list[config.Statement], account_id: str, permission_set_name: str) -> list[config.Statement]:
+def get_affected_statements(
+    statements: list[config.Statement], account_id: str, permission_set_name: str
+) -> list[config.Statement]:
     return [
         statement
         for statement in statements
@@ -233,10 +257,15 @@ def get_affected_statements(statements: list[config.Statement], account_id: str,
 
 
 def make_decision_on_request(
-    statements: list[config.Statement], account_id: str, permission_set_name: str, requester_email: str
+    statements: list[config.Statement],
+    account_id: str,
+    permission_set_name: str,
+    requester_email: str,
 ) -> DecisionOnRequest:
     can_be_approved_by = set()
-    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
+    affected_statements = get_affected_statements(
+        statements, account_id, permission_set_name
+    )
     for statement in affected_statements:
         if statement.approval_is_not_required:
             return ApprovalIsNotRequired()
@@ -245,12 +274,20 @@ def make_decision_on_request(
             if statement.allow_self_approval and requester_email in statement.approvers:
                 return SelfApprovalIsAllowedAndRequesterIsApprover()
 
-            can_be_approved_by.update(approver for approver in statement.approvers if approver != requester_email)
+            can_be_approved_by.update(
+                approver
+                for approver in statement.approvers
+                if approver != requester_email
+            )
     return RequiresApproval(approvers=can_be_approved_by)
 
 
-def get_approvers(statements: list[config.Statement], account_id: str, permission_set_name: str) -> set[str]:
-    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
+def get_approvers(
+    statements: list[config.Statement], account_id: str, permission_set_name: str
+) -> set[str]:
+    affected_statements = get_affected_statements(
+        statements, account_id, permission_set_name
+    )
     can_be_approved_by = set()
     for statement in affected_statements:
         if statement.approvers:
@@ -268,9 +305,15 @@ class RequestForAccessFromSlack:
     @staticmethod
     def from_view_submission(body: dict) -> "RequestForAccessFromSlack":
         return RequestForAccessFromSlack(
-            permission_set_name=body["view"]["state"]["values"]["select_role"]["selected_role"]["selected_option"]["value"],
-            account_id=body["view"]["state"]["values"]["select_account"]["selected_account"]["selected_option"]["value"],
-            reason=body["view"]["state"]["values"]["provide_reason"]["provided_reason"]["value"],
+            permission_set_name=body["view"]["state"]["values"]["select_role"][
+                "selected_role"
+            ]["selected_option"]["value"],
+            account_id=body["view"]["state"]["values"]["select_account"][
+                "selected_account"
+            ]["selected_option"]["value"],
+            reason=body["view"]["state"]["values"]["provide_reason"]["provided_reason"][
+                "value"
+            ],
             user_id=body["user"]["id"],
         )
 
@@ -313,12 +356,18 @@ def handle_view_submission(
             token=slack_cfg.bot_token,
         )
 
-        approvers = [slack_client.get_user_by_email(email) for email in decision_on_request.approvers]
-        approvers_slack_ids = [f"<@{approver.id}>" for approver in approvers if approver is not None]
+        approvers = [
+            slack_client.get_user_by_email(email)
+            for email in decision_on_request.approvers
+        ]
+        approvers_slack_ids = [
+            f"<@{approver.id}>" for approver in approvers if approver is not None
+        ]
 
         slack_client.post_message(
             thread_ts=slack_response["ts"],
-            text=" ".join(approvers_slack_ids) + " there is a request waiting for the approval",
+            text=" ".join(approvers_slack_ids)
+            + " there is a request waiting for the approval",
         )
         return
 
@@ -327,7 +376,9 @@ def handle_view_submission(
 
         _, slack_response = slack.post_message(
             api_path="/api/chat.postMessage",
-            message=slack.prepare_approval_request(**approval_request_kwargs, show_buttons=False),
+            message=slack.prepare_approval_request(
+                **approval_request_kwargs, show_buttons=False
+            ),
             token=slack_cfg.bot_token,
         )
 
@@ -337,11 +388,15 @@ def handle_view_submission(
         )
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
+        user_principal_id = sso.get_user_principal_id_by_email(
+            identity_center_client, sso_instance.identity_store_id, requester.email
+        )
         if user_principal_id is None:
             raise ValueError(f"SSO User with email {requester.email} not found")
 
-        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, request.permission_set_name)
+        permission_set = sso.get_permission_set_by_name(
+            sso_client, sso_instance.arn, request.permission_set_name
+        )
         if permission_set is None:
             raise ValueError(f"Permission set {request.permission_set_name} not found")
 
@@ -381,7 +436,9 @@ def handle_view_submission(
 
         _, slack_response = slack.post_message(
             api_path="/api/chat.postMessage",
-            message=slack.prepare_approval_request(**approval_request_kwargs, show_buttons=False),
+            message=slack.prepare_approval_request(
+                **approval_request_kwargs, show_buttons=False
+            ),
             token=slack_cfg.bot_token,
         )
 
@@ -391,12 +448,18 @@ def handle_view_submission(
         )
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-        logger.info(f"SSO Instance: arn:{sso_instance.arn} store_id:{sso_instance.identity_store_id}")
-        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
+        logger.info(
+            f"SSO Instance: arn:{sso_instance.arn} store_id:{sso_instance.identity_store_id}"
+        )
+        user_principal_id = sso.get_user_principal_id_by_email(
+            identity_center_client, sso_instance.identity_store_id, requester.email
+        )
         if user_principal_id is None:
             raise ValueError(f"SSO User with email {requester.email} not found")
 
-        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, request.permission_set_name)
+        permission_set = sso.get_permission_set_by_name(
+            sso_client, sso_instance.arn, request.permission_set_name
+        )
         if permission_set is None:
             raise ValueError(f"Permission set {request.permission_set_name} not found")
 
@@ -430,5 +493,3 @@ def handle_view_submission(
             thread_ts=slack_response["ts"],
             text="Done",
         )
-
-
