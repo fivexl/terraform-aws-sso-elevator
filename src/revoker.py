@@ -1,7 +1,7 @@
-import logging
 import os
 
 import boto3
+from aws_lambda_powertools import Logger
 
 import config
 import dynamodb
@@ -9,10 +9,8 @@ import organizations
 import slack
 import sso
 
-logging.basicConfig()
-logger = logging.getLogger(__name__)
-log_level = os.environ.get("LOG_LEVEL", "INFO")
-logger.setLevel(logging.getLevelName(log_level))
+log_level = os.environ.get("LOG_LEVEL", "DEBUG")
+logger = Logger(level=log_level)
 
 org_client = boto3.client("organizations")  # type: ignore
 sso_client = boto3.client("sso-admin")  # type: ignore
@@ -51,13 +49,10 @@ def lambda_handler(_, __):
 def handle_account_assignment_deletion(account_assigment: sso.UserAccountAssignment):
     logger.info(f"Got account assignment for deletion: {account_assigment}")
 
-    sso_client = boto3.client("sso-admin")  # type: ignore
     assignment_status = sso.delete_account_assignment_and_wait_for_result(
         sso_client,
         account_assigment,
     )
-
-    org_client = boto3.client("organizations")  # type: ignore
     account = organizations.describe_account(org_client, account_assigment.account_id)
 
     permission_set = sso.describe_permission_set(
@@ -89,5 +84,9 @@ def handle_account_assignment_deletion(account_assigment: sso.UserAccountAssignm
         slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
 
         slack_client.get_user_by_id(account_assigment.user_principal_id)
-        user_emails = sso.get_user_emails(identity_center_client, account_assigment.instance_arn, account_assigment.user_principal_id)
+        user_emails = sso.get_user_emails(
+            identity_center_client,
+            account_assigment.instance_arn,
+            account_assigment.user_principal_id,
+        )
         slack_client.post_message(text=f"Revoked role {permission_set.name} for user {user_emails} in account {account.name}")

@@ -9,13 +9,6 @@ import organizations
 import sso
 
 
-@dataclass
-class RequestForAccess:
-    permission_set: sso.PermissionSet
-    account: organizations.AWSAccount
-    requester_email: str
-
-
 class SlackConfig(BaseSettings):
     bot_token: str = Field(..., env="SLACK_BOT_TOKEN", min_length=1)
     signing_secret: str = Field(..., env="SLACK_SIGNING_SECRET", min_length=1)
