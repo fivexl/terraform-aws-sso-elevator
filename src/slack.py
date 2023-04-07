@@ -1,13 +1,18 @@
-import http.client
-import json
+import functools
 import hashlib
 import hmac
+import http.client
+import json
 import logging
 import time
 
+import organizations
+import sso
+
+
 # https://api.slack.com/surfaces/modals/using
 # https://app.slack.com/block-kit-builder/
-def prepare_initial_form(trigger_id, permission_sets, accounts):
+def prepare_initial_form(trigger_id, permission_sets: list[sso.PermissionSet], accounts: list[organizations.AWSAccount]):
     return {
         "trigger_id": trigger_id,
         "view": {
@@ -36,9 +41,9 @@ def prepare_initial_form(trigger_id, permission_sets, accounts):
                             {
                                 "text": {
                                     "type": "plain_text",
-                                    "text": permission_set["name"],
+                                    "text": permission_set.name,
                                 },
-                                "value": permission_set["name"],
+                                "value": permission_set.name,
                             }
                             for permission_set in permission_sets
                         ],
@@ -57,8 +62,8 @@ def prepare_initial_form(trigger_id, permission_sets, accounts):
                         },
                         "options": [
                             {
-                                "text": {"type": "plain_text", "text": account["name"]},
-                                "value": account["id"],
+                                "text": {"type": "plain_text", "text": account.name},
+                                "value": account.id,
                             }
                             for account in accounts
                         ],
@@ -90,31 +95,29 @@ def prepare_initial_form(trigger_id, permission_sets, accounts):
     }
 
 
-def prepare_approval_request(channel, requester_slack_id, account_id, requires_approval, role_name, reason):
+def prepare_approval_request(
+    channel: str, requester_slack_id: str, account_id: str, role_name: str, reason: str, show_buttons: bool = True
+):
     header_text = "AWS account access request."
-    if requires_approval:
-        header_text += "\n⚠️ This account does not allow self-approval ⚠️"
-        header_text += "\nWe already contacted eligible approvers, wait for them to click the button."
-    can_self_approve = "No" if requires_approval else "Yes"
-    return {
-        "channel": channel,
-        "blocks": [
-            {
-                "type": "section",
-                "block_id": "header",
-                "text": {"type": "mrkdwn", "text": header_text},
-            },
-            {
-                "type": "section",
-                "block_id": "content",
-                "fields": [
-                    {"type": "mrkdwn", "text": f"Requester: <@{requester_slack_id}>"},
-                    {"type": "mrkdwn", "text": f"AccountId: {account_id}"},
-                    {"type": "mrkdwn", "text": f"Role name: {role_name}"},
-                    {"type": "mrkdwn", "text": f"Can self-approve: {can_self_approve}"},
-                    {"type": "mrkdwn", "text": f"Reason: {reason}"},
-                ],
-            },
+    blocks = [
+        {
+            "type": "section",
+            "block_id": "header",
+            "text": {"type": "mrkdwn", "text": header_text},
+        },
+        {
+            "type": "section",
+            "block_id": "content",
+            "fields": [
+                {"type": "mrkdwn", "text": f"Requester: <@{requester_slack_id}>"},
+                {"type": "mrkdwn", "text": f"AccountId: {account_id}"},
+                {"type": "mrkdwn", "text": f"Role name: {role_name}"},
+                {"type": "mrkdwn", "text": f"Reason: {reason}"},
+            ],
+        },
+    ]
+    if show_buttons:
+        blocks.append(
             {
                 "type": "actions",
                 "block_id": "buttons",
@@ -134,9 +137,9 @@ def prepare_approval_request(channel, requester_slack_id, account_id, requires_a
                         "value": "deny",
                     },
                 ],
-            },
-        ],
-    }
+            }
+        )
+    return {"channel": channel, "blocks": blocks}
 
 
 def find_value_in_content_block(blocks, key):
@@ -174,14 +177,14 @@ def post_message(api_path: str, message: dict, token: str):
     # POST https://slack.com/api/views.open
     # Content-type: application/json
     # Authorization: Bearer YOUR_ACCESS_TOKEN_HERE
-    print(f"Sending message: {json.dumps(message)}")
+    # print(f"Sending message: {json.dumps(message)}")
     headers = {"Content-type": "application/json", "Authorization": f"Bearer {token}"}
     connection = http.client.HTTPSConnection("slack.com")
     connection.request("POST", api_path, json.dumps(message), headers)
     response = connection.getresponse()
     response_status = response.status
     response_body = json.loads(response.read().decode())
-    print(f"Response: {response_status}, message: {response_body}")
+    # print(f"Response: {response_status}, message: {response_body}")
     return response_status, response_body
 
 
@@ -220,8 +223,70 @@ def verify_request(headers, signing_secret, body, age=60):
 
     logging.info(f"computed signature = {signature}")
     if f"v0={signature}" != request_signature:
-        raise ValueError(
-            f"Request computed signature v0={signature} " + f"is not equal to received one {request_signature}"
-        )
+        raise ValueError(f"Request computed signature v0={signature} " + f"is not equal to received one {request_signature}")
     else:
         logging.info("Request looks legit. It is safe to process it")
+
+
+import http.client
+from typing import NamedTuple, Optional
+
+
+def tag_users(*id: str) -> str:
+    return " ".join(f"<@{user_id}>" for user_id in id)
+
+
+class Slack:
+    def __init__(self, bot_token: str, default_channel: str) -> None:
+        self.headers = {"Content-type": "application/json", "Authorization": f"Bearer {bot_token}"}
+        self.default_channel = default_channel
+
+    class Response(NamedTuple):
+        status: int
+        body: dict
+
+    def api_call(
+        self,
+        api_path: str,
+        body: Optional[dict] = None,
+        method: str = "POST",
+    ) -> Response:
+        connection = http.client.HTTPSConnection("slack.com")
+        if body is None:
+            body = {}
+
+        connection.request(method, api_path, json.dumps(body), self.headers)
+        response = connection.getresponse()
+        return Slack.Response(response.status, json.loads(response.read().decode()))
+
+    def post_message(
+        self, channel: Optional[str] = None, thread_ts: Optional[str] = None, text: Optional[str] = None, **kwargs
+    ) -> Response:
+        body = {}
+        if thread_ts is not None:
+            body["thread_ts"] = thread_ts
+        if text is not None:
+            body["text"] = text
+        if channel is None:
+            body["channel"] = self.default_channel
+
+        body.update(kwargs)
+        return self.api_call(method="POST", api_path="/api/chat.postMessage", body=body)
+
+    class User(NamedTuple):
+        id: str
+        name: str
+        email: Optional[str]
+
+    @functools.cache
+    def list_users(self) -> list[User]:
+        response = self.api_call(method="GET", api_path="/api/users.list")
+        body = response.body
+
+        return [Slack.User(user["id"], user["name"], user.get("profile", {}).get("email")) for user in body["members"]]
+
+    def get_user_by_id(self, id: str) -> Optional[User]:
+        return next((user for user in self.list_users() if user.id == id), None)
+
+    def get_user_by_email(self, email: str) -> Optional[User]:
+        return next((user for user in self.list_users() if user.email == email), None)

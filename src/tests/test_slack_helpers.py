@@ -1,7 +1,7 @@
 import sys
 import unittest
 
-sys.path.append("../sso-elevator")
+sys.path.append("../sso-elevator")  # TODO: move to nornal module structure, and remove
 
 import slack
 
