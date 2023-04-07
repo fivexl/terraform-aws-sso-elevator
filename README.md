@@ -17,7 +17,7 @@ module "aws_sso_elevator" {
 
 
   #class Statement:
-  #  resource_type: Literal["Account", "OU"]
+  #  resource_type: list["Account"]
   #  resource: list[Union[str, Literal["*"]]]
   #  permission_set: list[Union[str, Literal["*"]]]
   #  approvers: Optional[list[str]]
