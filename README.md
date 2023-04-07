@@ -5,7 +5,7 @@ Slack bot to temporary assign AWS SSO Permission set to a user
 ```terraform
 
 module "aws_sso_elevator" {
-  source                           = "./aws-sso-elevator"
+  source                           = "github.com/fivexl/terraform-aws-sso-elevator.git"
   aws_sns_topic_subscription_email = "email@gmail.com"
 
   slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
