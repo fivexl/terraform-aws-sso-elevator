@@ -57,6 +57,14 @@ module "access_requester_slack_handler" {
 
 data "aws_iam_policy_document" "slack_handler" {
   statement {
+    sid    = "GetSAMLProvider"
+    effect = "Allow"
+    actions = [
+      "iam:GetSAMLProvider"
+    ]
+    resources = ["*"]
+  }
+  statement {
     sid    = "AllowListSSOInstances"
     effect = "Allow"
     actions = [
