@@ -73,7 +73,7 @@ def main(payload: dict, cfg: config.Config, slack_cfg: config.SlackConfig):
 
     elif payload["type"] == "block_actions":
         return handle_button_click(
-            payload,
+            slack.ButtonClickedPayload.parse_obj(payload),
             cfg,
             slack_cfg,
         )
@@ -92,78 +92,58 @@ def handle_shortcut(payload: dict, cfg: config.Config, slack_cfg: config.SlackCo
 
 
 def handle_button_click(
-    payload: dict,
+    payload: slack.ButtonClickedPayload,
     cfg: config.Config,
     slack_cfg: config.SlackConfig,
 ):
     slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
 
-    if payload["actions"][0]["value"] not in ["approve", "deny"]:
-        logger.error(f"Unsupported type. payload: {payload}")
-        return {"statusCode": 500}
-
-    account_id = slack.find_value_in_content_block(payload["message"]["blocks"], "AccountId")  # type: ignore
-    permission_set_name = slack.find_value_in_content_block(payload["message"]["blocks"], "Role name")
-
-    if not account_id or not permission_set_name:
-        logger.error(f"Unsupported type. payload: {payload}")
-        return {"statusCode": 500}
-
-    approver_slack_id = payload["user"]["id"]
-    approver = slack_client.get_user_by_id(payload["user"]["id"])
+    approver = slack_client.get_user_by_id(payload.approver_slack_id)
     if approver is None:
-        raise ValueError(f"Approver with slack id {approver_slack_id} not found")
+        raise ValueError(f"Approver with slack id {payload.approver_slack_id} not found")
     elif approver.email is None:
-        raise ValueError(f"Approver with slack id {approver_slack_id} has no email")
+        raise ValueError(f"Approver with slack id {payload.approver_slack_id} has no email")
 
     statements = cfg.get_statements()
     can_be_approved_by = get_approvers(
         statements,
-        account_id=account_id,
-        permission_set_name=permission_set_name,
+        account_id=payload.account_id,
+        permission_set_name=payload.permission_set_name,
     )
 
-    user_action = payload["actions"][0]["value"]
-
-    thread_ts = payload["message"]["ts"]
     if approver.email not in can_be_approved_by:
         slack_client.post_message(
-            text=f'<@{payload["user"]["id"]}> you can not {user_action} this request',
-            thread_ts=thread_ts,
+            text=f"<@{approver.id}> you can not {payload.action} this request",
+            thread_ts=payload.thread_ts,
         )
         return {}
 
     slack.post_message(
         "/api/chat.update",
         slack.prepare_approval_request_update(
-            channel=payload["channel"]["id"],
-            ts=thread_ts,
+            channel=payload.channel_id,
+            ts=payload.thread_ts,
             approver=approver.id,
-            action=user_action,
-            blocks=payload["message"]["blocks"],
+            action=payload.action,
+            blocks=payload.message["blocks"],
         ),
         slack_cfg.bot_token,
     )
 
-    if user_action == "approve":
-        slack_client.post_message(text="Updating permissions as requested...", thread_ts=thread_ts)
+    if payload.action == "approve":
+        slack_client.post_message(text="Updating permissions as requested...", thread_ts=payload.thread_ts)
 
-        if requester_slack_id_from_msg := slack.find_value_in_content_block(payload["message"]["blocks"], "Requester"):  # type: ignore
-            # slack id will come with <@{requester_slack_id}> so we need to clean it
-            requester_slack_id = requester_slack_id_from_msg.removeprefix("<@").removesuffix(">")
-            requester = slack_client.get_user_by_id(requester_slack_id)
-            if requester is None:
-                raise ValueError(f"Requester with slack id {requester_slack_id} not found")
-            elif requester.email is None:
-                raise ValueError(f"Requester with slack id {requester_slack_id} has no email")
-        else:
-            raise ValueError("Requester not found in message")
+        requester = slack_client.get_user_by_id(payload.requester_slack_id)
+        if requester is None:
+            raise ValueError(f"Requester with slack id {payload.requester_slack_id} not found")
+        elif requester.email is None:
+            raise ValueError(f"Requester with slack id {payload.requester_slack_id} has no email")
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
-        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
+        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, payload.permission_set_name)
         if permission_set is None:
-            raise ValueError(f"Permission set {permission_set_name} not found")
+            raise ValueError(f"Permission set {payload.permission_set_name} not found")
 
         user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
         if user_principal_id is None:
@@ -173,34 +153,30 @@ def handle_button_click(
             sso_client,
             sso.UserAccountAssignment(
                 instance_arn=sso_instance.arn,
-                account_id=account_id,
+                account_id=payload.account_id,
                 permission_set_arn=permission_set.arn,
                 user_principal_id=user_principal_id,
             ),
         )
 
-        reason = slack.find_value_in_content_block(payload["message"]["blocks"], "Reason")
-        if reason is None:
-            raise ValueError("Reason not found in message")
-
         response = dynamodb.log_operation(
             logger,
             cfg.dynamodb_table_name,
             dynamodb.AuditEntry(
-                role_name=permission_set_name,
-                account_id=account_id,
-                reason=reason,
+                role_name=payload.permission_set_name,
+                account_id=payload.account_id,
+                reason=payload.reason,
                 requester_slack_id=requester.id,
                 requester_email=requester.email,
                 request_id=account_assignment.request_id,
-                approver_slack_id=payload["user"]["id"],
+                approver_slack_id=payload.approver_slack_id,
                 approver_email=approver.email,
                 operation_type="grant",
             ),
         )
         logger.debug(response)
         slack_client.post_message(
-            thread_ts=thread_ts,
+            thread_ts=payload.thread_ts,
             text="Done",
         )
 

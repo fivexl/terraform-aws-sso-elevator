@@ -5,7 +5,9 @@ import http.client
 import json
 import logging
 import time
-
+from pydantic import BaseModel, root_validator
+import jmespath as jp
+from typing import Literal, NamedTuple, Optional
 import organizations
 import sso
 
@@ -142,17 +144,6 @@ def prepare_approval_request(
     return {"channel": channel, "blocks": blocks}
 
 
-def find_value_in_content_block(blocks, key):
-    for block in blocks:
-        if block["block_id"] != "content":
-            continue
-        for field in block["fields"]:
-            if field["text"].startswith(key):
-                value = field["text"].split(": ")[1]
-                return value.strip()
-        raise KeyError(f"Can not find filed with key={key} in block {block}")
-
-
 def prepare_approval_request_update(channel, ts, approver, action, blocks):
     message = {"channel": channel, "ts": ts, "blocks": []}
     # loop through original message and take header and content blocks to drop buttons
@@ -228,10 +219,6 @@ def verify_request(headers, signing_secret, body, age=60):
         logging.info("Request looks legit. It is safe to process it")
 
 
-import http.client
-from typing import NamedTuple, Optional
-
-
 def tag_users(*id: str) -> str:
     return " ".join(f"<@{user_id}>" for user_id in id)
 
@@ -290,3 +277,44 @@ class Slack:
 
     def get_user_by_email(self, email: str) -> Optional[User]:
         return next((user for user in self.list_users() if user.email == email), None)
+
+
+class ButtonClickedPayload(BaseModel):
+    action: Literal["approve", "deny"]
+    account_id: str
+    permission_set_name: str
+    approver_slack_id: str
+    thread_ts: str
+    reason: str
+    requester_slack_id: str
+    channel_id: str
+    message: dict
+
+    class Config:
+        frozen = True
+
+    @root_validator(pre=True)
+    def validate_payload(cls, values: dict):
+        fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
+        requester_mention: Optional[str] = cls.find_in_fields(fields, "Requester")
+        if requester_mention is None:
+            raise ValueError("Can not find requester mention")
+
+        return {
+            "action": jp.search("actions[0].value", values),
+            # slack id will come with <@{requester_slack_id}> so we need to clean it
+            "requester_slack_id": requester_mention.removeprefix("<@").removesuffix(">"),
+            "account_id": cls.find_in_fields(fields, "AccountId"),
+            "permission_set_name": cls.find_in_fields(fields, "Role name"),
+            "approver_slack_id": jp.search("user.id", values),
+            "thread_ts": jp.search("message.ts", values),
+            "reason": cls.find_in_fields(fields, "Reason"),
+            "channel_id": jp.search("channel.id", values),
+            "message": values.get("message"),
+        }
+
+    @staticmethod
+    def find_in_fields(fields: list[dict[str, str]], key: str) -> Optional[str]:
+        for field in fields:
+            if field["text"].startswith(key):
+                return field["text"].split(": ")[1].strip()
