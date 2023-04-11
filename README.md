@@ -1,5 +1,17 @@
-# terraform-aws-sso-slack-bot
-Slack bot to temporary assign AWS SSO Permission set to a user
+[![FivexL](https://releases.fivexl.io/fivexlbannergit.jpg)](https://fivexl.io/)
+
+# Terraform module to temporary assign AWS IAM Identity Center (SSO) Permission sets to a user
+
+## Why this module?
+
+This module allows you to avoid permanently assigned permission sets and achieve the least privilege access to your AWS accounts. It allows you to assign permission sets to a user for a limited time and revoke them automatically after a specified period of time.
+
+- It will also help you to create more simple permission sets for your users. This will allow you to avoid creating complex IAM policies.
+- Each account, OU, or AWS Organization could have their own list of approvers 
+
+## More info
+- [Permision Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
+- [User and groups](https://docs.aws.amazon.com/singlesignon/latest/userguide/users-groups-provisioning.html)
 
 ## Usage
 ```terraform
