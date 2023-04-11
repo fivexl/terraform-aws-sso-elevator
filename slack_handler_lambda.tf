@@ -102,6 +102,7 @@ data "aws_iam_policy_document" "slack_handler" {
     effect = "Allow"
     actions = [
       "organizations:ListAccounts",
+      "organizations:DescribeAccount",
       "sso:ListPermissionSets",
       "sso:DescribePermissionSet",
       "identitystore:ListUsers",
