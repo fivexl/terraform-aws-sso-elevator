@@ -22,6 +22,8 @@ module "access_revoker" {
   ]
 
   environment_variables = {
+    REVOKER_FUNCTION_ARN        = data.aws_lambda_function.access_revoker.arn
+    REVOKER_FUNCTION_NAME       = local.revoker_lambda_name
     SLACK_BOT_TOKEN             = var.slack_bot_token
     LOG_LEVEL                   = var.log_level
     DYNAMODB_TABLE_NAME         = module.dynamodb_table_requests.dynamodb_table_id
@@ -93,4 +95,8 @@ resource "aws_cloudwatch_event_rule" "every_night" {
 resource "aws_cloudwatch_event_target" "revoker" {
   rule = aws_cloudwatch_event_rule.every_night.name
   arn  = module.access_revoker.lambda_function_arn
+}
+
+data "aws_lambda_function" "access_revoker" {
+  function_name = local.revoker_lambda_name
 }
