@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "powertools-pydantic"
+version = "0.1.0"
+description = ""
+authors = ["Eremin <haru.eaa@gmail.com>"]
+readme = "README.md"
+packages = [{include = "powertools_pydantic"}]
+
+[tool.poetry.dependencies]
+python = "^3.9.16"
+aws-lambda-powertools = {extras = ["parser"], version = "^2.11.0"}
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
