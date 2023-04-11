@@ -13,6 +13,7 @@ import config
 import dynamodb
 import slack
 import sso
+import organizations
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
@@ -86,15 +87,19 @@ def main(payload: dict, cfg: config.Config, slack_cfg: config.SlackConfig):
 
 
 def handle_shortcut(payload: dict, cfg: config.Config, slack_cfg: config.SlackConfig):
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    statements = cfg.get_statements()
-    avialable_accounts = config.get_accounts_from_statements(statements, org_client)
-    avialable_permission_sets = config.get_permission_sets_from_statements(
-        statements, sso_client, sso_instance.arn
-    )
-    inital_form = slack.prepare_initial_form(
-        payload["trigger_id"], avialable_permission_sets, avialable_accounts
-    )
+    configured_accounts = cfg.get_configured_accounts()
+    if "*" in configured_accounts:
+        accounts = organizations.list_accounts(org_client)
+    else:
+        accounts = [ac for ac in organizations.list_accounts(org_client) if ac.id in configured_accounts]
+
+    configured_permission_sets = cfg.get_configured_permission_sets()
+    if "*" in configured_permission_sets:
+        permission_sets = sso.list_permission_sets(sso_client, cfg.sso_instance_arn)
+    else:
+        permission_sets = [ps for ps in sso.list_permission_sets(sso_client, cfg.sso_instance_arn) if ps.name in configured_permission_sets]
+
+    inital_form = slack.prepare_initial_form(payload["trigger_id"], list(permission_sets), accounts)
     return slack.post_message("/api/views.open", inital_form, slack_cfg.bot_token)
 
 
@@ -115,9 +120,8 @@ def handle_button_click(
             f"Approver with slack id {payload.approver_slack_id} has no email"
         )
 
-    statements = cfg.get_statements()
     can_be_approved_by = get_approvers(
-        statements,
+        cfg.statements,
         account_id=payload.account_id,
         permission_set_name=payload.permission_set_name,
     )
@@ -320,9 +324,8 @@ def handle_view_submission(
     elif requester.email is None:
         raise ValueError(f"Requester with slack id {request.user_id} has no email")
 
-    statements = cfg.get_statements()
     decision_on_request = make_decision_on_request(
-        statements=statements,
+        statements=cfg.statements,
         account_id=request.account_id,
         requester_email=requester.email,
         permission_set_name=request.permission_set_name,
