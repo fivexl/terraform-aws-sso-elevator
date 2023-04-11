@@ -16,6 +16,8 @@ class SlackConfig(BaseSettings):
 
 
 class Config(BaseSettings):
+    revoker_function_arn: str = Field(..., env="REVOKER_FUNCTION_ARN", min_length=1)
+    revoker_function_name: str = Field(..., env="REVOKER_FUNCTION_NAME", min_length=1)
     post_update_to_slack: bool = False
 
     dynamodb_table_name: str
