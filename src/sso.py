@@ -181,6 +181,7 @@ def delete_account_assignment_and_wait_for_result(
         result = retry_while(
             fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1
         )
+    logger.info(f"Account assignment deletion result: {result}")
     return result
 
 
