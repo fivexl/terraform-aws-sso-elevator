@@ -28,7 +28,7 @@ module "access_requester_slack_handler" {
     DYNAMODB_TABLE_NAME         = module.dynamodb_table_requests.dynamodb_table_id
     SLACK_CHANNEL_ID            = var.slack_channel_id
     SSO_INSTANCE_ARN            = local.sso_instance_arn
-    CONFIG                      = jsonencode(var.config)
+    STATEMENTS                  = jsonencode(var.config)
     POWERTOOLS_LOGGER_LOG_EVENT = true
   }
 
@@ -51,6 +51,11 @@ module "access_requester_slack_handler" {
   maximum_retry_attempts = 0
 
   cloudwatch_logs_retention_in_days = 365
+
+  layers = [
+    module.powertools_pydantic.lambda_layer_arn,
+    module.slack_bolt.lambda_layer_arn,
+  ]
 
   tags = var.tags
 }

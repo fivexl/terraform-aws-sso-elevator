@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "python-slack-bolt"
+version = "0.1.0"
+description = ""
+authors = ["Eremin <haru.eaa@gmail.com>"]
+readme = "README.md"
+packages = [{include = "python_slack_bolt"}]
+
+[tool.poetry.dependencies]
+python = "^3.9.16"
+slack-bolt = "^1.17.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
