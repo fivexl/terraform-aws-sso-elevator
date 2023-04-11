@@ -83,6 +83,17 @@ data "aws_iam_policy_document" "revoker" {
     actions   = ["dynamodb:PutItem"]
     resources = [module.dynamodb_table_requests.dynamodb_table_arn]
   }
+  statement {
+    effect = "Allow"
+    actions = [
+      "organizations:ListAccounts",
+      "sso:ListPermissionSets",
+      "sso:DescribePermissionSet",
+      "identitystore:ListUsers",
+      "identitystore:DescribeUser",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "every_night" {
