@@ -23,7 +23,7 @@ identity_center_client = boto3.client("identitystore")  # type: ignore
 def lambda_handler(event, __):
     cfg = config.Config()  # type: ignore
     if "Scheduled_revoke" in event:
-        handle_scheduled_account_assignment_deletion(event, sso_client, cfg)
+        return handle_scheduled_account_assignment_deletion(event, sso_client, cfg)
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     statements = cfg.get_statements()
     avialable_accounts = config.get_accounts_from_statements(statements, org_client)
