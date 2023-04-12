@@ -8,8 +8,8 @@ from aws_lambda_powertools import Logger
 import jmespath as jp
 from slack_bolt import App
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
+import copy
 from slack_sdk import WebClient
-
 import config
 import dynamodb
 import slack
@@ -32,8 +32,7 @@ slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
 app = App(process_before_response=True, logger=logger)
 
 
-def acknowledge_request(ack):
-    ack()
+
 
 
 def lambda_handler(event, context):
@@ -41,23 +40,50 @@ def lambda_handler(event, context):
     return slack_handler.handle(event, context)
 
 
-def handle_request_for_access(body, client: WebClient):
+trigger_view_map = {}
+# To update the view, it is necessary to know the view_id. It is returned when the view is opened.
+# But shortcut 'request_for_access' handled by two functions. The first one opens the view and the second one updates it.
+# So we need to store the view_id somewhere. Since the trigger_id is unique for each request,
+# and available in both functions, we can use it as a key. The value is the view_id.
+
+
+def show_initial_form(client: WebClient, body, ack):
+    ack()
+    trigger_id = body["trigger_id"]
+    response = client.views_open(trigger_id=trigger_id, view=slack.SLACK_REQUEST_FOR_ACCESS_FORM)
+    trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore
+    return response
+
+
+def load_select_options(body, client: WebClient):
     if "*" in cfg.accounts:
         accounts = organizations.list_accounts(org_client)
     else:
         accounts = [ac for ac in organizations.list_accounts(org_client) if ac.id in cfg.accounts]
 
     if "*" in cfg.permission_sets:
-        permission_sets = sso.list_permission_sets(sso_client, cfg.sso_instance_arn)
+        permission_sets = list(sso.list_permission_sets(sso_client, cfg.sso_instance_arn))
     else:
         permission_sets = [ps for ps in sso.list_permission_sets(sso_client, cfg.sso_instance_arn) if ps.name in cfg.permission_sets]
 
-    inital_form = slack.prepare_initial_form(body["trigger_id"], list(permission_sets), accounts)
-    return client.views_open(**inital_form)
+    trigger_id = body["trigger_id"]
+
+    view = copy.deepcopy(slack.SLACK_REQUEST_FOR_ACCESS_FORM)
+    view = slack.remove_blocks(view, block_ids=["loading"])
+    view = slack.insert_blocks(
+        view=view,
+        blocks=[
+            slack.select_account_input_block(accounts),
+            slack.select_permission_set_input_block(permission_sets),
+        ],  # type: ignore
+        after_block_id="provide_reason",
+    )
+    return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
+
 
 app.shortcut("request_for_access")(
-    acknowledge_request,
-    handle_request_for_access,
+    show_initial_form,
+    load_select_options,
 )
 
 
@@ -163,7 +189,9 @@ def handle_approve(body):
         text="Done",
     )
 
-
+def acknowledge_request(ack):
+    ack()
+    
 app.action("approve")(
     ack=acknowledge_request,
     lazy=[handle_approve],
@@ -253,7 +281,9 @@ class RequestForAccess(BaseModel):
     @root_validator(pre=True)
     def validate_payload(cls, values: dict):
         return {
-            "permission_set_name": jp.search("view.state.values.select_role.selected_role.selected_option.value", values),
+            "permission_set_name": jp.search(
+                "view.state.values.select_permission_set.selected_permission_set.selected_option.value", values
+            ),
             "account_id": jp.search("view.state.values.select_account.selected_account.selected_option.value", values),
             "reason": jp.search("view.state.values.provide_reason.provided_reason.value", values),
             "user_id": jp.search("user.id", values),
@@ -449,8 +479,3 @@ app.view("request_for_access_submitted")(
     ack=acknowledge_request,
     lazy=[handle_request_for_access_submittion],
 )
-
-if __name__ == "__main__":
-    from slack_bolt.adapter.socket_mode import SocketModeHandler
-
-    SocketModeHandler(app, logger=logger).start()

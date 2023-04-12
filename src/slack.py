@@ -10,91 +10,87 @@ import jmespath as jp
 from typing import Literal, NamedTuple, Optional
 import organizations
 import sso
+from slack_sdk.models.views import View
+from slack_sdk.models.blocks import (
+    PlainTextObject,
+    InputBlock,
+    PlainTextInputElement,
+    SectionBlock,
+    MarkdownTextObject,
+    DividerBlock,
+    Option,
+    StaticSelectElement,
+    Block,
+)
+
+SLACK_REQUEST_FOR_ACCESS_FORM = View(
+    type="modal",
+    callback_id="request_for_access_submitted",
+    submit=PlainTextObject(text="Request"),
+    close=PlainTextObject(text="Cancel"),
+    title=PlainTextObject(text="Get AWS access"),
+    blocks=[
+        SectionBlock(text=MarkdownTextObject(text=":wave: Hey! Please fill form below to request AWS access.")),
+        DividerBlock(),
+        InputBlock(
+            block_id="provide_reason",
+            label=PlainTextObject(text="What is it you are going to do"),
+            element=PlainTextInputElement(
+                action_id="provided_reason",
+                multiline=True,
+            ),
+        ),
+        DividerBlock(),
+        SectionBlock(
+            text=MarkdownTextObject(
+                text="Remember to use access responsibly. All actions (AWS API calls) are being recorded.",
+            ),
+        ),
+        SectionBlock(
+            block_id="loading",
+            text=MarkdownTextObject(
+                text=":hourglass: Loading available accounts and permission sets...",
+            ),
+        ),
+    ],
+)
 
 
-# https://api.slack.com/surfaces/modals/using
-# https://app.slack.com/block-kit-builder/
-def prepare_initial_form(trigger_id, permission_sets: list[sso.PermissionSet], accounts: list[organizations.AWSAccount]):
-    return {
-        "trigger_id": trigger_id,
-        "view": {
-            "type": "modal",
-            "callback_id": "request_for_access_submitted",
-            "submit": {"type": "plain_text", "text": "Request"},
-            "close": {"type": "plain_text", "text": "Cancel"},
-            "title": {"type": "plain_text", "text": "Get AWS access"},
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "plain_text",
-                        "text": ":wave: Hey! Please fill form below to request AWS access.",
-                    },
-                },
-                {"type": "divider"},
-                {
-                    "block_id": "select_role",
-                    "type": "input",
-                    "label": {"type": "plain_text", "text": "Select role to assume"},
-                    "element": {
-                        "action_id": "selected_role",
-                        "type": "radio_buttons",
-                        "options": [
-                            {
-                                "text": {
-                                    "type": "plain_text",
-                                    "text": permission_set.name,
-                                },
-                                "value": permission_set.name,
-                            }
-                            for permission_set in permission_sets
-                        ],
-                    },
-                },
-                {
-                    "block_id": "select_account",
-                    "type": "input",
-                    "label": {"type": "plain_text", "text": "Select AWS account"},
-                    "element": {
-                        "action_id": "selected_account",
-                        "type": "static_select",
-                        "placeholder": {
-                            "type": "plain_text",
-                            "text": "Select AWS account",
-                        },
-                        "options": [
-                            {
-                                "text": {"type": "plain_text", "text": account.name},
-                                "value": account.id,
-                            }
-                            for account in accounts
-                        ],
-                    },
-                },
-                {
-                    "block_id": "provide_reason",
-                    "type": "input",
-                    "label": {
-                        "type": "plain_text",
-                        "text": "What is it you are going to do",
-                    },
-                    "element": {
-                        "action_id": "provided_reason",
-                        "type": "plain_text_input",
-                        "multiline": True,
-                    },
-                },
-                {"type": "divider"},
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "plain_text",
-                        "text": "Remember to use access responsibly. All actions (AWS API calls) are being recorded.",
-                    },
-                },
+def remove_blocks(view: View, block_ids: list[str]) -> View:
+    view.blocks = [block for block in view.blocks if block.block_id not in block_ids]
+    return view
+
+
+def insert_blocks(view: View, blocks: list[Block], after_block_id: str) -> View:
+    index = next(i for i, block in enumerate(view.blocks) if block.block_id == after_block_id)
+    view.blocks = view.blocks[: index + 1] + blocks + view.blocks[index + 1 :]
+    return view
+
+
+def select_account_input_block(accounts: list[organizations.AWSAccount]) -> InputBlock:
+    return InputBlock(
+        block_id="select_account",
+        label=PlainTextObject(text="Select account"),
+        element=StaticSelectElement(
+            action_id="selected_account",
+            placeholder=PlainTextObject(text="Select account"),
+            options=[Option(text=PlainTextObject(text=account.name), value=account.id) for account in accounts],
+        ),
+    )
+
+
+def select_permission_set_input_block(permission_sets: list[sso.PermissionSet]) -> InputBlock:
+    return InputBlock(
+        block_id="select_permission_set",
+        label=PlainTextObject(text="Select permission set"),
+        element=StaticSelectElement(
+            action_id="selected_permission_set",
+            placeholder=PlainTextObject(text="Select permission set"),
+            options=[
+                Option(text=PlainTextObject(text=permission_set.name), value=permission_set.name) for permission_set in permission_sets
             ],
-        },
-    }
+        ),
+    )
 
 
 def prepare_approval_request(
