@@ -17,6 +17,9 @@ module "access_requester_slack_handler" {
       artifacts_dir  = "${path.root}/builds/"
       patterns = [
         "!.venv/.*",
+        "!.vscode/.*",
+        "!__pycache__/.*",
+        "!tests/.*",
       ]
     }
   ]
@@ -69,6 +72,15 @@ data "aws_iam_policy_document" "slack_handler" {
       "iam:GetSAMLProvider"
     ]
     resources = ["*"]
+  }
+  statement {
+    sid    = "GetInvokeSelf"
+    effect = "Allow"
+    actions = [
+      "lambda:InvokeFunction",
+      "lambda:GetFunction"
+    ]
+    resources = ["arn:aws:lambda:*:*:function:${local.requester_lambda_name}"]
   }
   statement {
     sid    = "AllowListSSOInstances"

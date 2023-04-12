@@ -19,7 +19,7 @@ def prepare_initial_form(trigger_id, permission_sets: list[sso.PermissionSet], a
         "trigger_id": trigger_id,
         "view": {
             "type": "modal",
-            "callback_id": "modal-identifier",
+            "callback_id": "request_for_access_submitted",
             "submit": {"type": "plain_text", "text": "Request"},
             "close": {"type": "plain_text", "text": "Cancel"},
             "title": {"type": "plain_text", "text": "Get AWS access"},
