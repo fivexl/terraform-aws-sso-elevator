@@ -93,16 +93,9 @@ jobs:
           terraform_version: 1.4.4
       - name: Terraform-local installation
         run: pip3 install terraform-local
-
-      - name: terraform generate temp s3 backend config
-        run: |
-          echo "" > temp_ci_3r32fdsdaf_backend.tf
-          echo "terraform {" >> temp_ci_3r32fdsdaf_backend.tf
-          echo "backend \"s3\" {}" >> temp_ci_3r32fdsdaf_backend.tf
-          echo "}" >> temp_ci_3r32fdsdaf_backend.tf
         
       - name: terraform init
-        run: tflocal init -backend-config=./tests/localstack-backend.tf
+        run: tflocal init
         
       - name: terraform validate
         run: tflocal validate
