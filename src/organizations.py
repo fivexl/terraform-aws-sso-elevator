@@ -1,7 +1,5 @@
 from dataclasses import dataclass
 
-from mypy_boto3_organizations import OrganizationsClient, type_defs
-
 
 @dataclass
 class AWSAccount:
@@ -10,7 +8,7 @@ class AWSAccount:
     organization_id: str
 
     @staticmethod
-    def from_type_def(td: type_defs.AccountTypeDef) -> "AWSAccount":
+    def from_type_def(td: dict) -> "AWSAccount":
         return AWSAccount(
             name=td["Name"],  # type: ignore
             id=td["Id"],  # type: ignore
@@ -18,11 +16,11 @@ class AWSAccount:
         )
 
 
-def list_accounts(client: OrganizationsClient) -> list[AWSAccount]:
-    accounts = client.list_accounts()["Accounts"]
+def list_accounts(organizations_client) -> list[AWSAccount]:
+    accounts = organizations_client.list_accounts()["Accounts"]
     return [AWSAccount.from_type_def(account) for account in accounts]
 
 
-def describe_account(client: OrganizationsClient, account_id: str) -> AWSAccount:
-    account = client.describe_account(AccountId=account_id)["Account"]
+def describe_account(organizations_client, account_id: str) -> AWSAccount:
+    account = organizations_client.describe_account(AccountId=account_id)["Account"]
     return AWSAccount.from_type_def(account)

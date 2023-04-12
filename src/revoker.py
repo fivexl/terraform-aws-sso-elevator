@@ -3,7 +3,6 @@ from dataclasses import dataclass
 
 import boto3
 from aws_lambda_powertools import Logger
-from mypy_boto3_sso_admin import SSOAdminClient
 
 import config
 import dynamodb
@@ -25,11 +24,8 @@ def lambda_handler(event, __):
     if "Scheduled_revoke" in event:
         return handle_scheduled_account_assignment_deletion(event, sso_client, cfg)
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    statements = cfg.get_statements()
-    avialable_accounts = config.get_accounts_from_statements(statements, org_client)
-    avialable_permission_sets = config.get_permission_sets_from_statements(
-        statements, sso_client, sso_instance.arn
-    )
+    avialable_accounts = config.get_accounts_from_statements(cfg.statements, org_client)
+    avialable_permission_sets = config.get_permission_sets_from_statements(statements, sso_client, sso_instance.arn)
     for account in avialable_accounts:
         logger.info(f"Revoking tmp permissions for account {account.id}")
         for permision_set in avialable_permission_sets:
@@ -54,9 +50,7 @@ def lambda_handler(event, __):
                 )
 
 
-def handle_account_assignment_deletion(
-    account_assigment: sso.UserAccountAssignment, cfg: config.Config
-):
+def handle_account_assignment_deletion(account_assigment: sso.UserAccountAssignment, cfg: config.Config):
     logger.info(f"Got account assignment for deletion: {account_assigment}")
 
     assignment_status = sso.delete_account_assignment_and_wait_for_result(
@@ -98,14 +92,10 @@ def handle_account_assignment_deletion(
             account_assigment.instance_arn,
             account_assigment.user_principal_id,
         )
-        slack_client.post_message(
-            text=f"Revoked role {permission_set.name} for user {user_emails} in account {account.name}"
-        )
+        slack_client.post_message(text=f"Revoked role {permission_set.name} for user {user_emails} in account {account.name}")
 
 
-def handle_scheduled_account_assignment_deletion(
-    event, sso_client: SSOAdminClient, cfg: config.Config
-):
+def handle_scheduled_account_assignment_deletion(event, sso_client, cfg: config.Config):
     event = EventBrigeRevokeEvent.from_scheduler_event(event)
     account_assignment = sso.UserAccountAssignment(
         account_id=event.account_id,
@@ -155,9 +145,7 @@ def handle_scheduled_account_assignment_deletion(
             event.user_principal_id,
         )
         account_name = organizations.describe_account(org_client, event.account_id).name
-        slack_client.post_message(
-            text=f"Revoked role {permission_set.name} for user {user_emails} in account {account_name}"
-        )
+        slack_client.post_message(text=f"Revoked role {permission_set.name} for user {user_emails} in account {account_name}")
 
 
 @dataclass(frozen=True)
