@@ -1,13 +1,15 @@
-import base64
-import json
 import os
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Union
-from urllib import parse as urlparse
+from aws_lambda_powertools.utilities.parser.pydantic import BaseModel, root_validator
 
 import boto3
 from aws_lambda_powertools import Logger
+import jmespath as jp
+from slack_bolt import App
+from slack_bolt.adapter.aws_lambda import SlackRequestHandler
+from slack_sdk import WebClient
 
 import config
 import dynamodb
@@ -23,70 +25,23 @@ sso_client = boto3.client("sso-admin")  # type: ignore
 identity_center_client = boto3.client("identitystore")  # type: ignore
 time_delta = timedelta(minutes=5)
 schedule_client = boto3.client("scheduler")  # type: ignore
+cfg = config.Config()  # type: ignore
+slack_cfg = config.SlackConfig()  # type: ignore
+slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
+
+app = App(process_before_response=True, logger=logger)
 
 
-def lambda_handler(event, _):
-    print(f"event: {json.dumps(event)}")
-    cfg = config.Config()  # type: ignore
-    # Get body and headers
-    if "headers" not in event:
-        logger.error("Request does not contain headers. Return 400")
-        return {"statusCode": 400}
-    if "body" not in event:
-        logger.error("Request does not contain body. Return 400")
-        return {"statusCode": 400}
-    request_headers = event["headers"]
-    body_as_bytes = base64.b64decode(event["body"])
-    body_as_string = body_as_bytes.decode("utf-8")
-
-    # Verify request that it is coming from Slack https://api.slack.com/authentication/verifying-requests-from-slack
-    # Check that required headers are present
-    slack_cfg = config.SlackConfig()  # type: ignore
-    try:
-        slack.verify_request(request_headers, slack_cfg.signing_secret, body_as_string)
-    except Exception as e:
-        logger.exception(e)
-        return {"statusCode": 400}
-
-    # Parse payload
-    payload = dict(
-        urlparse.parse_qsl(base64.b64decode(str(event["body"])).decode("ascii"))
-    )  # data comes b64 and also urlencoded name=value& pairs
-    actual_payload = json.loads(payload["payload"])
-
-    logger.debug(f"payload:{json.dumps(actual_payload)}")
-    try:
-        main(actual_payload, cfg, slack_cfg)
-    except Exception as e:
-        logger.exception(e)
-        return {"statusCode": 500}
-
-    return {"statusCode": 200}
+def acknowledge_request(ack):
+    ack()
 
 
-def main(payload: dict, cfg: config.Config, slack_cfg: config.SlackConfig):
-    if payload["type"] == "shortcut":
-        return handle_shortcut(payload, cfg, slack_cfg)
-
-    elif payload["type"] == "view_submission":
-        return handle_view_submission(
-            RequestForAccessFromSlack.from_view_submission(payload),
-            slack_cfg,
-            cfg,
-        )
-
-    elif payload["type"] == "block_actions":
-        return handle_button_click(
-            slack.ButtonClickedPayload.parse_obj(payload),
-            cfg,
-            slack_cfg,
-        )
-    else:
-        logger.error(f"Unsupported type. payload: {payload}")
-        raise ValueError(f"Unsupported type. payload: {payload}")
+def lambda_handler(event, context):
+    slack_handler = SlackRequestHandler(app=app)
+    return slack_handler.handle(event, context)
 
 
-def handle_shortcut(payload: dict, cfg: config.Config, slack_cfg: config.SlackConfig):
+def handle_request_for_access(body, client: WebClient):
     configured_accounts = cfg.get_configured_accounts()
     if "*" in configured_accounts:
         accounts = organizations.list_accounts(org_client)
@@ -99,27 +54,20 @@ def handle_shortcut(payload: dict, cfg: config.Config, slack_cfg: config.SlackCo
     else:
         permission_sets = [ps for ps in sso.list_permission_sets(sso_client, cfg.sso_instance_arn) if ps.name in configured_permission_sets]
 
-    inital_form = slack.prepare_initial_form(payload["trigger_id"], list(permission_sets), accounts)
-    return slack.post_message("/api/views.open", inital_form, slack_cfg.bot_token)
+    inital_form = slack.prepare_initial_form(body["trigger_id"], list(permission_sets), accounts)
+    return client.views_open(**inital_form)
+
+
+app.shortcut("request_for_access")(
+    acknowledge_request,
+    handle_request_for_access,
+)
 
 
 def handle_button_click(
     payload: slack.ButtonClickedPayload,
-    cfg: config.Config,
-    slack_cfg: config.SlackConfig,
-):
-    slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
-
-    approver = slack_client.get_user_by_id(payload.approver_slack_id)
-    if approver is None:
-        raise ValueError(
-            f"Approver with slack id {payload.approver_slack_id} not found"
-        )
-    elif approver.email is None:
-        raise ValueError(
-            f"Approver with slack id {payload.approver_slack_id} has no email"
-        )
-
+    approver: slack.Slack.User,
+) -> bool:
     can_be_approved_by = get_approvers(
         cfg.statements,
         account_id=payload.account_id,
@@ -131,7 +79,7 @@ def handle_button_click(
             text=f"<@{approver.id}> you can not {payload.action} this request",
             thread_ts=payload.thread_ts,
         )
-        return {}
+        return False
 
     slack.post_message(
         "/api/chat.update",
@@ -144,79 +92,103 @@ def handle_button_click(
         ),
         slack_cfg.bot_token,
     )
+    return True
 
-    if payload.action == "approve":
-        slack_client.post_message(
-            text="Updating permissions as requested...", thread_ts=payload.thread_ts
-        )
 
-        requester = slack_client.get_user_by_id(payload.requester_slack_id)
-        if requester is None:
-            raise ValueError(
-                f"Requester with slack id {payload.requester_slack_id} not found"
-            )
-        elif requester.email is None:
-            raise ValueError(
-                f"Requester with slack id {payload.requester_slack_id} has no email"
-            )
+def handle_approve(body):
+    payload = slack.ButtonClickedPayload.parse_obj(body)
 
-        sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    approver = slack_client.get_user_by_id(payload.approver_slack_id)
+    if approver is None:
+        raise ValueError(f"Approver with slack id {payload.approver_slack_id} not found")
+    elif approver.email is None:
+        raise ValueError(f"Approver with slack id {payload.approver_slack_id} has no email")
+    if not handle_button_click(payload, approver):
+        return
 
-        permission_set = sso.get_permission_set_by_name(
-            sso_client, sso_instance.arn, payload.permission_set_name
-        )
-        if permission_set is None:
-            raise ValueError(f"Permission set {payload.permission_set_name} not found")
+    slack_client.post_message(text="Updating permissions as requested...", thread_ts=payload.thread_ts)
 
-        user_principal_id = sso.get_user_principal_id_by_email(
-            identity_center_client, sso_instance.identity_store_id, requester.email
-        )
-        if user_principal_id is None:
-            raise ValueError(f"User with email {requester.email} not found")
+    requester = slack_client.get_user_by_id(payload.requester_slack_id)
+    if requester is None:
+        raise ValueError(f"Requester with slack id {payload.requester_slack_id} not found")
+    elif requester.email is None:
+        raise ValueError(f"Requester with slack id {payload.requester_slack_id} has no email")
 
-        account_assignment = sso.create_account_assignment_and_wait_for_result(
-            sso_client,
-            sso.UserAccountAssignment(
-                instance_arn=sso_instance.arn,
-                account_id=payload.account_id,
-                permission_set_arn=permission_set.arn,
-                user_principal_id=user_principal_id,
-            ),
-        )
-        # schedule.create_schedule_for_revoker(
-        #     lambda_arn=cfg.revoker_function_arn,
-        #     lambda_name = cfg.revoker_function_name,
-        #     time_delta = time_delta,
-        #     schedule_client = schedule_client,
-        #     sso_instance_arn = sso_instance.arn,
-        #     account_id = payload.account_id,
-        #     permission_set_arn = permission_set.arn,
-        #     user_principal_id = user_principal_id,
-        #     requester_slack_id= requester.id,
-        #     requester_email = requester.email,
-        #     approver_slack_id = payload.approver_slack_id,
-        #     approver_email = approver.email,
-        # )
-        response = dynamodb.log_operation(
-            logger,
-            cfg.dynamodb_table_name,
-            dynamodb.AuditEntry(
-                role_name=payload.permission_set_name,
-                account_id=payload.account_id,
-                reason=payload.reason,
-                requester_slack_id=requester.id,
-                requester_email=requester.email,
-                request_id=account_assignment.request_id,
-                approver_slack_id=payload.approver_slack_id,
-                approver_email=approver.email,
-                operation_type="grant",
-            ),
-        )
-        logger.debug(response)
-        slack_client.post_message(
-            thread_ts=payload.thread_ts,
-            text="Done",
-        )
+    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+
+    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, payload.permission_set_name)
+    if permission_set is None:
+        raise ValueError(f"Permission set {payload.permission_set_name} not found")
+
+    user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
+
+    account_assignment = sso.create_account_assignment_and_wait_for_result(
+        sso_client,
+        sso.UserAccountAssignment(
+            instance_arn=sso_instance.arn,
+            account_id=payload.account_id,
+            permission_set_arn=permission_set.arn,
+            user_principal_id=user_principal_id,
+        ),
+    )
+    # schedule.create_schedule_for_revoker(
+    #     lambda_arn=cfg.revoker_function_arn,
+    #     lambda_name = cfg.revoker_function_name,
+    #     time_delta = time_delta,
+    #     schedule_client = schedule_client,
+    #     sso_instance_arn = sso_instance.arn,
+    #     account_id = payload.account_id,
+    #     permission_set_arn = permission_set.arn,
+    #     user_principal_id = user_principal_id,
+    #     requester_slack_id= requester.id,
+    #     requester_email = requester.email,
+    #     approver_slack_id = payload.approver_slack_id,
+    #     approver_email = approver.email,
+    # )
+    response = dynamodb.log_operation(
+        logger,
+        cfg.dynamodb_table_name,
+        dynamodb.AuditEntry(
+            role_name=payload.permission_set_name,
+            account_id=payload.account_id,
+            reason=payload.reason,
+            requester_slack_id=requester.id,
+            requester_email=requester.email,
+            request_id=account_assignment.request_id,
+            approver_slack_id=payload.approver_slack_id,
+            approver_email=approver.email,
+            operation_type="grant",
+        ),
+    )
+    logger.debug(response)
+    slack_client.post_message(
+        thread_ts=payload.thread_ts,
+        text="Done",
+    )
+
+
+app.action("approve")(
+    ack=acknowledge_request,
+    lazy=[handle_approve],
+)
+
+
+def handle_deny(body, logger):
+    logger.info(body)
+    payload = slack.ButtonClickedPayload.parse_obj(body)
+
+    approver = slack_client.get_user_by_id(payload.approver_slack_id)
+    if approver is None:
+        raise ValueError(f"Approver with slack id {payload.approver_slack_id} not found")
+    elif approver.email is None:
+        raise ValueError(f"Approver with slack id {payload.approver_slack_id} has no email")
+    handle_button_click(payload, approver)
+
+
+app.action("deny")(
+    ack=acknowledge_request,
+    lazy=[handle_deny],
+)
 
 
 @dataclass
@@ -232,14 +204,10 @@ class SelfApprovalIsAllowedAndRequesterIsApprover:
     ...
 
 
-DecisionOnRequest = Union[
-    RequiresApproval, ApprovalIsNotRequired, SelfApprovalIsAllowedAndRequesterIsApprover
-]
+DecisionOnRequest = Union[RequiresApproval, ApprovalIsNotRequired, SelfApprovalIsAllowedAndRequesterIsApprover]
 
 
-def get_affected_statements(
-    statements: list[config.Statement], account_id: str, permission_set_name: str
-) -> list[config.Statement]:
+def get_affected_statements(statements: list[config.Statement], account_id: str, permission_set_name: str) -> list[config.Statement]:
     return [
         statement
         for statement in statements
@@ -257,9 +225,7 @@ def make_decision_on_request(
     requester_email: str,
 ) -> DecisionOnRequest:
     can_be_approved_by = set()
-    affected_statements = get_affected_statements(
-        statements, account_id, permission_set_name
-    )
+    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
     for statement in affected_statements:
         if statement.approval_is_not_required:
             return ApprovalIsNotRequired()
@@ -268,20 +234,12 @@ def make_decision_on_request(
             if statement.allow_self_approval and requester_email in statement.approvers:
                 return SelfApprovalIsAllowedAndRequesterIsApprover()
 
-            can_be_approved_by.update(
-                approver
-                for approver in statement.approvers
-                if approver != requester_email
-            )
+            can_be_approved_by.update(approver for approver in statement.approvers if approver != requester_email)
     return RequiresApproval(approvers=can_be_approved_by)
 
 
-def get_approvers(
-    statements: list[config.Statement], account_id: str, permission_set_name: str
-) -> set[str]:
-    affected_statements = get_affected_statements(
-        statements, account_id, permission_set_name
-    )
+def get_approvers(statements: list[config.Statement], account_id: str, permission_set_name: str) -> set[str]:
+    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
     can_be_approved_by = set()
     for statement in affected_statements:
         if statement.approvers:
@@ -289,35 +247,29 @@ def get_approvers(
     return can_be_approved_by
 
 
-@dataclass(frozen=True)
-class RequestForAccessFromSlack:
+class RequestForAccess(BaseModel):
     permission_set_name: str
     account_id: str
     reason: str
     user_id: str
 
-    @staticmethod
-    def from_view_submission(body: dict) -> "RequestForAccessFromSlack":
-        return RequestForAccessFromSlack(
-            permission_set_name=body["view"]["state"]["values"]["select_role"][
-                "selected_role"
-            ]["selected_option"]["value"],
-            account_id=body["view"]["state"]["values"]["select_account"][
-                "selected_account"
-            ]["selected_option"]["value"],
-            reason=body["view"]["state"]["values"]["provide_reason"]["provided_reason"][
-                "value"
-            ],
-            user_id=body["user"]["id"],
-        )
+    @root_validator(pre=True)
+    def validate_payload(cls, values: dict):
+        return {
+            "permission_set_name": jp.search("view.state.values.select_role.selected_role.selected_option.value", values),
+            "account_id": jp.search("view.state.values.select_account.selected_account.selected_option.value", values),
+            "reason": jp.search("view.state.values.provide_reason.provided_reason.value", values),
+            "user_id": jp.search("user.id", values),
+        }
+
+    class Config:
+        frozen = True
 
 
-def handle_view_submission(
-    request: RequestForAccessFromSlack,
-    slack_cfg: config.SlackConfig,
-    cfg: config.Config,
-):
-    slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
+def handle_request_for_access_submittion(ack, body):
+    ack()
+    request = RequestForAccess.parse_obj(body)
+
     requester = slack_client.get_user_by_id(request.user_id)
     if requester is None:
         raise ValueError(f"Requester with slack id {request.user_id} not found")
@@ -349,18 +301,12 @@ def handle_view_submission(
             token=slack_cfg.bot_token,
         )
 
-        approvers = [
-            slack_client.get_user_by_email(email)
-            for email in decision_on_request.approvers
-        ]
-        approvers_slack_ids = [
-            f"<@{approver.id}>" for approver in approvers if approver is not None
-        ]
+        approvers = [slack_client.get_user_by_email(email) for email in decision_on_request.approvers]
+        approvers_slack_ids = [f"<@{approver.id}>" for approver in approvers if approver is not None]
 
         slack_client.post_message(
             thread_ts=slack_response["ts"],
-            text=" ".join(approvers_slack_ids)
-            + " there is a request waiting for the approval",
+            text=" ".join(approvers_slack_ids) + " there is a request waiting for the approval",
         )
         return
 
@@ -369,9 +315,7 @@ def handle_view_submission(
 
         _, slack_response = slack.post_message(
             api_path="/api/chat.postMessage",
-            message=slack.prepare_approval_request(
-                **approval_request_kwargs, show_buttons=False
-            ),
+            message=slack.prepare_approval_request(**approval_request_kwargs, show_buttons=False),
             token=slack_cfg.bot_token,
         )
 
@@ -381,15 +325,9 @@ def handle_view_submission(
         )
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-        user_principal_id = sso.get_user_principal_id_by_email(
-            identity_center_client, sso_instance.identity_store_id, requester.email
-        )
-        if user_principal_id is None:
-            raise ValueError(f"SSO User with email {requester.email} not found")
+        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
 
-        permission_set = sso.get_permission_set_by_name(
-            sso_client, sso_instance.arn, request.permission_set_name
-        )
+        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, request.permission_set_name)
         if permission_set is None:
             raise ValueError(f"Permission set {request.permission_set_name} not found")
 
@@ -443,9 +381,7 @@ def handle_view_submission(
 
         _, slack_response = slack.post_message(
             api_path="/api/chat.postMessage",
-            message=slack.prepare_approval_request(
-                **approval_request_kwargs, show_buttons=False
-            ),
+            message=slack.prepare_approval_request(**approval_request_kwargs, show_buttons=False),
             token=slack_cfg.bot_token,
         )
 
@@ -455,18 +391,12 @@ def handle_view_submission(
         )
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-        logger.info(
-            f"SSO Instance: arn:{sso_instance.arn} store_id:{sso_instance.identity_store_id}"
-        )
-        user_principal_id = sso.get_user_principal_id_by_email(
-            identity_center_client, sso_instance.identity_store_id, requester.email
-        )
+        logger.info(f"SSO Instance: arn:{sso_instance.arn} store_id:{sso_instance.identity_store_id}")
+        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
         if user_principal_id is None:
             raise ValueError(f"SSO User with email {requester.email} not found")
 
-        permission_set = sso.get_permission_set_by_name(
-            sso_client, sso_instance.arn, request.permission_set_name
-        )
+        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, request.permission_set_name)
         if permission_set is None:
             raise ValueError(f"Permission set {request.permission_set_name} not found")
 
@@ -516,3 +446,14 @@ def handle_view_submission(
             thread_ts=slack_response["ts"],
             text="Done",
         )
+
+
+app.view("request_for_access_submitted")(
+    ack=acknowledge_request,
+    lazy=[handle_request_for_access_submittion],
+)
+
+if __name__ == "__main__":
+    from slack_bolt.adapter.socket_mode import SocketModeHandler
+
+    SocketModeHandler(app, logger=logger).start()
