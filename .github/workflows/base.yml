@@ -75,7 +75,6 @@ jobs:
           - "4510-4559:4510-4559"
         env:
           #SERVICES: "sqs,s3"
-          DEFAULT_REGION: eu-central-1
           FORCE_NONINTERACTIVE: 1
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
@@ -85,6 +84,8 @@ jobs:
           --health-timeout 5s 
           --health-retries 5
           --health-start-period 15s 
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock # https://docs.localstack.cloud/references/lambda-provider-v2/#docker-not-available 
     steps:
       - uses: actions/checkout@master
 
