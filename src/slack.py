@@ -175,50 +175,6 @@ def post_message(api_path: str, message: dict, token: str):
     return response_status, response_body
 
 
-def verify_request(headers, signing_secret, body, age=60):
-    """Method to verifty slack requests
-    Read more here https://api.slack.com/authentication/verifying-requests-from-slack
-    """
-    timestamp = None
-    if "X-Slack-Request-Timestamp" in headers:
-        timestamp = headers["X-Slack-Request-Timestamp"]
-    elif "x-slack-request-timestamp" in headers:
-        timestamp = headers["x-slack-request-timestamp"]
-    else:
-        raise ValueError("Request does not have X-Slack-Request-Timestamp or x-slack-request-timestamp")
-    if not timestamp.isdigit():
-        raise ValueError("Value of X-Slack-Request-Timestamp does not appear to be a digit")
-
-    request_signature = None
-    if "X-Slack-Signature" in headers:
-        request_signature = headers["X-Slack-Signature"]
-    elif "x-slack-signature" in headers:
-        request_signature = headers["x-slack-signature"]
-    else:
-        raise ValueError("Request does not have X-Slack-Signature or x-slack-signature")
-    if abs(time.time() - int(timestamp)) > age:
-        # The request timestamp is more than five minutes from local time.
-        # It could be a replay attack, so let's ignore it.
-        raise ValueError("Request is older than one minute")
-
-    sig_basestring = f"v0:{timestamp}:{body}"
-    signature = hmac.new(
-        bytes(signing_secret, "utf8"),
-        msg=bytes(sig_basestring, "utf-8"),
-        digestmod=hashlib.sha256,
-    ).hexdigest()
-
-    logging.info(f"computed signature = {signature}")
-    if f"v0={signature}" != request_signature:
-        raise ValueError(f"Request computed signature v0={signature} " + f"is not equal to received one {request_signature}")
-    else:
-        logging.info("Request looks legit. It is safe to process it")
-
-
-def tag_users(*id: str) -> str:
-    return " ".join(f"<@{user_id}>" for user_id in id)
-
-
 class Slack:
     def __init__(self, bot_token: str, default_channel: str) -> None:
         self.headers = {"Content-type": "application/json", "Authorization": f"Bearer {bot_token}"}
