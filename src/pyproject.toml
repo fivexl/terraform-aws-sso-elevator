@@ -7,8 +7,6 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.9.16"
-boto3-stubs = {extras = ["dynamodb", "organizations", "sso-admin", "identitystore"], version = "^1.26.99"}
-boto3 = "^1.26.97"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.2.2"
@@ -17,7 +15,7 @@ black = "^23.1.0"
 # from lambda layers
 pydantic = "^1.10.7"
 aws-lambda-powertools = "^2.11.0"
-
+boto3 = "^1.26.97"
 
 [build-system]
 requires = ["poetry-core"]

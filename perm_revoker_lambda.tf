@@ -54,6 +54,7 @@ module "access_revoker" {
   layers = [
     module.powertools_pydantic.lambda_layer_arn,
     module.slack_bolt.lambda_layer_arn,
+    module.python_boto3.lambda_layer_arn,
   ]
 
   tags = var.tags
