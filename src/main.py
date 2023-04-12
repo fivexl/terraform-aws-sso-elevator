@@ -20,11 +20,12 @@ import organizations
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
 
-org_client = boto3.client("organizations")  # type: ignore
-sso_client = boto3.client("sso-admin")  # type: ignore
-identity_center_client = boto3.client("identitystore")  # type: ignore
-time_delta = timedelta(minutes=5)
-schedule_client = boto3.client("scheduler")  # type: ignore
+session = boto3.Session()
+org_client = session.client("organizations")  # type: ignore
+sso_client = session.client("sso-admin")  # type: ignore
+identity_center_client = session.client("identitystore")  # type: ignore
+schedule_client = session.client("scheduler")  # type: ignore
+
 cfg = config.Config()  # type: ignore
 slack_cfg = config.SlackConfig()  # type: ignore
 slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
