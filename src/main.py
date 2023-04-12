@@ -6,7 +6,7 @@ from aws_lambda_powertools.utilities.parser.pydantic import BaseModel, root_vali
 import boto3
 from aws_lambda_powertools import Logger
 import jmespath as jp
-from slack_bolt import App
+from slack_bolt import App, Ack
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 import copy
 from slack_sdk import WebClient
@@ -32,9 +32,6 @@ slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
 app = App(process_before_response=True, logger=logger)
 
 
-
-
-
 def lambda_handler(event, context):
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
@@ -47,7 +44,7 @@ trigger_view_map = {}
 # and available in both functions, we can use it as a key. The value is the view_id.
 
 
-def show_initial_form(client: WebClient, body, ack):
+def show_initial_form(client: WebClient, body: dict, ack: Ack):
     ack()
     trigger_id = body["trigger_id"]
     response = client.views_open(trigger_id=trigger_id, view=slack.SLACK_REQUEST_FOR_ACCESS_FORM)
@@ -55,7 +52,7 @@ def show_initial_form(client: WebClient, body, ack):
     return response
 
 
-def load_select_options(body, client: WebClient):
+def load_select_options(client: WebClient, body: dict):
     if "*" in cfg.accounts:
         accounts = organizations.list_accounts(org_client)
     else:
@@ -87,10 +84,7 @@ app.shortcut("request_for_access")(
 )
 
 
-def handle_button_click(
-    payload: slack.ButtonClickedPayload,
-    approver: slack.Slack.User,
-) -> bool:
+def handle_button_click(payload: slack.ButtonClickedPayload, approver: slack.Slack.User) -> bool:
     can_be_approved_by = get_approvers(
         cfg.statements,
         account_id=payload.account_id,
@@ -118,7 +112,7 @@ def handle_button_click(
     return True
 
 
-def handle_approve(body):
+def handle_approve(body: dict):
     payload = slack.ButtonClickedPayload.parse_obj(body)
 
     approver = slack_client.get_user_by_id(payload.approver_slack_id)
@@ -189,16 +183,18 @@ def handle_approve(body):
         text="Done",
     )
 
-def acknowledge_request(ack):
+
+def acknowledge_request(ack: Ack):
     ack()
-    
+
+
 app.action("approve")(
     ack=acknowledge_request,
     lazy=[handle_approve],
 )
 
 
-def handle_deny(body, logger):
+def handle_deny(body: dict, logger: Logger):
     logger.info(body)
     payload = slack.ButtonClickedPayload.parse_obj(body)
 
@@ -293,7 +289,7 @@ class RequestForAccess(BaseModel):
         frozen = True
 
 
-def handle_request_for_access_submittion(ack, body):
+def handle_request_for_access_submittion(body: dict, ack: Ack):
     ack()
     request = RequestForAccess.parse_obj(body)
 
