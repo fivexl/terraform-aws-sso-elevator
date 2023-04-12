@@ -59,7 +59,6 @@ jobs:
   localstack:
     name: localstack
     runs-on: ubuntu-22.04
-    continue-on-error: true #temporary allow to fail
     defaults:
       run:
         shell: bash    
