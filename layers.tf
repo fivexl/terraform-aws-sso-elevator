@@ -1,4 +1,3 @@
-
 module "powertools_pydantic" {
   source  = "terraform-aws-modules/lambda/aws"
   version = "4.10.1"
@@ -32,6 +31,25 @@ module "slack_bolt" {
   source_path = [{
       poetry_install  = true
       path            = "${path.module}/layers/python-slack-bolt"
+      patterns        = ["!python/.venv/.*"]
+      prefix_in_zip   = "python"
+    }]
+}
+
+module "python_boto3" {
+  source  = "terraform-aws-modules/lambda/aws"
+  version = "4.10.1"
+
+  create_layer  = true
+  create_function = false
+  layer_name    = "python-boto3"
+  description   = "Python Boto3."
+
+  compatible_runtimes = ["python3.9"]
+  runtime         = "python3.9"
+  source_path = [{
+      poetry_install  = true
+      path            = "${path.module}/layers/python-boto3"
       patterns        = ["!python/.venv/.*"]
       prefix_in_zip   = "python"
     }]
