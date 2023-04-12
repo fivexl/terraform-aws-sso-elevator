@@ -25,11 +25,11 @@ module "access_requester_slack_handler" {
   ]
 
   environment_variables = {
-    LOG_LEVEL                   = var.log_level
-    
-    SLACK_SIGNING_SECRET        = var.slack_signing_secret
-    SLACK_BOT_TOKEN             = var.slack_bot_token
-    SLACK_CHANNEL_ID            = var.slack_channel_id
+    LOG_LEVEL = var.log_level
+
+    SLACK_SIGNING_SECRET = var.slack_signing_secret
+    SLACK_BOT_TOKEN      = var.slack_bot_token
+    SLACK_CHANNEL_ID     = var.slack_channel_id
 
     DYNAMODB_TABLE_NAME         = module.dynamodb_table_requests.dynamodb_table_id
     SSO_INSTANCE_ARN            = local.sso_instance_arn

@@ -25,20 +25,20 @@ module "access_revoker" {
   ]
 
   environment_variables = {
-    LOG_LEVEL                   = var.log_level
+    LOG_LEVEL = var.log_level
 
-    SLACK_SIGNING_SECRET        = var.slack_signing_secret
-    SLACK_BOT_TOKEN             = var.slack_bot_token
-    SLACK_CHANNEL_ID            = var.slack_channel_id
+    SLACK_SIGNING_SECRET = var.slack_signing_secret
+    SLACK_BOT_TOKEN      = var.slack_bot_token
+    SLACK_CHANNEL_ID     = var.slack_channel_id
 
     DYNAMODB_TABLE_NAME         = module.dynamodb_table_requests.dynamodb_table_id
     SSO_INSTANCE_ARN            = local.sso_instance_arn
     STATEMENTS                  = jsonencode(var.config)
     POWERTOOLS_LOGGER_LOG_EVENT = true
 
-    POST_UPDATE_TO_SLACK        = var.revoker_post_update_to_slack
-    REVOKER_FUNCTION_ARN        = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${local.revoker_lambda_name}"
-    REVOKER_FUNCTION_NAME       = local.revoker_lambda_name
+    POST_UPDATE_TO_SLACK  = var.revoker_post_update_to_slack
+    REVOKER_FUNCTION_ARN  = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${local.revoker_lambda_name}"
+    REVOKER_FUNCTION_NAME = local.revoker_lambda_name
   }
 
   allowed_triggers = {
