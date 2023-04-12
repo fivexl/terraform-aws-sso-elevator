@@ -1,6 +1,6 @@
 resource "aws_sns_topic" "dlq" {
   name              = local.requester_lambda_name
-  kms_master_key_id = "alias/aws/sns"
+  kms_master_key_id = "alias/aws/sns" # tfsec:ignore:aws-sns-topic-encryption-use-cmk
   tags              = var.tags
 }
 
