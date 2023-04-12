@@ -24,13 +24,24 @@ def lambda_handler(event, __):
     if "Scheduled_revoke" in event:
         return handle_scheduled_account_assignment_deletion(event, sso_client, cfg)
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    avialable_accounts = config.get_accounts_from_statements(cfg.statements, org_client)
-    avialable_permission_sets = config.get_permission_sets_from_statements(statements, sso_client, sso_instance.arn)
-    for account in avialable_accounts:
+
+    configured_accounts = cfg.get_configured_accounts()
+    if "*" in configured_accounts:
+        accounts = organizations.list_accounts(org_client)
+    else:
+        accounts = [ac for ac in organizations.list_accounts(org_client) if ac.id in configured_accounts]
+
+    configured_permission_sets = cfg.get_configured_permission_sets()
+    if "*" in configured_permission_sets:
+        permission_sets = sso.list_permission_sets(sso_client, cfg.sso_instance_arn)
+    else:
+        permission_sets = [ps for ps in sso.list_permission_sets(sso_client, cfg.sso_instance_arn) if ps.name in configured_permission_sets]
+
+    for account in accounts:
         logger.info(f"Revoking tmp permissions for account {account.id}")
-        for permision_set in avialable_permission_sets:
+        for permision_set in permission_sets:
             account_assignments = sso.list_account_assignments(
-                client=sso_client,
+                sso_client=sso_client,
                 instance_arn=sso_instance.arn,
                 account_id=account.id,
                 permission_set_arn=permision_set.arn,
