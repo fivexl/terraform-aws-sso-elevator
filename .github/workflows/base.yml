@@ -93,7 +93,10 @@ jobs:
           terraform_version: 1.4.4
       - name: Terraform-local installation
         run: pip3 install terraform-local
-        
+
+      - name: Install Poetry
+        uses: pip3 install poetry
+
       - name: terraform init
         run: tflocal init -backend-config=./tests/localstack-backend.tf
         
