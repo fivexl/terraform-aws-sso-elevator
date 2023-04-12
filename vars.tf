@@ -56,3 +56,8 @@ variable "requester_lambda_name_postfix" {
   type    = string
   default = ""
 }
+
+variable "revoker_post_update_to_slack" {
+  type    = bool
+  default = false
+}
