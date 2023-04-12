@@ -25,13 +25,13 @@ def lambda_handler(event, __):
         return handle_scheduled_account_assignment_deletion(event, sso_client, cfg)
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
-    configured_accounts = cfg.get_configured_accounts()
+    configured_accounts = cfg.accounts
     if "*" in configured_accounts:
         accounts = organizations.list_accounts(org_client)
     else:
         accounts = [ac for ac in organizations.list_accounts(org_client) if ac.id in configured_accounts]
 
-    configured_permission_sets = cfg.get_configured_permission_sets()
+    configured_permission_sets = cfg.permission_sets
     if "*" in configured_permission_sets:
         permission_sets = sso.list_permission_sets(sso_client, cfg.sso_instance_arn)
     else:

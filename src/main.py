@@ -1,6 +1,5 @@
 import os
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Union
 from aws_lambda_powertools.utilities.parser.pydantic import BaseModel, root_validator
 
@@ -43,21 +42,18 @@ def lambda_handler(event, context):
 
 
 def handle_request_for_access(body, client: WebClient):
-    configured_accounts = cfg.get_configured_accounts()
-    if "*" in configured_accounts:
+    if "*" in cfg.accounts:
         accounts = organizations.list_accounts(org_client)
     else:
-        accounts = [ac for ac in organizations.list_accounts(org_client) if ac.id in configured_accounts]
+        accounts = [ac for ac in organizations.list_accounts(org_client) if ac.id in cfg.accounts]
 
-    configured_permission_sets = cfg.get_configured_permission_sets()
-    if "*" in configured_permission_sets:
+    if "*" in cfg.permission_sets:
         permission_sets = sso.list_permission_sets(sso_client, cfg.sso_instance_arn)
     else:
-        permission_sets = [ps for ps in sso.list_permission_sets(sso_client, cfg.sso_instance_arn) if ps.name in configured_permission_sets]
+        permission_sets = [ps for ps in sso.list_permission_sets(sso_client, cfg.sso_instance_arn) if ps.name in cfg.permission_sets]
 
     inital_form = slack.prepare_initial_form(body["trigger_id"], list(permission_sets), accounts)
     return client.views_open(**inital_form)
-
 
 app.shortcut("request_for_access")(
     acknowledge_request,
@@ -208,7 +204,7 @@ class SelfApprovalIsAllowedAndRequesterIsApprover:
 DecisionOnRequest = Union[RequiresApproval, ApprovalIsNotRequired, SelfApprovalIsAllowedAndRequesterIsApprover]
 
 
-def get_affected_statements(statements: list[config.Statement], account_id: str, permission_set_name: str) -> list[config.Statement]:
+def get_affected_statements(statements: frozenset[config.Statement], account_id: str, permission_set_name: str) -> list[config.Statement]:
     return [
         statement
         for statement in statements
@@ -220,7 +216,7 @@ def get_affected_statements(statements: list[config.Statement], account_id: str,
 
 
 def make_decision_on_request(
-    statements: list[config.Statement],
+    statements: frozenset[config.Statement],
     account_id: str,
     permission_set_name: str,
     requester_email: str,
@@ -239,7 +235,7 @@ def make_decision_on_request(
     return RequiresApproval(approvers=can_be_approved_by)
 
 
-def get_approvers(statements: list[config.Statement], account_id: str, permission_set_name: str) -> set[str]:
+def get_approvers(statements: frozenset[config.Statement], account_id: str, permission_set_name: str) -> set[str]:
     affected_statements = get_affected_statements(statements, account_id, permission_set_name)
     can_be_approved_by = set()
     for statement in affected_statements:

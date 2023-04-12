@@ -8,12 +8,11 @@ class SlackConfig(BaseSettings):
     signing_secret: str = Field(..., env="SLACK_SIGNING_SECRET", min_length=1)
     channel_id: str = Field(..., env="SLACK_CHANNEL_ID", min_length=1)
 
-
 class Statement(BaseModel):
     resource_type: Literal["Account", "OU"]
-    resource: list[Union[str, Literal["*"]]]
-    permission_set: list[Union[str, Literal["*"]]]
-    approvers: Optional[list[str]]
+    resource: frozenset[Union[str, Literal["*"]]]
+    permission_set: frozenset[Union[str, Literal["*"]]]
+    approvers: Optional[frozenset[str]]
     approval_is_not_required: bool = False
     allow_self_approval: bool = False
 
@@ -22,14 +21,16 @@ class Statement(BaseModel):
 
     @root_validator(pre=True)
     def validate_payload(cls, values: dict):
-        permission_set = values.get("PermissionSet")
-        resource = values.get("Resource")
-        approvers = values.get("Approvers") or []
+        def to_set_if_list_or_str(v):
+            if isinstance(v, list):
+                return frozenset(v)
+            return frozenset([v]) if isinstance(v, str) else v
+
         return {
+            "permission_set": to_set_if_list_or_str(values["PermissionSet"]),
+            "resource": to_set_if_list_or_str(values["Resource"]),
+            "approvers": to_set_if_list_or_str(values.get("Approvers", set())),
             "resource_type": values.get("ResourceType"),
-            "resource": resource if isinstance(resource, list) else [resource],
-            "permission_set": permission_set if isinstance(permission_set, list) else [permission_set],
-            "approvers": approvers if isinstance(approvers, list) else [approvers],
             "approval_is_not_required": values.get("ApprovalIsNotRequired", False),
             "allow_self_approval": values.get("AllowSelfApproval", False),
         }
@@ -47,17 +48,21 @@ class Config(BaseSettings):
     sso_instance_arn: str
 
     log_level: str = "INFO"
-    statements: list[Statement]
+    statements: frozenset[Statement]
 
-    def get_configured_accounts(self) -> set[str]:
-        available_accounts = set()
-        for statement in self.statements:
+    accounts: frozenset[str]
+    permission_sets: frozenset[str]
+
+    class Config:
+        frozen = True
+
+    @root_validator(pre=True)
+    def get_accounts_and_permission_sets(cls, values: dict):
+        statements = {Statement.parse_obj(st) for st in values["statements"]}  # type: ignore
+        permission_sets = set()
+        accounts = set()
+        for statement in statements:
+            permission_sets.update(statement.permission_set)
             if statement.resource_type == "Account":
-                available_accounts.update(statement.resource)
-        return available_accounts
-
-    def get_configured_permission_sets(self) -> set[str]:
-        available_permission_sets = set()
-        for statement in self.statements:
-            available_permission_sets.update(statement.permission_set)
-        return available_permission_sets
+                accounts.update(statement.resource)
+        return values | {"accounts": accounts, "permission_sets": permission_sets}
