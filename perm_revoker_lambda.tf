@@ -37,7 +37,7 @@ module "access_revoker" {
     POWERTOOLS_LOGGER_LOG_EVENT = true
 
     POST_UPDATE_TO_SLACK        = var.revoker_post_update_to_slack
-    REVOKER_FUNCTION_ARN        = data.aws_lambda_function.access_revoker.arn
+    REVOKER_FUNCTION_ARN        = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${local.revoker_lambda_name}"
     REVOKER_FUNCTION_NAME       = local.revoker_lambda_name
   }
 
@@ -121,8 +121,4 @@ resource "aws_cloudwatch_event_rule" "every_night" {
 resource "aws_cloudwatch_event_target" "revoker" {
   rule = aws_cloudwatch_event_rule.every_night.name
   arn  = module.access_revoker.lambda_function_arn
-}
-
-data "aws_lambda_function" "access_revoker" {
-  function_name = local.revoker_lambda_name
 }
