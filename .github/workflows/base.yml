@@ -60,6 +60,9 @@ jobs:
     name: localstack
     runs-on: ubuntu-22.04
     continue-on-error: true #temporary allow to fail
+    defaults:
+      run:
+        shell: bash    
     env:
       AWS_DEFAULT_REGION: "eu-central-1"
       TF_CLI_ARGS_plan: "-compact-warnings"
@@ -92,7 +95,11 @@ jobs:
         run: pip3 install terraform-local
 
       - name: terraform generate temp s3 backend config
-        run: echo "terraform {\n  backend \"s3\" {}\n}" > temp_ci_3r32fdsdaf_backend.tf
+        run: |
+          echo "" > temp_ci_3r32fdsdaf_backend.tf
+          echo "terraform {" >> temp_ci_3r32fdsdaf_backend.tf
+          echo "backend \"s3\" {}" >> temp_ci_3r32fdsdaf_backend.tf
+          echo "}" >> temp_ci_3r32fdsdaf_backend.tf
         
       - name: terraform init
         run: tflocal init -backend-config=./tests/localstack-backend.tf
