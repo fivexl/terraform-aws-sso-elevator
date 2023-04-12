@@ -87,10 +87,16 @@ jobs:
           --health-start-period 15s 
     steps:
       - uses: actions/checkout@master
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v1
         with:
           terraform_version: 1.4.4
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
       - name: Terraform-local installation
         run: pip3 install terraform-local
 
