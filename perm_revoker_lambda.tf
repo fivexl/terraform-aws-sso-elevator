@@ -17,6 +17,9 @@ module "access_revoker" {
       artifacts_dir  = "${path.root}/builds/"
       patterns = [
         "!.venv/.*",
+        "!.vscode/.*",
+        "!__pycache__/.*",
+        "!tests/.*",
       ]
     }
   ]
