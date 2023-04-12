@@ -1,0 +1,57 @@
+name: 'base'
+
+on:
+  push:
+    tags: [ v* ]
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  tflint:
+    name: TFLint
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@master
+      - uses: terraform-linters/setup-tflint@v3
+        name: Setup TFLint
+        with:
+          tflint_version: v0.46.0      
+      - name: TFLint
+        run: |
+          tflint -f compact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}  # https://github.com/terraform-linters/tflint/blob/master/docs/user-guide/plugins.md#avoiding-rate-limiting
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-20.04
+    container:
+      image: hashicorp/terraform:latest
+    steps:
+      - uses: actions/checkout@master
+      - run: terraform fmt --recursive -check=true
+
+  validate:
+    name: validate
+    runs-on: ubuntu-20.04
+    container:
+      image: hashicorp/terraform:latest
+    steps:
+      - uses: actions/checkout@master
+      - name: terraform validate
+        run: |
+          terraform init
+          terraform validate -no-color
+        env:
+          AWS_DEFAULT_REGION: "eu-central-1"
+
+  tfsec:
+    name: TFSec
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@master
+      - name: TFSec
+        uses: triat/terraform-security-scan@v3.0.3
+        with:
+          tfsec_actions_comment: false
