@@ -59,6 +59,10 @@ jobs:
   localstack:
     name: localstack
     runs-on: ubuntu-22.04
+    env:
+      AWS_DEFAULT_REGION: "eu-central-1"
+      TF_CLI_ARGS_plan: "-compact-warnings"
+      TF_CLI_ARGS_apply: "-compact-warnings"     
     services:
       localstack-service:
         image: localstack/localstack
@@ -69,18 +73,14 @@ jobs:
           #SERVICES: "sqs,s3"
           DEFAULT_REGION: eu-central-1
           FORCE_NONINTERACTIVE: 1
-          AWS_ACCESS_KEY_ID: dummy
-          AWS_SECRET_ACCESS_KEY: dummy
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
         options: >-
           --health-cmd "./bin/localstack status services"
           --health-interval 10s 
           --health-timeout 5s 
           --health-retries 5s
-          --health-start-period 15s
-      env:
-        AWS_DEFAULT_REGION: "eu-central-1"
-        TF_CLI_ARGS_plan: "-compact-warnings"
-        TF_CLI_ARGS_apply: "-compact-warnings"      
+          --health-start-period 15s 
     steps:
       - uses: actions/checkout@master
       - name: Setup Terraform
