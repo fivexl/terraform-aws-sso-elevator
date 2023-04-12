@@ -4,47 +4,59 @@ variable "tags" {
   default     = {}
 }
 
-variable "aws_sns_topic_subscription_email" {}
+variable "aws_sns_topic_subscription_email" {
+  description = "value for the email address to subscribe to the SNS topic"
+  type        = string
+}
 
 variable "slack_signing_secret" {
-  type = string
+  description = "value for the Slack signing secret"
+  type        = string
 }
 
 variable "slack_bot_token" {
-  type = string
+  description = "value for the Slack bot token"
+  type        = string
 }
 
 variable "log_level" {
-  type    = string
-  default = "INFO"
+  description = "value for the log level"
+  type        = string
+  default     = "INFO"
 }
 
 variable "slack_channel_id" {
-  type = string
+  description = "value for the Slack channel ID"
+  type        = string
 }
 
 variable "schedule_expression" {
-  type    = string
-  default = "cron(0 23 * * ? *)"
+  description = "value for the schedule expression"
+  type        = string
+  default     = "cron(0 23 * * ? *)"
 }
 
 variable "sso_instance_arn" {
-  type    = string
-  default = ""
+  description = "value for the SSO instance ARN"
+  type        = string
+  default     = ""
 }
 
 variable "config" {
-  type = any
+  description = "value for the SSO Elevator config"
+  type        = any
 }
 
 variable "revoker_lambda_name" {
-  type    = string
-  default = "access-revoker"
+  description = "value for the revoker lambda name"
+  type        = string
+  default     = "access-revoker"
 }
 
 variable "requester_lambda_name" {
-  type    = string
-  default = "access-requester"
+  description = "value for the requester lambda name"
+  type        = string
+  default     = "access-requester"
 }
 
 variable "revoker_lambda_name_postfix" {
@@ -58,6 +70,7 @@ variable "requester_lambda_name_postfix" {
 }
 
 variable "revoker_post_update_to_slack" {
-  type    = bool
-  default = false
+  description = "value for the revoker post update to Slack"
+  type        = bool
+  default     = false
 }
