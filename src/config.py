@@ -36,9 +36,7 @@ class Statement(BaseModel):
 
     def allows(self, account_id: str, permission_set_name: str) -> bool:
         account_match = account_id in self.resource or "*" in self.resource
-        permission_set_match = (
-            permission_set_name in self.permission_set or "*" in self.permission_set
-        )
+        permission_set_match = permission_set_name in self.permission_set or "*" in self.permission_set
         return account_match and permission_set_match
 
 
