@@ -1,13 +1,13 @@
 [tool.poetry]
-name = "python-slack-bolt"
+name = "python-boto3"
 version = "0.1.0"
 description = ""
 authors = ["Eremin <haru.eaa@gmail.com>"]
-packages = [{include = "python_slack_bolt"}]
+packages = [{include = "python-boto3"}]
 
 [tool.poetry.dependencies]
 python = "^3.9.16"
-slack-bolt = "^1.17.0"
+boto3 = "^1.26.97"
 
 
 [build-system]

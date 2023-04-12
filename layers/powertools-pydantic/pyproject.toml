@@ -3,7 +3,6 @@ name = "powertools-pydantic"
 version = "0.1.0"
 description = ""
 authors = ["Eremin <haru.eaa@gmail.com>"]
-readme = "README.md"
 packages = [{include = "powertools_pydantic"}]
 
 [tool.poetry.dependencies]
