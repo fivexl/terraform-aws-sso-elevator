@@ -1,6 +1,7 @@
 resource "aws_sns_topic" "dlq" {
-  name = local.requester_lambda_name
-  tags = var.tags
+  name              = local.requester_lambda_name
+  kms_master_key_id = "alias/aws/sns"
+  tags              = var.tags
 }
 
 resource "aws_sns_topic_subscription" "dlq" {
