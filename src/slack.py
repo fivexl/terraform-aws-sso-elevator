@@ -1,15 +1,9 @@
-import functools
-import hashlib
-import hmac
-import http.client
-import json
-import logging
-import time
 from pydantic import BaseModel, root_validator
 import jmespath as jp
-from typing import Literal, NamedTuple, Optional
+from typing import Literal, Optional, TypeVar, Union
 import organizations
 import sso
+from slack_sdk import WebClient
 from slack_sdk.models.views import View
 from slack_sdk.models.blocks import (
     PlainTextObject,
@@ -21,6 +15,8 @@ from slack_sdk.models.blocks import (
     Option,
     StaticSelectElement,
     Block,
+    ActionsBlock,
+    ButtonElement,
 )
 
 SLACK_REQUEST_FOR_ACCESS_FORM = View(
@@ -55,16 +51,20 @@ SLACK_REQUEST_FOR_ACCESS_FORM = View(
     ],
 )
 
-
-def remove_blocks(view: View, block_ids: list[str]) -> View:
-    view.blocks = [block for block in view.blocks if block.block_id not in block_ids]
-    return view
+T = TypeVar("T", Block, dict)
 
 
-def insert_blocks(view: View, blocks: list[Block], after_block_id: str) -> View:
-    index = next(i for i, block in enumerate(view.blocks) if block.block_id == after_block_id)
-    view.blocks = view.blocks[: index + 1] + blocks + view.blocks[index + 1 :]
-    return view
+def get_block_id(block: Union[Block, dict]) -> Optional[str]:
+    return block["block_id"] if isinstance(block, dict) else block.block_id
+
+
+def remove_blocks(blocks: list[T], block_ids: list[str]) -> list[T]:
+    return [block for block in blocks if get_block_id(block) not in block_ids]
+
+
+def insert_blocks(blocks: list[T], blocks_to_insert: list[Block], after_block_id: str) -> list[T]:
+    index = next(i for i, block in enumerate(blocks) if get_block_id(block) == after_block_id)
+    return blocks[: index + 1] + blocks_to_insert + blocks[index + 1 :]  # type: ignore
 
 
 def select_account_input_block(accounts: list[organizations.AWSAccount]) -> InputBlock:
@@ -93,142 +93,49 @@ def select_permission_set_input_block(permission_sets: list[sso.PermissionSet]) 
     )
 
 
-def prepare_approval_request(
-    channel: str, requester_slack_id: str, account_id: str, role_name: str, reason: str, show_buttons: bool = True
-):
-    header_text = "AWS account access request."
-    blocks = [
-        {
-            "type": "section",
-            "block_id": "header",
-            "text": {"type": "mrkdwn", "text": header_text},
-        },
-        {
-            "type": "section",
-            "block_id": "content",
-            "fields": [
-                {"type": "mrkdwn", "text": f"Requester: <@{requester_slack_id}>"},
-                {"type": "mrkdwn", "text": f"AccountId: {account_id}"},
-                {"type": "mrkdwn", "text": f"Role name: {role_name}"},
-                {"type": "mrkdwn", "text": f"Reason: {reason}"},
+def prepare_approval_request_blocks(requester_slack_id: str, account_id: str, role_name: str, reason: str, show_buttons: bool = True):
+    blocks: list[Block] = [
+        SectionBlock(block_id="header", text=MarkdownTextObject(text="AWS account access request.")),
+        SectionBlock(
+            block_id="content",
+            fields=[
+                MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
+                MarkdownTextObject(text=f"AccountId: {account_id}"),
+                MarkdownTextObject(text=f"Role name: {role_name}"),
+                MarkdownTextObject(text=f"Reason: {reason}"),
             ],
-        },
+        ),
     ]
     if show_buttons:
         blocks.append(
-            {
-                "type": "actions",
-                "block_id": "buttons",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": "approve",
-                        "text": {"type": "plain_text", "text": "Approve"},
-                        "style": "primary",
-                        "value": "approve",
-                    },
-                    {
-                        "type": "button",
-                        "action_id": "deny",
-                        "text": {"type": "plain_text", "text": "Deny"},
-                        "style": "danger",
-                        "value": "deny",
-                    },
+            ActionsBlock(
+                block_id="buttons",
+                elements=[
+                    ButtonElement(
+                        action_id="approve",
+                        text=PlainTextObject(text="Approve"),
+                        style="primary",
+                        value="approve",
+                    ),
+                    ButtonElement(
+                        action_id="deny",
+                        text=PlainTextObject(text="Deny"),
+                        style="danger",
+                        value="deny",
+                    ),
                 ],
-            }
+            )
         )
-    return {"channel": channel, "blocks": blocks}
+    return blocks
 
 
-def prepare_approval_request_update(channel, ts, approver, action, blocks):
-    message = {"channel": channel, "ts": ts, "blocks": []}
-    # loop through original message and take header and content blocks to drop buttons
-    for block in blocks:
-        if block["block_id"] in ["header", "content"]:
-            message["blocks"].append(block)
-    # add information about approver
-    message["blocks"].append(
-        {
-            "type": "section",
-            "block_id": "footer",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"<@{approver}> pressed {action} button",
-            },
-        }
+def button_click_info_block(action: Literal["approve", "deny"], approver_slack_id: str) -> SectionBlock:
+    return SectionBlock(
+        block_id="footer",
+        text=MarkdownTextObject(
+            text=f"<@{approver_slack_id}> pressed {action} button",
+        ),
     )
-    return message
-
-
-def post_message(api_path: str, message: dict, token: str):
-    # POST https://slack.com/api/views.open
-    # Content-type: application/json
-    # Authorization: Bearer YOUR_ACCESS_TOKEN_HERE
-    # print(f"Sending message: {json.dumps(message)}")
-    headers = {"Content-type": "application/json", "Authorization": f"Bearer {token}"}
-    connection = http.client.HTTPSConnection("slack.com")
-    connection.request("POST", api_path, json.dumps(message), headers)
-    response = connection.getresponse()
-    response_status = response.status
-    response_body = json.loads(response.read().decode())
-    # print(f"Response: {response_status}, message: {response_body}")
-    return response_status, response_body
-
-
-class Slack:
-    def __init__(self, bot_token: str, default_channel: str) -> None:
-        self.headers = {"Content-type": "application/json", "Authorization": f"Bearer {bot_token}"}
-        self.default_channel = default_channel
-
-    class Response(NamedTuple):
-        status: int
-        body: dict
-
-    def api_call(
-        self,
-        api_path: str,
-        body: Optional[dict] = None,
-        method: str = "POST",
-    ) -> Response:
-        connection = http.client.HTTPSConnection("slack.com")
-        if body is None:
-            body = {}
-
-        connection.request(method, api_path, json.dumps(body), self.headers)
-        response = connection.getresponse()
-        return Slack.Response(response.status, json.loads(response.read().decode()))
-
-    def post_message(
-        self, channel: Optional[str] = None, thread_ts: Optional[str] = None, text: Optional[str] = None, **kwargs
-    ) -> Response:
-        body = {}
-        if thread_ts is not None:
-            body["thread_ts"] = thread_ts
-        if text is not None:
-            body["text"] = text
-        if channel is None:
-            body["channel"] = self.default_channel
-
-        body.update(kwargs)
-        return self.api_call(method="POST", api_path="/api/chat.postMessage", body=body)
-
-    class User(NamedTuple):
-        id: str
-        name: str
-        email: Optional[str]
-
-    @functools.cache
-    def list_users(self) -> list[User]:
-        response = self.api_call(method="GET", api_path="/api/users.list")
-        body = response.body
-
-        return [Slack.User(user["id"], user["name"], user.get("profile", {}).get("email")) for user in body["members"]]
-
-    def get_user_by_id(self, id: str) -> Optional[User]:
-        return next((user for user in self.list_users() if user.id == id), None)
-
-    def get_user_by_email(self, email: str) -> Optional[User]:
-        return next((user for user in self.list_users() if user.email == email), None)
 
 
 class ButtonClickedPayload(BaseModel):
@@ -270,3 +177,22 @@ class ButtonClickedPayload(BaseModel):
         for field in fields:
             if field["text"].startswith(key):
                 return field["text"].split(": ")[1].strip()
+
+
+class SlackUser(BaseModel):
+    id: str
+    email: str
+
+    @root_validator(pre=True)
+    def validate(cls, values):
+        return {"id": jp.search("user.id", values), "email": jp.search("user.profile.email", values)}
+
+
+def get_user(client: WebClient, id: str) -> SlackUser:
+    response = client.users_info(user=id)
+    return SlackUser.parse_obj(response.data)
+
+
+def get_user_by_email(client: WebClient, email: str) -> SlackUser:
+    response = client.users_lookupByEmail(email=email)
+    return SlackUser.parse_obj(response.data)

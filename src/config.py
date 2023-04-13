@@ -1,12 +1,7 @@
 from typing import Literal, Optional, Union
 
-from pydantic import BaseSettings, Field, BaseModel, root_validator
+from pydantic import BaseSettings, BaseModel, root_validator
 
-
-class SlackConfig(BaseSettings):
-    bot_token: str = Field(..., env="SLACK_BOT_TOKEN", min_length=1)
-    signing_secret: str = Field(..., env="SLACK_SIGNING_SECRET", min_length=1)
-    channel_id: str = Field(..., env="SLACK_CHANNEL_ID", min_length=1)
 
 class Statement(BaseModel):
     resource_type: Literal["Account", "OU"]
@@ -43,6 +38,7 @@ class Statement(BaseModel):
 
 class Config(BaseSettings):
     post_update_to_slack: bool = False
+    slack_channel_id: str
 
     dynamodb_table_name: str
     sso_instance_arn: str
