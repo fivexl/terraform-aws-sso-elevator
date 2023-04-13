@@ -37,6 +37,7 @@ module "access_revoker" {
     POWERTOOLS_LOGGER_LOG_EVENT = true
 
     POST_UPDATE_TO_SLACK  = var.revoker_post_update_to_slack
+    SCHEDULE_POLICY_ARN   = aws_iam_role.eventbridge_role.arn
     REVOKER_FUNCTION_ARN  = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${local.revoker_lambda_name}"
     REVOKER_FUNCTION_NAME = local.revoker_lambda_name
   }
@@ -109,6 +110,13 @@ data "aws_iam_policy_document" "revoker" {
     ]
     resources = ["*"]
   }
+  statement {
+    effect = "Allow"
+    actions = [
+      "scheduler:DeleteSchedule",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "every_night" {
@@ -121,4 +129,62 @@ resource "aws_cloudwatch_event_rule" "every_night" {
 resource "aws_cloudwatch_event_target" "revoker" {
   rule = aws_cloudwatch_event_rule.every_night.name
   arn  = module.access_revoker.lambda_function_arn
+}
+
+resource "aws_iam_role" "eventbridge_role" {
+  name = "EventBridgeRoleForSSOElevator"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      },
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "scheduler.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "eventbridge_policy" {
+  name = "eventbridge_policy_for_sso_elevator"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "events:PutRule",
+          "events:PutTargets"
+        ]
+        Effect = "Allow"
+        Resource = "*"
+      },
+      {
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Effect = "Allow"
+        Resource = data.aws_lambda_function.access_revoker.arn
+      }
+    ]
+  })
+
+  role = aws_iam_role.eventbridge_role.id
+}
+
+
+resource "aws_lambda_permission" "eventbridge" {
+  statement_id  = "AllowEventBridge"
+  action       = "lambda:InvokeFunction"
+  function_name = data.aws_lambda_function.access_revoker.function_name
+  principal    = "scheduler.amazonaws.com"
+  source_arn   = aws_iam_role.eventbridge_role.arn
 }

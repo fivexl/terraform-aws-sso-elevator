@@ -1,20 +1,22 @@
+import copy
 import os
 from dataclasses import dataclass
 from typing import Union
-from aws_lambda_powertools.utilities.parser.pydantic import BaseModel, root_validator
 
 import boto3
-from aws_lambda_powertools import Logger
 import jmespath as jp
-from slack_bolt import App, Ack
+from aws_lambda_powertools import Logger
+from aws_lambda_powertools.utilities.parser.pydantic import BaseModel, root_validator
+from slack_bolt import Ack, App
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
-import copy
 from slack_sdk import WebClient
+
 import config
 import dynamodb
+import organizations
+import schedule
 import slack
 import sso
-import organizations
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
@@ -137,20 +139,17 @@ def handle_approve(client: WebClient, body: dict):
             user_principal_id=user_principal_id,
         ),
     )
-    # schedule.create_schedule_for_revoker(
-    #     lambda_arn=cfg.revoker_function_arn,
-    #     lambda_name = cfg.revoker_function_name,
-    #     time_delta = time_delta,
-    #     schedule_client = schedule_client,
-    #     sso_instance_arn = sso_instance.arn,
-    #     account_id = payload.account_id,
-    #     permission_set_arn = permission_set.arn,
-    #     user_principal_id = user_principal_id,
-    #     requester_slack_id= requester.id,
-    #     requester_email = requester.email,
-    #     approver_slack_id = payload.approver_slack_id,
-    #     approver_email = approver.email,
-    # )
+    schedule.create_schedule_for_revoker(
+        time_delta = cfg.default_revoke_time_delta,
+        schedule_client = schedule_client,
+        account_id = payload.account_id,
+        permission_set_arn = permission_set.arn,
+        user_principal_id = user_principal_id,
+        requester_slack_id= requester.id,
+        requester_email = requester.email,
+        approver_slack_id = payload.approver_slack_id,
+        approver_email = approver.email,
+    )
     dynamodb.log_operation(
         logger,
         cfg.dynamodb_table_name,
@@ -333,20 +332,17 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
                 user_principal_id=user_principal_id,
             ),
         )
-        # schedule.create_schedule_for_revoker(
-        #     lambda_arn=cfg.revoker_function_arn,
-        #     lambda_name = cfg.revoker_function_name,
-        #     time_delta = time_delta,
-        #     schedule_client = schedule_client,
-        #     sso_instance_arn = sso_instance.arn,
-        #     account_id = request.account_id,
-        #     permission_set_arn = permission_set.arn,
-        #     user_principal_id = user_principal_id,
-        #     requester_slack_id = request.user_id,
-        #     requester_email = requester.email,
-        #     approver_slack_id="ApprovalIsNotRequired",
-        #     approver_email="ApprovalIsNotRequired",
-        # )
+        schedule.create_schedule_for_revoker(
+            time_delta = cfg.default_revoke_time_delta,
+            schedule_client = schedule_client,
+            account_id = request.account_id,
+            permission_set_arn = permission_set.arn,
+            user_principal_id = user_principal_id,
+            requester_slack_id = request.user_id,
+            requester_email = requester.email,
+            approver_slack_id="ApprovalIsNotRequired",
+            approver_email="ApprovalIsNotRequired",
+        )
         dynamodb.log_operation(
             logger,
             cfg.dynamodb_table_name,
@@ -399,22 +395,17 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
                 user_principal_id=user_principal_id,
             ),
         )
-
-        # schedule.create_schedule_for_revoker(
-        #     lambda_arn=cfg.revoker_function_arn,
-        #     lambda_name = cfg.revoker_function_name,
-        #     time_delta = time_delta,
-        #     schedule_client = schedule_client,
-        #     sso_instance_arn = sso_instance.arn,
-        #     account_id = request.account_id,
-        #     permission_set_arn = permission_set.arn,
-        #     user_principal_id = user_principal_id,
-        #     requester_slack_id = request.user_id,
-        #     requester_email = requester.email,
-        #     approver_slack_id = request.user_id,
-        #     approver_email = requester.email,
-        # )
-
+        schedule.create_schedule_for_revoker(
+            time_delta = cfg.default_revoke_time_delta,
+            schedule_client = schedule_client,
+            account_id = request.account_id,
+            permission_set_arn = permission_set.arn,
+            user_principal_id = user_principal_id,
+            requester_slack_id = request.user_id,
+            requester_email = requester.email,
+            approver_slack_id = request.user_id,
+            approver_email = requester.email,
+        )
         dynamodb.log_operation(
             logger,
             cfg.dynamodb_table_name,

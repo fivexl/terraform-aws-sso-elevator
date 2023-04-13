@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+import config 
 
 
 def event_bridge_schedule_after(td: timedelta) -> str:
@@ -9,11 +10,8 @@ def event_bridge_schedule_after(td: timedelta) -> str:
 
 # TODO typehint for schedule_client
 def create_schedule_for_revoker(
-    lambda_arn: str,
-    lambda_name: str,
     time_delta: timedelta,
     schedule_client,
-    sso_instance_arn: str,
     account_id: str,
     permission_set_arn: str,
     user_principal_id: str,
@@ -22,25 +20,24 @@ def create_schedule_for_revoker(
     approver_slack_id: str,
     approver_email: str,
 ):
-    schedule_name = f"{lambda_name}-{time_delta}_" + datetime.now().strftime(
-        "%Y-%m-%d-%H-%M-%S"
-    )
+    cfg = config.Config() #type: ignore
+    schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     schedule_expression = event_bridge_schedule_after(time_delta)
-
+    # scheduler.amazonaws.com
     payload = {
         "FlexibleTimeWindow": {"Mode": "OFF"},
         "Name": schedule_name,
         "ScheduleExpression": schedule_expression,
         "State": "ENABLED",
         "Target": {
-            "Arn": lambda_arn,
-            "RoleArn": "arn:aws:iam::754426185857:role/test_scheduling",
+            "Arn": cfg.revoker_function_arn,
+            "RoleArn": cfg.schedule_policy_arn,
             "Input": json.dumps(
                 {
                     "Schedule_name": schedule_name,
                     "ScheduleExpression": schedule_expression,
                     "Scheduled_revoke": {
-                        "instance_arn": sso_instance_arn,
+                        "instance_arn": cfg.sso_instance_arn,
                         "account_id": account_id,
                         "permission_set_arn": permission_set_arn,
                         "user_principal_id": user_principal_id,
@@ -55,7 +52,3 @@ def create_schedule_for_revoker(
         },
     }
     schedule_client.create_schedule(**payload)
-
-
-def delete_schedule(schedule_name: str, schedule_client):
-    schedule_client.delete_schedule(Name=schedule_name)
