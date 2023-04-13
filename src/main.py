@@ -26,9 +26,6 @@ identity_center_client = session.client("identitystore")  # type: ignore
 schedule_client = session.client("scheduler")  # type: ignore
 
 cfg = config.Config()  # type: ignore
-slack_cfg = config.SlackConfig()  # type: ignore
-slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)
-
 app = App(process_before_response=True, logger=logger)
 
 
@@ -66,10 +63,10 @@ def load_select_options(client: WebClient, body: dict):
     trigger_id = body["trigger_id"]
 
     view = copy.deepcopy(slack.SLACK_REQUEST_FOR_ACCESS_FORM)
-    view = slack.remove_blocks(view, block_ids=["loading"])
-    view = slack.insert_blocks(
-        view=view,
-        blocks=[
+    blocks = slack.remove_blocks(view.blocks, block_ids=["loading"])
+    view.blocks = slack.insert_blocks(
+        blocks=blocks,
+        blocks_to_insert=[
             slack.select_account_input_block(accounts),
             slack.select_permission_set_input_block(permission_sets),
         ],  # type: ignore
@@ -84,7 +81,7 @@ app.shortcut("request_for_access")(
 )
 
 
-def handle_button_click(payload: slack.ButtonClickedPayload, approver: slack.Slack.User) -> bool:
+def handle_button_click(client: WebClient, payload: slack.ButtonClickedPayload, approver: slack.SlackUser) -> bool:
     can_be_approved_by = get_approvers(
         cfg.statements,
         account_id=payload.account_id,
@@ -92,44 +89,36 @@ def handle_button_click(payload: slack.ButtonClickedPayload, approver: slack.Sla
     )
 
     if approver.email not in can_be_approved_by:
-        slack_client.post_message(
+        client.chat_postMessage(
+            channel=payload.channel_id,
             text=f"<@{approver.id}> you can not {payload.action} this request",
             thread_ts=payload.thread_ts,
         )
         return False
-
-    slack.post_message(
-        "/api/chat.update",
-        slack.prepare_approval_request_update(
-            channel=payload.channel_id,
-            ts=payload.thread_ts,
-            approver=approver.id,
-            action=payload.action,
-            blocks=payload.message["blocks"],
-        ),
-        slack_cfg.bot_token,
+    blocks = copy.deepcopy(payload.message["blocks"])
+    blocks = slack.remove_blocks(blocks, block_ids=["buttons"])
+    blocks.append(slack.button_click_info_block(payload.action, approver.id))
+    client.chat_update(
+        channel=payload.channel_id,
+        ts=payload.thread_ts,
+        blocks=blocks,
     )
     return True
 
 
-def handle_approve(body: dict):
+def handle_approve(client: WebClient, body: dict):
     payload = slack.ButtonClickedPayload.parse_obj(body)
 
-    approver = slack_client.get_user_by_id(payload.approver_slack_id)
-    if approver is None:
-        raise ValueError(f"Approver with slack id {payload.approver_slack_id} not found")
-    elif approver.email is None:
-        raise ValueError(f"Approver with slack id {payload.approver_slack_id} has no email")
-    if not handle_button_click(payload, approver):
+    approver = slack.get_user(client, id=payload.approver_slack_id)
+    if not handle_button_click(client, payload, approver):
         return
+    client.chat_postMessage(
+        channel=payload.channel_id,
+        text="Updating permissions as requested...",
+        thread_ts=payload.thread_ts,
+    )
 
-    slack_client.post_message(text="Updating permissions as requested...", thread_ts=payload.thread_ts)
-
-    requester = slack_client.get_user_by_id(payload.requester_slack_id)
-    if requester is None:
-        raise ValueError(f"Requester with slack id {payload.requester_slack_id} not found")
-    elif requester.email is None:
-        raise ValueError(f"Requester with slack id {payload.requester_slack_id} has no email")
+    requester = slack.get_user(client, id=payload.requester_slack_id)
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
@@ -162,7 +151,7 @@ def handle_approve(body: dict):
     #     approver_slack_id = payload.approver_slack_id,
     #     approver_email = approver.email,
     # )
-    response = dynamodb.log_operation(
+    dynamodb.log_operation(
         logger,
         cfg.dynamodb_table_name,
         dynamodb.AuditEntry(
@@ -177,10 +166,10 @@ def handle_approve(body: dict):
             operation_type="grant",
         ),
     )
-    logger.debug(response)
-    slack_client.post_message(
+    return client.chat_postMessage(
+        channel=payload.channel_id,
+        text=f"Permissions granted to <@{requester.id}>",
         thread_ts=payload.thread_ts,
-        text="Done",
     )
 
 
@@ -194,16 +183,11 @@ app.action("approve")(
 )
 
 
-def handle_deny(body: dict, logger: Logger):
+def handle_deny(client: WebClient, body: dict, logger: Logger):
     logger.info(body)
     payload = slack.ButtonClickedPayload.parse_obj(body)
-
-    approver = slack_client.get_user_by_id(payload.approver_slack_id)
-    if approver is None:
-        raise ValueError(f"Approver with slack id {payload.approver_slack_id} not found")
-    elif approver.email is None:
-        raise ValueError(f"Approver with slack id {payload.approver_slack_id} has no email")
-    handle_button_click(payload, approver)
+    approver = slack.get_user(client, id=payload.requester_slack_id)
+    handle_button_click(client, payload, approver)
 
 
 app.action("deny")(
@@ -289,16 +273,10 @@ class RequestForAccess(BaseModel):
         frozen = True
 
 
-def handle_request_for_access_submittion(body: dict, ack: Ack):
+def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack):
     ack()
     request = RequestForAccess.parse_obj(body)
-
-    requester = slack_client.get_user_by_id(request.user_id)
-    if requester is None:
-        raise ValueError(f"Requester with slack id {request.user_id} not found")
-    elif requester.email is None:
-        raise ValueError(f"Requester with slack id {request.user_id} has no email")
-
+    requester = slack.get_user(client, id=request.user_id)
     decision_on_request = make_decision_on_request(
         statements=cfg.statements,
         account_id=request.account_id,
@@ -306,10 +284,7 @@ def handle_request_for_access_submittion(body: dict, ack: Ack):
         permission_set_name=request.permission_set_name,
     )
 
-    # show request
-
     approval_request_kwargs = {
-        "channel": slack_cfg.channel_id,
         "requester_slack_id": request.user_id,
         "account_id": request.account_id,
         "role_name": request.permission_set_name,
@@ -317,34 +292,29 @@ def handle_request_for_access_submittion(body: dict, ack: Ack):
     }
     if isinstance(decision_on_request, RequiresApproval):
         logger.info("RequiresApproval")
-
-        _, slack_response = slack.post_message(
-            api_path="/api/chat.postMessage",
-            message=slack.prepare_approval_request(**approval_request_kwargs),
-            token=slack_cfg.bot_token,
+        slack_response = client.chat_postMessage(
+            blocks=slack.prepare_approval_request_blocks(**approval_request_kwargs),
+            channel=cfg.slack_channel_id,
         )
-
-        approvers = [slack_client.get_user_by_email(email) for email in decision_on_request.approvers]
+        approvers = [slack.get_user_by_email(client, email) for email in decision_on_request.approvers]
         approvers_slack_ids = [f"<@{approver.id}>" for approver in approvers if approver is not None]
 
-        slack_client.post_message(
-            thread_ts=slack_response["ts"],
+        return client.chat_postMessage(
             text=" ".join(approvers_slack_ids) + " there is a request waiting for the approval",
+            thread_ts=slack_response["ts"],
+            channel=cfg.slack_channel_id,
         )
-        return
 
     elif isinstance(decision_on_request, ApprovalIsNotRequired):
         logger.info("ApprovalIsNotRequired")
-
-        _, slack_response = slack.post_message(
-            api_path="/api/chat.postMessage",
-            message=slack.prepare_approval_request(**approval_request_kwargs, show_buttons=False),
-            token=slack_cfg.bot_token,
+        slack_response = client.chat_postMessage(
+            blocks=slack.prepare_approval_request_blocks(**approval_request_kwargs, show_buttons=False),
+            channel=cfg.slack_channel_id,
         )
-
-        slack_client.post_message(
-            thread_ts=slack_response["ts"],
+        client.chat_postMessage(
             text="Approval for this Permission Set & Account is not required. Request will be approved automatically.",
+            thread_ts=slack_response["ts"],
+            channel=cfg.slack_channel_id,
         )
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
@@ -377,7 +347,7 @@ def handle_request_for_access_submittion(body: dict, ack: Ack):
         #     approver_slack_id="ApprovalIsNotRequired",
         #     approver_email="ApprovalIsNotRequired",
         # )
-        response = dynamodb.log_operation(
+        dynamodb.log_operation(
             logger,
             cfg.dynamodb_table_name,
             dynamodb.AuditEntry(
@@ -392,25 +362,22 @@ def handle_request_for_access_submittion(body: dict, ack: Ack):
                 operation_type="grant",
             ),
         )
-        logger.debug(response)
-
-        slack_client.post_message(
+        return client.chat_postMessage(
+            channel=cfg.slack_channel_id,
+            text=f"Permissions granted to <@{requester.id}>",
             thread_ts=slack_response["ts"],
-            text="Done",
         )
 
     elif isinstance(decision_on_request, SelfApprovalIsAllowedAndRequesterIsApprover):
         logger.info("SelfApprovalIsAllowedAndRequesterIsApprover")
-
-        _, slack_response = slack.post_message(
-            api_path="/api/chat.postMessage",
-            message=slack.prepare_approval_request(**approval_request_kwargs, show_buttons=False),
-            token=slack_cfg.bot_token,
+        slack_response = client.chat_postMessage(
+            blocks=slack.prepare_approval_request_blocks(**approval_request_kwargs, show_buttons=False),
+            channel=cfg.slack_channel_id,
         )
-
-        slack_client.post_message(
-            thread_ts=slack_response["ts"],
+        client.chat_postMessage(
+            channel=cfg.slack_channel_id,
             text="Self approval is allowed and requester is an approver. Request will be approved automatically.",
+            thread_ts=slack_response["ts"],
         )
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
@@ -448,7 +415,7 @@ def handle_request_for_access_submittion(body: dict, ack: Ack):
         #     approver_email = requester.email,
         # )
 
-        response = dynamodb.log_operation(
+        dynamodb.log_operation(
             logger,
             cfg.dynamodb_table_name,
             dynamodb.AuditEntry(
@@ -463,11 +430,10 @@ def handle_request_for_access_submittion(body: dict, ack: Ack):
                 operation_type="SelfApproveGrant",
             ),
         )
-        logger.debug(response)
-
-        slack_client.post_message(
+        return client.chat_postMessage(
+            channel=cfg.slack_channel_id,
+            text=f"Permissions granted to <@{requester.id}>",
             thread_ts=slack_response["ts"],
-            text="Done",
         )
 
 
