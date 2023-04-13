@@ -9,10 +9,10 @@ module "access_requester_slack_handler" {
   timeout       = 30
 
   build_in_docker = var.build_in_docker
-  runtime       = "python3.9"
+  runtime         = "python3.9"
   docker_image    = "build-python3.9-poetry"
   docker_file     = "${path.module}/src/docker/Dockerfile"
-  hash_extra = local.requester_lambda_name
+  hash_extra      = local.requester_lambda_name
   source_path = [
     {
       path           = "${path.module}/src/"
