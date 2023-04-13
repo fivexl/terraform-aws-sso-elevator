@@ -16,6 +16,22 @@ This module allows you to avoid permanently assigned permission sets and achieve
 ## Usage
 ```terraform
 
+data "aws_ssoadmin_instances" "this" {}
+
+# You will have to create /sso-elevator/slack-signing-secret AWS SSM Parameter
+# and store Slack app signing secret there, if you have not created app yet then
+# you can leave a dummy value there and update it after Slack app is ready
+data "aws_ssm_parameter" "sso_elevator_slack_signing_secret" {
+  name = "/sso-elevator/slack-signing-secret"
+}
+
+# You will have to create /sso-elevator/slack-bot-token AWS SSM Parameter
+# and store Slack bot token there, if you have not created app yet then
+# you can leave a dummy value there and update it after Slack app is ready
+data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
+  name = "/sso-elevator/slack-bot-token"
+}
+
 module "aws_sso_elevator" {
   source                           = "github.com/fivexl/terraform-aws-sso-elevator.git"
   aws_sns_topic_subscription_email = "email@gmail.com"
@@ -25,7 +41,7 @@ module "aws_sso_elevator" {
   slack_channel_id     = "***********"
   schedule_expression  = "cron(0 23 * * ? *)" # revoke access shedule expression
 
-  sso_instance_arn = "arn:aws:sso:::instance/ssoins-***********"
+  sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
   # "Resource", "PermissionSet", "Approvers" can be a string or a list of strings
   # "Resource" & "PermissionSet" can be set to "*" to match all
@@ -86,18 +102,9 @@ module "aws_sso_elevator" {
   ]
 }
 
-data "aws_ssm_parameter" "sso_elevator_slack_signing_secret" {
-  name = "/sso-elevator/slack-signing-secret"
-}
-
-data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
-  name = "/sso-elevator/slack-bot-token"
-}
-
 output "aws_sso_elevator_lambda_function_url" {
   value = module.aws_sso_elevator.lambda_function_url
 }
-
 ```
 
 ### Slack App creation
@@ -130,7 +137,7 @@ oauth_config:
 settings:
   interactivity:
     is_enabled: true
-    request_url: <LAMBDA URL GOES HERE>
+    request_url: <LAMBDA URL GOES HERE - CHECK LAMBDA CONFIGURATION IN AWS CONSOLE OR GET IT FORM TERRAFORM OUTPUT> 
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
