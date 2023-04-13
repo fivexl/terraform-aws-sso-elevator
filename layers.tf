@@ -8,7 +8,10 @@ module "powertools_pydantic" {
   description     = "AWS Lambda Powertools with Pydantic"
 
   compatible_runtimes = ["python3.9"]
-  runtime             = "python3.9"
+  build_in_docker = var.build_in_docker
+  runtime       = "python3.9"
+  docker_image    = "build-python3.9-poetry"
+  docker_file     = "${path.module}/src/docker/Dockerfile"
   source_path = [{
     poetry_install = true
     path           = "${path.module}/layers/powertools-pydantic"
@@ -27,7 +30,10 @@ module "slack_bolt" {
   description     = "A framework that makes Slack app development fast and straight-forward."
 
   compatible_runtimes = ["python3.9"]
-  runtime             = "python3.9"
+  build_in_docker = var.build_in_docker
+  runtime       = "python3.9"
+  docker_image    = "build-python3.9-poetry"
+  docker_file     = "${path.module}/src/docker/Dockerfile"
   source_path = [{
     poetry_install = true
     path           = "${path.module}/layers/python-slack-bolt"
@@ -46,7 +52,10 @@ module "python_boto3" {
   description     = "Python Boto3."
 
   compatible_runtimes = ["python3.9"]
-  runtime             = "python3.9"
+  build_in_docker = var.build_in_docker
+  runtime       = "python3.9"
+  docker_image    = "build-python3.9-poetry"
+  docker_file     = "${path.module}/src/docker/Dockerfile"
   source_path = [{
     poetry_install = true
     path           = "${path.module}/layers/python-boto3"

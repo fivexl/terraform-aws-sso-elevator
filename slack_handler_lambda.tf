@@ -5,10 +5,13 @@ module "access_requester_slack_handler" {
   function_name = local.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"
   handler       = "main.lambda_handler"
-  runtime       = "python3.9"
   publish       = true
   timeout       = 30
 
+  build_in_docker = var.build_in_docker
+  runtime       = "python3.9"
+  docker_image    = "build-python3.9-poetry"
+  docker_file     = "${path.module}/src/docker/Dockerfile"
   hash_extra = local.requester_lambda_name
   source_path = [
     {
