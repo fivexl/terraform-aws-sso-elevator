@@ -39,7 +39,7 @@ module "access_requester_slack_handler" {
     STATEMENTS                  = jsonencode(var.config)
     POWERTOOLS_LOGGER_LOG_EVENT = true
     SCHEDULE_POLICY_ARN         = aws_iam_role.eventbridge_role.arn
-    REVOKER_FUNCTION_ARN        = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${local.revoker_lambda_name}"
+    REVOKER_FUNCTION_ARN        = local.revoker_lambda_arn
     REVOKER_FUNCTION_NAME       = local.revoker_lambda_name
   }
 
@@ -88,7 +88,7 @@ data "aws_iam_policy_document" "slack_handler" {
       "lambda:InvokeFunction",
       "lambda:GetFunction"
     ]
-    resources = ["arn:aws:lambda:*:*:function:${local.requester_lambda_name}"]
+    resources = [local.requester_lambda_arn]
   }
   statement {
     sid    = "AllowListSSOInstances"
