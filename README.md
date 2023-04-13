@@ -109,16 +109,17 @@ output "aws_sso_elevator_lambda_function_url" {
 6. Update lambda url (from output `aws_sso_elevator_lambda_function_url`) to `request_url` field and paste the following into the text box: 
 ```yaml
 display_information:
-  name: AWS SSO access elevator
+  name: WS SSO Access Elevator
+  description: AWS SSO access elevator
 features:
   bot_user:
-    display_name: AWS SSO access elevator
+    display_name: AWS SSO Access Elevator
     always_online: false
   shortcuts:
     - name: access
       type: global
-      callback_id: acesss23
-      description: Elevate AWS SSO access
+      callback_id: request_for_access
+      description: Request access to Permission Set in AWS Account
 oauth_config:
   scopes:
     bot:
