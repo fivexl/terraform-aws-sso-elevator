@@ -164,14 +164,14 @@ resource "aws_iam_role_policy" "eventbridge_policy" {
           "events:PutRule",
           "events:PutTargets"
         ]
-        Effect = "Allow"
+        Effect   = "Allow"
         Resource = "*"
       },
       {
         Action = [
           "lambda:InvokeFunction"
         ]
-        Effect = "Allow"
+        Effect   = "Allow"
         Resource = data.aws_lambda_function.access_revoker.arn
       }
     ]
@@ -183,8 +183,8 @@ resource "aws_iam_role_policy" "eventbridge_policy" {
 
 resource "aws_lambda_permission" "eventbridge" {
   statement_id  = "AllowEventBridge"
-  action       = "lambda:InvokeFunction"
+  action        = "lambda:InvokeFunction"
   function_name = data.aws_lambda_function.access_revoker.function_name
-  principal    = "scheduler.amazonaws.com"
-  source_arn   = aws_iam_role.eventbridge_role.arn
+  principal     = "scheduler.amazonaws.com"
+  source_arn    = aws_iam_role.eventbridge_role.arn
 }
