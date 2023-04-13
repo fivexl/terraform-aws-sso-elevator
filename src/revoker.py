@@ -141,10 +141,9 @@ def handle_scheduled_account_assignment_deletion(event, sso_client, cfg: config.
         ),
     )
     schedule_client = boto3.client("scheduler")  # type: ignore
-    schedule.delete_schedule(
-        schedule_name=event.schedule_name,
-        schedule_client=schedule_client,
-    )
+
+    schedule_client.delete_schedule(Name=event.schedule_name)
+    
     if cfg.post_update_to_slack:
         slack_cfg = config.SlackConfig()  # type: ignore
         slack_client = slack.Slack(slack_cfg.bot_token, slack_cfg.channel_id)

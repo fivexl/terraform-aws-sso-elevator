@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Literal, Optional, Union
 
 from pydantic import BaseSettings, BaseModel, root_validator
@@ -37,6 +38,11 @@ class Statement(BaseModel):
 
 
 class Config(BaseSettings):
+    default_revoke_time_delta: timedelta = timedelta(days=1)
+    schedule_policy_arn   : str 
+    revoker_function_arn  : str
+    revoker_function_name : str 
+
     post_update_to_slack: bool = False
     slack_channel_id: str
 
