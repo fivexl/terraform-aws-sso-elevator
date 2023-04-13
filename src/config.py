@@ -39,12 +39,13 @@ class Statement(BaseModel):
 
 class Config(BaseSettings):
     default_revoke_time_delta: timedelta = timedelta(days=1)
-    schedule_policy_arn   : str 
-    revoker_function_arn  : str
-    revoker_function_name : str 
+    schedule_policy_arn: str
+    revoker_function_arn: str
+    revoker_function_name: str
 
     post_update_to_slack: bool = False
     slack_channel_id: str
+    slack_bot_token: str
 
     dynamodb_table_name: str
     sso_instance_arn: str
