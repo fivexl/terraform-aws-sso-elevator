@@ -16,6 +16,7 @@ black = "^23.1.0"
 pydantic = "^1.10.7"
 aws-lambda-powertools = "^2.11.0"
 boto3 = "^1.26.97"
+slack-bolt = "^1.17.0"
 
 [build-system]
 requires = ["poetry-core"]
