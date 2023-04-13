@@ -11,7 +11,7 @@ module "access_revoker" {
   hash_extra = local.revoker_lambda_name
 
   build_in_docker = var.build_in_docker
-  runtime       = "python3.9"
+  runtime         = "python3.9"
   docker_image    = "build-python3.9-poetry"
   docker_file     = "${path.module}/src/docker/Dockerfile"
   source_path = [
@@ -175,7 +175,7 @@ resource "aws_iam_role_policy" "eventbridge_policy" {
         Action = [
           "lambda:InvokeFunction"
         ]
-        Effect = "Allow"
+        Effect   = "Allow"
         Resource = module.access_revoker.lambda_function_arn
       }
     ]
@@ -186,8 +186,8 @@ resource "aws_iam_role_policy" "eventbridge_policy" {
 
 resource "aws_lambda_permission" "eventbridge" {
   statement_id  = "AllowEventBridge"
-  action       = "lambda:InvokeFunction"
+  action        = "lambda:InvokeFunction"
   function_name = local.revoker_lambda_name
-  principal    = "scheduler.amazonaws.com"
-  source_arn   = aws_iam_role.eventbridge_role.arn
+  principal     = "scheduler.amazonaws.com"
+  source_arn    = aws_iam_role.eventbridge_role.arn
 }
