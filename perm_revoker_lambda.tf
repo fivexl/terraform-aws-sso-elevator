@@ -5,11 +5,15 @@ module "access_revoker" {
   function_name = local.revoker_lambda_name
   description   = "Revokes temporary permissions"
   handler       = "revoker.lambda_handler"
-  runtime       = "python3.9"
   publish       = true
   timeout       = 300
 
   hash_extra = local.revoker_lambda_name
+
+  build_in_docker = var.build_in_docker
+  runtime       = "python3.9"
+  docker_image    = "build-python3.9-poetry"
+  docker_file     = "${path.module}/src/docker/Dockerfile"
   source_path = [
     {
       path           = "${path.module}/src/"
