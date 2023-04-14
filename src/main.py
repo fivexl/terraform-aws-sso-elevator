@@ -83,11 +83,12 @@ app.shortcut("request_for_access")(
 )
 
 
-def handle_button_click(client: WebClient, payload: slack.ButtonClickedPayload, approver: slack.SlackUser) -> bool:
+def handle_button_click(client: WebClient, payload: slack.ButtonClickedPayload, approver: slack.SlackUser, requester: slack.SlackUser) -> bool:
     can_be_approved_by = get_approvers(
         cfg.statements,
         account_id=payload.account_id,
         permission_set_name=payload.permission_set_name,
+        requester_email=requester.email,
     )
 
     if approver.email not in can_be_approved_by:
@@ -112,15 +113,14 @@ def handle_approve(client: WebClient, body: dict):
     payload = slack.ButtonClickedPayload.parse_obj(body)
 
     approver = slack.get_user(client, id=payload.approver_slack_id)
-    if not handle_button_click(client, payload, approver):
+    requester = slack.get_user(client, id=payload.requester_slack_id)
+    if not handle_button_click(client, payload, approver, requester):
         return
     client.chat_postMessage(
         channel=payload.channel_id,
         text="Updating permissions as requested...",
         thread_ts=payload.thread_ts,
     )
-
-    requester = slack.get_user(client, id=payload.requester_slack_id)
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
@@ -242,12 +242,16 @@ def make_decision_on_request(
     return RequiresApproval(approvers=can_be_approved_by)
 
 
-def get_approvers(statements: frozenset[config.Statement], account_id: str, permission_set_name: str) -> set[str]:
+def get_approvers(statements: frozenset[config.Statement], account_id: str, permission_set_name: str, requester_email: str) -> set[str]:
     affected_statements = get_affected_statements(statements, account_id, permission_set_name)
     can_be_approved_by = set()
     for statement in affected_statements:
         if statement.approvers:
-            can_be_approved_by.update(statement.approvers)
+            if requester_email in statement.approvers:
+                if not statement.allow_self_approval:
+                    can_be_approved_by.update(statement.approvers - {requester_email})
+            else:
+                can_be_approved_by.update(statement.approvers)
     return can_be_approved_by
 
 
@@ -296,10 +300,11 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
             channel=cfg.slack_channel_id,
         )
         approvers = [slack.get_user_by_email(client, email) for email in decision_on_request.approvers]
-        approvers_slack_ids = [f"<@{approver.id}>" for approver in approvers if approver is not None]
+        approvers_slack_ids = [f"<@{approver.id}>" for approver in approvers]
+        text = " ".join(approvers_slack_ids) + " there is a request waiting for the approval" if approvers_slack_ids else "Nobody can approve this request."
 
         return client.chat_postMessage(
-            text=" ".join(approvers_slack_ids) + " there is a request waiting for the approval",
+            text=text,
             thread_ts=slack_response["ts"],
             channel=cfg.slack_channel_id,
         )
