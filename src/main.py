@@ -143,13 +143,13 @@ def handle_approve(client: WebClient, body: dict):
         ),
     )
     if account_assignment.status == "FAILED":
-            client.chat_postMessage(
-                channel=payload.channel_id,
-                text=f"Unable to update permissions:  {account_assignment.failure_reason}",
-                thread_ts=payload.thread_ts,
-            )
-            raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
-    
+        client.chat_postMessage(
+            channel=payload.channel_id,
+            text=f"Unable to update permissions:  {account_assignment.failure_reason}",
+            thread_ts=payload.thread_ts,
+        )
+        raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
+
     schedule.create_schedule_for_revoker(
         time_delta=payload.permission_duration,
         schedule_client=schedule_client,
@@ -475,3 +475,8 @@ app.view("request_for_access_submitted")(
     ack=acknowledge_request,
     lazy=[handle_request_for_access_submittion],
 )
+
+
+@app.action("timepickeraction")
+def handle_some_action(ack):
+    ack()
