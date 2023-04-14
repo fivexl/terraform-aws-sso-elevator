@@ -1,6 +1,7 @@
 import copy
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Union
 
 import boto3
@@ -83,7 +84,9 @@ app.shortcut("request_for_access")(
 )
 
 
-def handle_button_click(client: WebClient, payload: slack.ButtonClickedPayload, approver: slack.SlackUser, requester: slack.SlackUser) -> bool:
+def handle_button_click(
+    client: WebClient, payload: slack.ButtonClickedPayload, approver: slack.SlackUser, requester: slack.SlackUser
+) -> bool:
     can_be_approved_by = get_approvers(
         cfg.statements,
         account_id=payload.account_id,
@@ -140,15 +143,15 @@ def handle_approve(client: WebClient, body: dict):
         ),
     )
     schedule.create_schedule_for_revoker(
-        time_delta = cfg.default_revoke_time_delta,
-        schedule_client = schedule_client,
-        account_id = payload.account_id,
-        permission_set_arn = permission_set.arn,
-        user_principal_id = user_principal_id,
-        requester_slack_id= requester.id,
-        requester_email = requester.email,
-        approver_slack_id = payload.approver_slack_id,
-        approver_email = approver.email,
+        time_delta=payload.permission_duration,
+        schedule_client=schedule_client,
+        account_id=payload.account_id,
+        permission_set_arn=permission_set.arn,
+        user_principal_id=user_principal_id,
+        requester_slack_id=requester.id,
+        requester_email=requester.email,
+        approver_slack_id=payload.approver_slack_id,
+        approver_email=approver.email,
     )
     dynamodb.log_operation(
         logger,
@@ -185,8 +188,9 @@ app.action("approve")(
 def handle_deny(client: WebClient, body: dict, logger: Logger):
     logger.info(body)
     payload = slack.ButtonClickedPayload.parse_obj(body)
-    approver = slack.get_user(client, id=payload.requester_slack_id)
-    handle_button_click(client, payload, approver)
+    requester = slack.get_user(client, id=payload.requester_slack_id)
+    approver = slack.get_user(client, id=payload.approver_slack_id)
+    handle_button_click(client, payload, approver=approver, requester=requester)
 
 
 app.action("deny")(
@@ -260,10 +264,13 @@ class RequestForAccess(BaseModel):
     account_id: str
     reason: str
     user_id: str
+    permission_duration: timedelta
 
     @root_validator(pre=True)
     def validate_payload(cls, values: dict):
+        hhmm = jp.search("view.state.values.timepicker.timepickeraction.selected_time", values)
         return {
+            "permission_duration": slack.timepicker_str_to_timedelta(hhmm),
             "permission_set_name": jp.search(
                 "view.state.values.select_permission_set.selected_permission_set.selected_option.value", values
             ),
@@ -286,12 +293,13 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
         requester_email=requester.email,
         permission_set_name=request.permission_set_name,
     )
-
+    account = organizations.describe_account(org_client, request.account_id)
     approval_request_kwargs = {
         "requester_slack_id": request.user_id,
-        "account_id": request.account_id,
+        "account": account,
         "role_name": request.permission_set_name,
         "reason": request.reason,
+        "permission_duration": request.permission_duration,
     }
     if isinstance(decision_on_request, RequiresApproval):
         logger.info("RequiresApproval")
@@ -301,7 +309,11 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
         )
         approvers = [slack.get_user_by_email(client, email) for email in decision_on_request.approvers]
         approvers_slack_ids = [f"<@{approver.id}>" for approver in approvers]
-        text = " ".join(approvers_slack_ids) + " there is a request waiting for the approval" if approvers_slack_ids else "Nobody can approve this request."
+        text = (
+            " ".join(approvers_slack_ids) + " there is a request waiting for the approval"
+            if approvers_slack_ids
+            else "Nobody can approve this request."
+        )
 
         return client.chat_postMessage(
             text=text,
@@ -338,13 +350,13 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
             ),
         )
         schedule.create_schedule_for_revoker(
-            time_delta = cfg.default_revoke_time_delta,
-            schedule_client = schedule_client,
-            account_id = request.account_id,
-            permission_set_arn = permission_set.arn,
-            user_principal_id = user_principal_id,
-            requester_slack_id = request.user_id,
-            requester_email = requester.email,
+            time_delta=request.permission_duration,
+            schedule_client=schedule_client,
+            account_id=request.account_id,
+            permission_set_arn=permission_set.arn,
+            user_principal_id=user_principal_id,
+            requester_slack_id=request.user_id,
+            requester_email=requester.email,
             approver_slack_id="ApprovalIsNotRequired",
             approver_email="ApprovalIsNotRequired",
         )
@@ -401,15 +413,15 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
             ),
         )
         schedule.create_schedule_for_revoker(
-            time_delta = cfg.default_revoke_time_delta,
-            schedule_client = schedule_client,
-            account_id = request.account_id,
-            permission_set_arn = permission_set.arn,
-            user_principal_id = user_principal_id,
-            requester_slack_id = request.user_id,
-            requester_email = requester.email,
-            approver_slack_id = request.user_id,
-            approver_email = requester.email,
+            time_delta=request.permission_duration,
+            schedule_client=schedule_client,
+            account_id=request.account_id,
+            permission_set_arn=permission_set.arn,
+            user_principal_id=user_principal_id,
+            requester_slack_id=request.user_id,
+            requester_email=requester.email,
+            approver_slack_id=request.user_id,
+            approver_email=requester.email,
         )
         dynamodb.log_operation(
             logger,

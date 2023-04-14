@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pydantic import BaseModel, root_validator
 import jmespath as jp
 from typing import Literal, Optional, TypeVar, Union
@@ -17,6 +18,7 @@ from slack_sdk.models.blocks import (
     Block,
     ActionsBlock,
     ButtonElement,
+    TimePickerElement,
 )
 
 SLACK_REQUEST_FOR_ACCESS_FORM = View(
@@ -28,6 +30,15 @@ SLACK_REQUEST_FOR_ACCESS_FORM = View(
     blocks=[
         SectionBlock(text=MarkdownTextObject(text=":wave: Hey! Please fill form below to request AWS access.")),
         DividerBlock(),
+        SectionBlock(
+            block_id="timepicker",
+            text=MarkdownTextObject(text="Choose the time for which the permissions will be granted"),
+            accessory=TimePickerElement(
+                action_id="timepickeraction",
+                initial_time="00:30",
+                placeholder=PlainTextObject(text="Select duration"),
+            ),
+        ),
         InputBlock(
             block_id="provide_reason",
             label=PlainTextObject(text="What is it you are going to do"),
@@ -93,16 +104,43 @@ def select_permission_set_input_block(permission_sets: list[sso.PermissionSet]) 
     )
 
 
-def prepare_approval_request_blocks(requester_slack_id: str, account_id: str, role_name: str, reason: str, show_buttons: bool = True):
+def timepicker_str_to_timedelta(time_str: str) -> timedelta:
+    hours, minutes = time_str.split(":")
+    return timedelta(hours=int(hours), minutes=int(minutes))
+
+
+def humanize_timedelta(td: timedelta):
+    # example 12h 30m
+    hours, remainder = divmod(td.seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    return f"{hours}h {minutes}m"
+
+
+def unhumanize_timedelta(td_str: str) -> timedelta:
+    hours, minutes = td_str.split(" ")
+    hours = hours.removesuffix("h")
+    minutes = minutes.removesuffix("m")
+    return timedelta(hours=int(hours), minutes=int(minutes))
+
+
+def prepare_approval_request_blocks(
+    requester_slack_id: str,
+    account: organizations.AWSAccount,
+    role_name: str,
+    reason: str,
+    permission_duration: timedelta,
+    show_buttons: bool = True,
+):
     blocks: list[Block] = [
         SectionBlock(block_id="header", text=MarkdownTextObject(text="AWS account access request.")),
         SectionBlock(
             block_id="content",
             fields=[
                 MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
-                MarkdownTextObject(text=f"AccountId: {account_id}"),
+                MarkdownTextObject(text=f"Account: {account.name} #{account.id}"),
                 MarkdownTextObject(text=f"Role name: {role_name}"),
                 MarkdownTextObject(text=f"Reason: {reason}"),
+                MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
             ],
         ),
     ]
@@ -148,6 +186,7 @@ class ButtonClickedPayload(BaseModel):
     requester_slack_id: str
     channel_id: str
     message: dict
+    permission_duration: timedelta
 
     class Config:
         frozen = True
@@ -158,12 +197,22 @@ class ButtonClickedPayload(BaseModel):
         requester_mention: Optional[str] = cls.find_in_fields(fields, "Requester")
         if requester_mention is None:
             raise ValueError("Can not find requester mention")
+        account = cls.find_in_fields(fields, "Account")
 
+        humanized_permission_duration = cls.find_in_fields(fields, "Permission duration")
+        if humanized_permission_duration is None:
+            raise ValueError("Can not find permission duration")
+        permission_duration = unhumanize_timedelta(humanized_permission_duration)
+
+        if account is None:
+            raise ValueError("Can not find account in message")
+        account_id = account.split("#")[-1]
         return {
+            "permission_duration": permission_duration,
             "action": jp.search("actions[0].value", values),
             # slack id will come with <@{requester_slack_id}> so we need to clean it
             "requester_slack_id": requester_mention.removeprefix("<@").removesuffix(">"),
-            "account_id": cls.find_in_fields(fields, "AccountId"),
+            "account_id": account_id,
             "permission_set_name": cls.find_in_fields(fields, "Role name"),
             "approver_slack_id": jp.search("user.id", values),
             "thread_ts": jp.search("message.ts", values),
