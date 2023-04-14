@@ -142,6 +142,14 @@ def handle_approve(client: WebClient, body: dict):
             user_principal_id=user_principal_id,
         ),
     )
+    if account_assignment.status == "FAILED":
+            client.chat_postMessage(
+                channel=payload.channel_id,
+                text=f"Unable to update permissions:  {account_assignment.failure_reason}",
+                thread_ts=payload.thread_ts,
+            )
+            raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
+    
     schedule.create_schedule_for_revoker(
         time_delta=payload.permission_duration,
         schedule_client=schedule_client,
@@ -349,6 +357,15 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
                 user_principal_id=user_principal_id,
             ),
         )
+
+        if account_assignment.status == "FAILED":
+            client.chat_postMessage(
+                channel=cfg.slack_channel_id,
+                text=f"Unable to update permissions:  {account_assignment.failure_reason}",
+                thread_ts=slack_response["ts"],
+            )
+            raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
+
         schedule.create_schedule_for_revoker(
             time_delta=request.permission_duration,
             schedule_client=schedule_client,
@@ -412,6 +429,15 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
                 user_principal_id=user_principal_id,
             ),
         )
+
+        if account_assignment.status == "FAILED":
+            client.chat_postMessage(
+                channel=cfg.slack_channel_id,
+                text=f"Unable to update permissions:  {account_assignment.failure_reason}",
+                thread_ts=slack_response["ts"],
+            )
+            raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
+
         schedule.create_schedule_for_revoker(
             time_delta=request.permission_duration,
             schedule_client=schedule_client,
