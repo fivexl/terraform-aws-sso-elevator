@@ -82,6 +82,15 @@ data "aws_iam_policy_document" "slack_handler" {
     resources = ["*"]
   }
   statement {
+    sid    = "UpdateSAMLProvider"
+    effect = "Allow"
+    actions = [
+      "iam:UpdateSAMLProvider",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
     sid    = "GetInvokeSelf"
     effect = "Allow"
     actions = [
