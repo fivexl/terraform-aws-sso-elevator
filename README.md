@@ -40,6 +40,8 @@ module "aws_sso_elevator" {
   slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
   slack_channel_id     = "***********"
   schedule_expression  = "cron(0 23 * * ? *)" # revoke access shedule expression
+  build_in_docker = true
+  revoker_post_update_to_slack = true
 
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
