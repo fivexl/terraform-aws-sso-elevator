@@ -295,5 +295,3 @@ def get_user_emails(identity_center_client, identity_store_id: str, user_id: str
         UserId=user_id,
     )
     return [email["Value"] for email in user["Emails"] if "Value" in email]
-
-

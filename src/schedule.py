@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
-import config 
+import config
 
 
 def event_bridge_schedule_after(td: timedelta) -> str:
@@ -20,7 +20,7 @@ def create_schedule_for_revoker(
     approver_slack_id: str,
     approver_email: str,
 ):
-    cfg = config.Config() #type: ignore
+    cfg = config.Config()  # type: ignore
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     schedule_expression = event_bridge_schedule_after(time_delta)
     # scheduler.amazonaws.com
