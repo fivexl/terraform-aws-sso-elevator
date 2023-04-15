@@ -1,5 +1,6 @@
 repos:
-- repo: git://github.com/antonbabenko/pre-commit-terraform
+# Terraform
+- repo: https://github.com/antonbabenko/pre-commit-terraform
   rev: v1.77.2
   hooks:
     - id: terraform_fmt
@@ -7,3 +8,27 @@ repos:
     - id: terraform_validate
     - id: terraform_docs
     - id: terraform_tfsec
+# Python
+-   repo: local
+    hooks:
+    # NOTE: we make `black` a local hook because if it's installed from
+    # PyPI (rather than from source) then it'll run twice as fast thanks to mypyc
+    -   id: black
+        name: black
+        description: "Black: The uncompromising Python code formatter"
+        entry: black
+        language: python
+        require_serial: true
+        types_or: [python, pyi]
+        additional_dependencies: [black==23.1.0]
+-   repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.0.259
+    hooks:
+    -   id: ruff
+        args: [--exit-non-zero-on-fix]
+-   repo: https://github.com/codespell-project/codespell
+    rev: v2.2.2
+    hooks:
+    -   id: codespell
+        types_or: [python, rst, markdown, cython, c]
+        additional_dependencies: [tomli]
