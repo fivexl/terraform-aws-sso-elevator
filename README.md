@@ -10,7 +10,7 @@ This module allows you to avoid permanently assigned permission sets and achieve
 - Each account, OU, or AWS Organization could have their own list of approvers 
 
 ## More info
-- [Permision Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
+- [Permission Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
 - [User and groups](https://docs.aws.amazon.com/singlesignon/latest/userguide/users-groups-provisioning.html)
 
 ## Usage
@@ -39,7 +39,7 @@ module "aws_sso_elevator" {
   slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
   slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
   slack_channel_id     = "***********"
-  schedule_expression  = "cron(0 23 * * ? *)" # revoke access shedule expression
+  schedule_expression  = "cron(0 23 * * ? *)" # revoke access schedule expression
   build_in_docker = true
   revoker_post_update_to_slack = true
 
