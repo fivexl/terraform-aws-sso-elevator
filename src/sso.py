@@ -9,6 +9,7 @@ from typing import Callable, Generator, Optional, TypeVar
 from aws_lambda_powertools import Logger
 
 import entities
+import errors
 
 T = TypeVar("T")
 
@@ -125,7 +126,7 @@ def retry_while(
             return response
 
 
-def create_account_assignment_and_wait_for_result(sso_client, assignment: UserAccountAssignment):
+def create_account_assignment_and_wait_for_result(sso_client, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
     response = create_account_assignment(sso_client, assignment)
     if AccountAssignmentStatus.is_ready(response):
         return response
@@ -136,6 +137,8 @@ def create_account_assignment_and_wait_for_result(sso_client, assignment: UserAc
 
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
     logger.info(f"Account assignment creation result: {result}")
+    if AccountAssignmentStatus.is_failed(result):
+        raise errors.FailedToUpdatePermissions("Failed to create account assignment.")
     return result
 
 
@@ -245,15 +248,17 @@ def describe_permission_set(sso_client, sso_instance_arn: str, permission_set_ar
     return parse_permission_set(td)
 
 
-def get_permission_set_by_name(sso_client, sso_instance_arn: str, permission_set_name: str) -> Optional[entities.aws.PermissionSet]:
-    return next(
+def get_permission_set_by_name(sso_client, sso_instance_arn: str, permission_set_name: str) -> entities.aws.PermissionSet:
+    if ps := next(
         (
             permission_set
             for permission_set in list_permission_sets(sso_client, sso_instance_arn)
             if permission_set.name == permission_set_name
         ),
         None,
-    )
+    ):
+        return ps
+    raise errors.NotFound(f"Permission set with name {permission_set_name} not found")
 
 
 def list_permission_sets_arns(sso_client, sso_instance_arn: str) -> Generator[str, None, None]:
@@ -275,7 +280,7 @@ def get_user_principal_id_by_email(identity_center_client, identity_store_id: st
             if user_email.get("Value") == email:
                 return user["UserId"]
 
-    raise ValueError(f"SSO User with email {email} not found")
+    raise errors.NotFound(f"AWS SSO User with email {email} not found")
 
 
 def get_user_emails(identity_center_client, identity_store_id: str, user_id: str) -> list[str]:

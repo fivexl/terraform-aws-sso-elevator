@@ -1,16 +1,18 @@
 import copy
+import functools
 import os
 from dataclasses import dataclass
 from typing import Union
 
 import boto3
 from aws_lambda_powertools import Logger
-from slack_bolt import Ack, App
+from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
 
 import config
 import dynamodb
+import errors
 import organizations
 import schedule
 import slack
@@ -32,6 +34,29 @@ app = App(process_before_response=True, logger=logger)
 def lambda_handler(event, context):
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
+
+
+def error_handler(client: WebClient, e: Exception, logger: Logger, context: BoltContext):
+    logger.exception(e)
+    if isinstance(e, errors.ConfigurationError):
+        text = f"<@{context['user_id']}> Your request for AWS permissions failed with error: {e}. Check logs for more details."
+        client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
+
+
+def handle_errors(fn):
+    # Default slack error handler (app.error) does not handle all exceptions. Or at least I did not find how to do it.
+    # So I created this error handler.
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            logger: Logger = kwargs["logger"]
+            client: WebClient = kwargs["client"]
+            context: BoltContext = kwargs["context"]
+            error_handler(client=client, e=e, logger=logger, context=context)
+
+    return wrapper
 
 
 trigger_view_map = {}
@@ -100,7 +125,8 @@ def handle_button_click(
     return True
 
 
-def handle_approve(client: WebClient, body: dict):
+@handle_errors
+def handle_approve(body: dict, client: WebClient, logger: Logger, context: BoltContext):
     payload = slack.ButtonClickedPayload.parse_obj(body)
 
     approver = slack.get_user(client, id=payload.approver_slack_id)
@@ -114,11 +140,7 @@ def handle_approve(client: WebClient, body: dict):
     )
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, payload.request.permission_set_name)
-    if permission_set is None:
-        raise ValueError(f"Permission set {payload.request.permission_set_name} not found")
-
     user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
 
     account_assignment = sso.create_account_assignment_and_wait_for_result(
@@ -130,13 +152,6 @@ def handle_approve(client: WebClient, body: dict):
             user_principal_id=user_principal_id,
         ),
     )
-    if account_assignment.status == "FAILED":
-        client.chat_postMessage(
-            channel=payload.channel_id,
-            text=f"Unable to update permissions:  {account_assignment.failure_reason}",
-            thread_ts=payload.thread_ts,
-        )
-        raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
 
     schedule.create_schedule_for_revoker(
         time_delta=payload.request.permission_duration,
@@ -181,7 +196,8 @@ app.action("approve")(
 )
 
 
-def handle_deny(client: WebClient, body: dict, logger: Logger):
+@handle_errors
+def handle_deny(body: dict, client: WebClient, logger: Logger, context: BoltContext):
     logger.info(body)
     payload = slack.ButtonClickedPayload.parse_obj(body)
     requester = slack.get_user(client, id=payload.request.requester_slack_id)
@@ -255,7 +271,8 @@ def get_approvers(statements: frozenset[config.Statement], account_id: str, perm
     return can_be_approved_by
 
 
-def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack):
+@handle_errors
+def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient, logger: Logger, context: BoltContext):
     ack()
     request = slack.RequestForAccessView.parse(body)
     requester = slack.get_user(client, id=request.requester_slack_id)
@@ -306,11 +323,8 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
         )
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
-
         permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, request.permission_set_name)
-        if permission_set is None:
-            raise ValueError(f"Permission set {request.permission_set_name} not found")
+        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
 
         account_assignment = sso.create_account_assignment_and_wait_for_result(
             sso_client,
@@ -321,14 +335,6 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
                 user_principal_id=user_principal_id,
             ),
         )
-
-        if account_assignment.status == "FAILED":
-            client.chat_postMessage(
-                channel=cfg.slack_channel_id,
-                text=f"Unable to update permissions:  {account_assignment.failure_reason}",
-                thread_ts=slack_response["ts"],
-            )
-            raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
 
         schedule.create_schedule_for_revoker(
             time_delta=request.permission_duration,
@@ -375,14 +381,8 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
         )
 
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-        logger.info(f"SSO Instance: arn:{sso_instance.arn} store_id:{sso_instance.identity_store_id}")
-        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
-        if user_principal_id is None:
-            raise ValueError(f"SSO User with email {requester.email} not found")
-
         permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, request.permission_set_name)
-        if permission_set is None:
-            raise ValueError(f"Permission set {request.permission_set_name} not found")
+        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
 
         account_assignment = sso.create_account_assignment_and_wait_for_result(
             sso_client,
@@ -393,14 +393,6 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
                 user_principal_id=user_principal_id,
             ),
         )
-
-        if account_assignment.status == "FAILED":
-            client.chat_postMessage(
-                channel=cfg.slack_channel_id,
-                text=f"Unable to update permissions:  {account_assignment.failure_reason}",
-                thread_ts=slack_response["ts"],
-            )
-            raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
 
         schedule.create_schedule_for_revoker(
             time_delta=request.permission_duration,
