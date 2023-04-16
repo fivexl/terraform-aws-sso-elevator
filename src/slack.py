@@ -137,14 +137,17 @@ class RequestForAccessView:
     def parse(cls, obj: dict) -> RequestForAccess:
         values = jp.search("view.state.values", obj)
         hhmm = jp.search(f"{cls.TIMEPICKER_BLOCK_ID}.{cls.TIMEPICKER_ACTION_ID}.selected_time", values)
-        rfa_dict = {
-            "permission_duration": timepicker_str_to_timedelta(hhmm),
-            "permission_set_name": jp.search(f"{cls.PERMISSION_SET_BLOCK_ID}.{cls.PERMISSION_SET_ACTION_ID}.selected_option.value", values),
-            "account_id": jp.search(f"{cls.ACCOUNT_BLOCK_ID}.{cls.ACCOUNT_ACTION_ID}.selected_option.value", values),
-            "reason": jp.search(f"{cls.REASON_BLOCK_ID}.{cls.REASON_ACTION_ID}.value", values),
-            "requester_slack_id": jp.search("user.id", values),
-        }
-        return RequestForAccess.parse_obj(rfa_dict)
+        return RequestForAccess.parse_obj(
+            {
+                "permission_duration": timepicker_str_to_timedelta(hhmm),
+                "permission_set_name": jp.search(
+                    f"{cls.PERMISSION_SET_BLOCK_ID}.{cls.PERMISSION_SET_ACTION_ID}.selected_option.value", values
+                ),
+                "account_id": jp.search(f"{cls.ACCOUNT_BLOCK_ID}.{cls.ACCOUNT_ACTION_ID}.selected_option.value", values),
+                "reason": jp.search(f"{cls.REASON_BLOCK_ID}.{cls.REASON_ACTION_ID}.value", values),
+                "requester_slack_id": jp.search("user.id", obj),
+            }
+        )
 
 
 T = TypeVar("T", Block, dict)
