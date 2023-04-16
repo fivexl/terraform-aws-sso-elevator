@@ -21,46 +21,7 @@ from slack_sdk.models.blocks import (
     TimePickerElement,
 )
 
-SLACK_REQUEST_FOR_ACCESS_FORM = View(
-    type="modal",
-    callback_id="request_for_access_submitted",
-    submit=PlainTextObject(text="Request"),
-    close=PlainTextObject(text="Cancel"),
-    title=PlainTextObject(text="Get AWS access"),
-    blocks=[
-        SectionBlock(text=MarkdownTextObject(text=":wave: Hey! Please fill form below to request AWS access.")),
-        DividerBlock(),
-        SectionBlock(
-            block_id="timepicker",
-            text=MarkdownTextObject(text="Choose the time for which the permissions will be granted"),
-            accessory=TimePickerElement(
-                action_id="timepickeraction",
-                initial_time="00:30",
-                placeholder=PlainTextObject(text="Select duration"),
-            ),
-        ),
-        InputBlock(
-            block_id="provide_reason",
-            label=PlainTextObject(text="What is it you are going to do"),
-            element=PlainTextInputElement(
-                action_id="provided_reason",
-                multiline=True,
-            ),
-        ),
-        DividerBlock(),
-        SectionBlock(
-            text=MarkdownTextObject(
-                text="Remember to use access responsibly. All actions (AWS API calls) are being recorded.",
-            ),
-        ),
-        SectionBlock(
-            block_id="loading",
-            text=MarkdownTextObject(
-                text=":hourglass: Loading available accounts and permission sets...",
-            ),
-        ),
-    ],
-)
+import entities
 
 T = TypeVar("T", Block, dict)
 

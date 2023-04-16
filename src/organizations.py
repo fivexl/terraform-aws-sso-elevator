@@ -1,26 +1,15 @@
-from dataclasses import dataclass
+from entities.aws import Account
 
 
-@dataclass
-class AWSAccount:
-    name: str
-    id: str
-    organization_id: str
-
-    @staticmethod
-    def from_type_def(td: dict) -> "AWSAccount":
-        return AWSAccount(
-            name=td["Name"],  # type: ignore
-            id=td["Id"],  # type: ignore
-            organization_id=td["Arn"].split("/")[1],  # type: ignore
-        )
+def parse_account(td: dict) -> Account:
+    return Account.parse_obj({"id": td.get("Id"), "name": td.get("Name")})
 
 
-def list_accounts(organizations_client) -> list[AWSAccount]:
+def list_accounts(organizations_client) -> list[Account]:
     accounts = organizations_client.list_accounts()["Accounts"]
-    return [AWSAccount.from_type_def(account) for account in accounts]
+    return [parse_account(account) for account in accounts]
 
 
-def describe_account(organizations_client, account_id: str) -> AWSAccount:
+def describe_account(organizations_client, account_id: str) -> Account:
     account = organizations_client.describe_account(AccountId=account_id)["Account"]
-    return AWSAccount.from_type_def(account)
+    return parse_account(account)
