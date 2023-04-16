@@ -2,10 +2,12 @@ import os
 from dataclasses import dataclass
 
 import boto3
-from aws_lambda_powertools import Logger
 import slack_sdk
+from aws_lambda_powertools import Logger
+
 import config
 import dynamodb
+import entities
 import organizations
 import slack
 import sso
@@ -97,7 +99,7 @@ def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssign
 
 
 def slack_notify_user_on_revoke(
-    cfg, account_assignment: sso.UserAccountAssignment, permission_set: sso.PermissionSet, account: organizations.AWSAccount
+    cfg, account_assignment: sso.UserAccountAssignment, permission_set: entities.aws.PermissionSet, account: entities.aws.Account
 ):
     slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)

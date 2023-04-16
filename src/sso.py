@@ -8,6 +8,8 @@ from typing import Callable, Generator, Optional, TypeVar
 
 from aws_lambda_powertools import Logger
 
+import entities
+
 T = TypeVar("T")
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
@@ -227,36 +229,23 @@ def list_account_assignments(sso_client, instance_arn: str, account_id: str, per
     return account_assignments
 
 
-@dataclass
-class PermissionSet:
-    """Permission Set
-
-    Attributes:
-        name (str): Name of the Permission Set
-        arn (str): ARN of the Permission Set
-        description (Optional[str]): Description of the Permission Set
-    """
-
-    name: str
-    arn: str
-    description: Optional[str]
-
-    @staticmethod
-    def from_type_def(td: dict) -> "PermissionSet":
-        ps = td["PermissionSet"]
-        return PermissionSet(
-            name=ps["Name"],  # type: ignore
-            arn=ps["PermissionSetArn"],  # type: ignore
-            description=ps.get("Description"),
-        )
+def parse_permission_set(td: dict) -> entities.aws.PermissionSet:
+    ps = td.get("PermissionSet", {})
+    return entities.aws.PermissionSet.parse_obj(
+        {
+            "name": ps.get("Name"),
+            "arn": ps.get("PermissionSetArn"),
+            "description": ps.get("Description"),
+        }
+    )
 
 
-def describe_permission_set(sso_client, sso_instance_arn: str, permission_set_arn: str):
+def describe_permission_set(sso_client, sso_instance_arn: str, permission_set_arn: str) -> entities.aws.PermissionSet:
     td = sso_client.describe_permission_set(InstanceArn=sso_instance_arn, PermissionSetArn=permission_set_arn)
-    return PermissionSet.from_type_def(td)
+    return parse_permission_set(td)
 
 
-def get_permission_set_by_name(sso_client, sso_instance_arn: str, permission_set_name: str) -> Optional[PermissionSet]:
+def get_permission_set_by_name(sso_client, sso_instance_arn: str, permission_set_name: str) -> Optional[entities.aws.PermissionSet]:
     return next(
         (
             permission_set
@@ -273,7 +262,7 @@ def list_permission_sets_arns(sso_client, sso_instance_arn: str) -> Generator[st
         yield from page["PermissionSets"]
 
 
-def list_permission_sets(sso_client, sso_instance_arn: str) -> Generator[PermissionSet, None, None]:
+def list_permission_sets(sso_client, sso_instance_arn: str) -> Generator[entities.aws.PermissionSet, None, None]:
     for permission_set_arn in list_permission_sets_arns(sso_client, sso_instance_arn):
         yield describe_permission_set(sso_client, sso_instance_arn, permission_set_arn)
 
