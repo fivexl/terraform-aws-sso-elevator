@@ -1,13 +1,10 @@
 import copy
 import os
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Union
 
 import boto3
-import jmespath as jp
 from aws_lambda_powertools import Logger
-from aws_lambda_powertools.utilities.parser.pydantic import BaseModel, root_validator
 from slack_bolt import Ack, App
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
@@ -47,7 +44,7 @@ trigger_view_map = {}
 def show_initial_form(client: WebClient, body: dict, ack: Ack):
     ack()
     trigger_id = body["trigger_id"]
-    response = client.views_open(trigger_id=trigger_id, view=slack.SLACK_REQUEST_FOR_ACCESS_FORM)
+    response = client.views_open(trigger_id=trigger_id, view=slack.RequestForAccessView.build())
     trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore
     return response
 
@@ -65,16 +62,7 @@ def load_select_options(client: WebClient, body: dict):
 
     trigger_id = body["trigger_id"]
 
-    view = copy.deepcopy(slack.SLACK_REQUEST_FOR_ACCESS_FORM)
-    blocks = slack.remove_blocks(view.blocks, block_ids=["loading"])
-    view.blocks = slack.insert_blocks(
-        blocks=blocks,
-        blocks_to_insert=[
-            slack.select_account_input_block(accounts),
-            slack.select_permission_set_input_block(permission_sets),
-        ],  # type: ignore
-        after_block_id="provide_reason",
-    )
+    view = slack.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
     return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
 
 
@@ -89,8 +77,8 @@ def handle_button_click(
 ) -> bool:
     can_be_approved_by = get_approvers(
         cfg.statements,
-        account_id=payload.account_id,
-        permission_set_name=payload.permission_set_name,
+        account_id=payload.request.account_id,
+        permission_set_name=payload.request.permission_set_name,
         requester_email=requester.email,
     )
 
@@ -116,7 +104,7 @@ def handle_approve(client: WebClient, body: dict):
     payload = slack.ButtonClickedPayload.parse_obj(body)
 
     approver = slack.get_user(client, id=payload.approver_slack_id)
-    requester = slack.get_user(client, id=payload.requester_slack_id)
+    requester = slack.get_user(client, id=payload.request.requester_slack_id)
     if not handle_button_click(client, payload, approver, requester):
         return
     client.chat_postMessage(
@@ -127,9 +115,9 @@ def handle_approve(client: WebClient, body: dict):
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
-    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, payload.permission_set_name)
+    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, payload.request.permission_set_name)
     if permission_set is None:
-        raise ValueError(f"Permission set {payload.permission_set_name} not found")
+        raise ValueError(f"Permission set {payload.request.permission_set_name} not found")
 
     user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
 
@@ -137,7 +125,7 @@ def handle_approve(client: WebClient, body: dict):
         sso_client,
         sso.UserAccountAssignment(
             instance_arn=sso_instance.arn,
-            account_id=payload.account_id,
+            account_id=payload.request.account_id,
             permission_set_arn=permission_set.arn,
             user_principal_id=user_principal_id,
         ),
@@ -151,9 +139,9 @@ def handle_approve(client: WebClient, body: dict):
         raise Exception(f"Account assignment failed: {account_assignment.failure_reason}")
 
     schedule.create_schedule_for_revoker(
-        time_delta=payload.permission_duration,
+        time_delta=payload.request.permission_duration,
         schedule_client=schedule_client,
-        account_id=payload.account_id,
+        account_id=payload.request.account_id,
         permission_set_arn=permission_set.arn,
         user_principal_id=user_principal_id,
         requester_slack_id=requester.id,
@@ -165,9 +153,9 @@ def handle_approve(client: WebClient, body: dict):
         logger,
         cfg.dynamodb_table_name,
         dynamodb.AuditEntry(
-            role_name=payload.permission_set_name,
-            account_id=payload.account_id,
-            reason=payload.reason,
+            role_name=payload.request.permission_set_name,
+            account_id=payload.request.account_id,
+            reason=payload.request.reason,
             requester_slack_id=requester.id,
             requester_email=requester.email,
             request_id=account_assignment.request_id,
@@ -196,7 +184,7 @@ app.action("approve")(
 def handle_deny(client: WebClient, body: dict, logger: Logger):
     logger.info(body)
     payload = slack.ButtonClickedPayload.parse_obj(body)
-    requester = slack.get_user(client, id=payload.requester_slack_id)
+    requester = slack.get_user(client, id=payload.request.requester_slack_id)
     approver = slack.get_user(client, id=payload.approver_slack_id)
     handle_button_click(client, payload, approver=approver, requester=requester)
 
@@ -267,34 +255,10 @@ def get_approvers(statements: frozenset[config.Statement], account_id: str, perm
     return can_be_approved_by
 
 
-class RequestForAccess(BaseModel):
-    permission_set_name: str
-    account_id: str
-    reason: str
-    user_id: str
-    permission_duration: timedelta
-
-    @root_validator(pre=True)
-    def validate_payload(cls, values: dict):
-        hhmm = jp.search("view.state.values.timepicker.timepickeraction.selected_time", values)
-        return {
-            "permission_duration": slack.timepicker_str_to_timedelta(hhmm),
-            "permission_set_name": jp.search(
-                "view.state.values.select_permission_set.selected_permission_set.selected_option.value", values
-            ),
-            "account_id": jp.search("view.state.values.select_account.selected_account.selected_option.value", values),
-            "reason": jp.search("view.state.values.provide_reason.provided_reason.value", values),
-            "user_id": jp.search("user.id", values),
-        }
-
-    class Config:
-        frozen = True
-
-
 def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack):
     ack()
-    request = RequestForAccess.parse_obj(body)
-    requester = slack.get_user(client, id=request.user_id)
+    request = slack.RequestForAccessView.parse(body)
+    requester = slack.get_user(client, id=request.requester_slack_id)
     decision_on_request = make_decision_on_request(
         statements=cfg.statements,
         account_id=request.account_id,
@@ -303,7 +267,7 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
     )
     account = organizations.describe_account(org_client, request.account_id)
     approval_request_kwargs = {
-        "requester_slack_id": request.user_id,
+        "requester_slack_id": request.requester_slack_id,
         "account": account,
         "role_name": request.permission_set_name,
         "reason": request.reason,
@@ -312,7 +276,7 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
     if isinstance(decision_on_request, RequiresApproval):
         logger.info("RequiresApproval")
         slack_response = client.chat_postMessage(
-            blocks=slack.prepare_approval_request_blocks(**approval_request_kwargs),
+            blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs),
             channel=cfg.slack_channel_id,
         )
         approvers = [slack.get_user_by_email(client, email) for email in decision_on_request.approvers]
@@ -332,7 +296,7 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
     elif isinstance(decision_on_request, ApprovalIsNotRequired):
         logger.info("ApprovalIsNotRequired")
         slack_response = client.chat_postMessage(
-            blocks=slack.prepare_approval_request_blocks(**approval_request_kwargs, show_buttons=False),
+            blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs, show_buttons=False),
             channel=cfg.slack_channel_id,
         )
         client.chat_postMessage(
@@ -372,7 +336,7 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
             account_id=request.account_id,
             permission_set_arn=permission_set.arn,
             user_principal_id=user_principal_id,
-            requester_slack_id=request.user_id,
+            requester_slack_id=request.requester_slack_id,
             requester_email=requester.email,
             approver_slack_id="ApprovalIsNotRequired",
             approver_email="ApprovalIsNotRequired",
@@ -384,7 +348,7 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
                 role_name=request.permission_set_name,
                 account_id=request.account_id,
                 reason=request.reason,
-                requester_slack_id=request.user_id,
+                requester_slack_id=request.requester_slack_id,
                 requester_email=requester.email,
                 request_id=account_assignment.request_id,
                 approver_slack_id="ApprovalIsNotRequired",
@@ -401,7 +365,7 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
     elif isinstance(decision_on_request, SelfApprovalIsAllowedAndRequesterIsApprover):
         logger.info("SelfApprovalIsAllowedAndRequesterIsApprover")
         slack_response = client.chat_postMessage(
-            blocks=slack.prepare_approval_request_blocks(**approval_request_kwargs, show_buttons=False),
+            blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs, show_buttons=False),
             channel=cfg.slack_channel_id,
         )
         client.chat_postMessage(
@@ -444,9 +408,9 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
             account_id=request.account_id,
             permission_set_arn=permission_set.arn,
             user_principal_id=user_principal_id,
-            requester_slack_id=request.user_id,
+            requester_slack_id=request.requester_slack_id,
             requester_email=requester.email,
-            approver_slack_id=request.user_id,
+            approver_slack_id=request.requester_slack_id,
             approver_email=requester.email,
         )
         dynamodb.log_operation(
@@ -456,7 +420,7 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
                 role_name=request.permission_set_name,
                 account_id=request.account_id,
                 reason=request.reason,
-                requester_slack_id=request.user_id,
+                requester_slack_id=request.requester_slack_id,
                 requester_email=requester.email,
                 request_id=account_assignment.request_id,
                 approver_slack_id=request.account_id,
@@ -471,7 +435,7 @@ def handle_request_for_access_submittion(client: WebClient, body: dict, ack: Ack
         )
 
 
-app.view("request_for_access_submitted")(
+app.view(slack.RequestForAccessView.CALLBACK_ID)(
     ack=acknowledge_request,
     lazy=[handle_request_for_access_submittion],
 )
