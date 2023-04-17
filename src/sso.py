@@ -138,6 +138,7 @@ def create_account_assignment_and_wait_for_result(sso_client, assignment: UserAc
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
     logger.info(f"Account assignment creation result: {result}")
     if AccountAssignmentStatus.is_failed(result):
+        logger.error(f"Failed to create account assignment: {result}")
         raise errors.FailedToUpdatePermissions("Failed to create account assignment.")
     return result
 
