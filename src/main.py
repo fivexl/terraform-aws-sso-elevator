@@ -201,12 +201,13 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
     }
     if isinstance(decision_on_request, permissions.RequiresApproval):
         logger.info("RequiresApproval")
-        slack_response = client.chat_postMessage(
-            blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs),
-            channel=cfg.slack_channel_id,
-        )
         approvers = [slack.get_user_by_email(client, email) for email in decision_on_request.approvers]
         approvers_slack_ids = [f"<@{approver.id}>" for approver in approvers]
+        show_buttons = bool(approvers_slack_ids)
+        slack_response = client.chat_postMessage(
+            blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs, show_buttons=show_buttons),
+            channel=cfg.slack_channel_id,
+        )
         text = (
             " ".join(approvers_slack_ids) + " there is a request waiting for the approval"
             if approvers_slack_ids
