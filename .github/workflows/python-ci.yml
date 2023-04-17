@@ -15,6 +15,8 @@ jobs:
       run:
         shell: bash
         working-directory: src
+    env:
+      AWS_DEFAULT_REGION: "eu-central-1"        
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11"]
