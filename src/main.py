@@ -109,12 +109,14 @@ def handle_button_click(
     )
 
     if approver.email not in can_be_approved_by:
+        logger.info(f"User {approver.email} pressed button {payload.action}, but he is not allowed to do it.")
         client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> you can not {payload.action} this request",
             thread_ts=payload.thread_ts,
         )
         return False
+    logger.info(f"User {approver.email} pressed button {payload.action}.")
     blocks = copy.deepcopy(payload.message["blocks"])
     blocks = slack.remove_blocks(blocks, block_ids=["buttons"])
     blocks.append(slack.button_click_info_block(payload.action, approver.id))
@@ -184,6 +186,7 @@ app.action("deny")(
 def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient, logger: Logger, context: BoltContext):
     ack()
     request = slack.RequestForAccessView.parse(body)
+    logger.info(f"Request for access submittion: {request}")
     requester = slack.get_user(client, id=request.requester_slack_id)
     decision_on_request = permissions.make_decision_on_request(
         statements=cfg.statements,
@@ -200,7 +203,6 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
         "permission_duration": request.permission_duration,
     }
     if isinstance(decision_on_request, permissions.RequiresApproval):
-        logger.info("RequiresApproval")
         approvers = [slack.get_user_by_email(client, email) for email in decision_on_request.approvers]
         approvers_slack_ids = [f"<@{approver.id}>" for approver in approvers]
         show_buttons = bool(approvers_slack_ids)
@@ -221,7 +223,6 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
         )
 
     elif isinstance(decision_on_request, permissions.ApprovalIsNotRequired):
-        logger.info("ApprovalIsNotRequired")
         slack_response = client.chat_postMessage(
             blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs, show_buttons=False),
             channel=cfg.slack_channel_id,
@@ -247,7 +248,6 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
         )
 
     elif isinstance(decision_on_request, permissions.SelfApprovalIsAllowedAndRequesterIsApprover):
-        logger.info("SelfApprovalIsAllowedAndRequesterIsApprover")
         slack_response = client.chat_postMessage(
             blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs, show_buttons=False),
             channel=cfg.slack_channel_id,
@@ -280,7 +280,7 @@ app.view(slack.RequestForAccessView.CALLBACK_ID)(
 
 
 @app.action("timepickeraction")
-def handle_some_action(ack):
+def handle_timepickeraction(ack):
     ack()
 
 
