@@ -276,7 +276,6 @@ def list_permission_sets(sso_client, sso_instance_arn: str) -> Generator[entitie
 def get_user_principal_id_by_email(identity_center_client, identity_store_id: str, email: str) -> str:
     response = identity_center_client.list_users(IdentityStoreId=identity_store_id)
     for user in response["Users"]:
-        logger.debug(user)
         for user_email in user.get("Emails", []):
             if user_email.get("Value") == email:
                 return user["UserId"]
