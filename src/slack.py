@@ -99,7 +99,7 @@ class RequestForAccessView:
             element=StaticSelectElement(
                 action_id=cls.ACCOUNT_ACTION_ID,
                 placeholder=PlainTextObject(text="Select account"),
-                options=[Option(text=PlainTextObject(text=account.name), value=account.id) for account in accounts],
+                options=[Option(text=PlainTextObject(text=f"{account.name} #{account.id}"), value=account.id) for account in accounts],
             ),
         )
 
