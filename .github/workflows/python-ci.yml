@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    allow-failure: true # allow failures, remove it in the future
+    continue-on-error: true # allow failures, remove it in the future
     defaults:
       run:
         shell: bash
