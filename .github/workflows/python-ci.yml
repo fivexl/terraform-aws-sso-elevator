@@ -10,6 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    working-directory: src
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11"]
