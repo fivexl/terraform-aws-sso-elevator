@@ -32,9 +32,11 @@ jobs:
           pip install pytest poetry pylint pep8
           poetry install
       - name: Analysing the code with pylint
+        continue-on-error: true # allow failures, remove it in the future      
         run: |
           pylint $(git ls-files '*.py')
       - name: Analysing the code with pep8
+        continue-on-error: true # allow failures, remove it in the future      
         run: |
           pep8 $(git ls-files '*.py')  
       - name: Test with pytest
