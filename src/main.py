@@ -1,4 +1,5 @@
 import copy
+import datetime
 import functools
 import os
 
@@ -10,12 +11,13 @@ from slack_sdk import WebClient
 
 import config
 import dynamodb
+import entities
 import errors
 import organizations
+import permissions
 import schedule
 import slack
 import sso
-import permissions
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
@@ -97,7 +99,7 @@ app.shortcut("request_for_access")(
 
 
 def handle_button_click(
-    client: WebClient, payload: slack.ButtonClickedPayload, approver: slack.SlackUser, requester: slack.SlackUser
+    client: WebClient, payload: slack.ButtonClickedPayload, approver: entities.slack.User, requester: entities.slack.User
 ) -> bool:
     can_be_approved_by = permissions.get_approvers(
         cfg.statements,
@@ -137,47 +139,15 @@ def handle_approve(body: dict, client: WebClient, logger: Logger, context: BoltC
         text="Updating permissions as requested...",
         thread_ts=payload.thread_ts,
     )
-
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, payload.request.permission_set_name)
-    user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
-
-    account_assignment = sso.create_account_assignment_and_wait_for_result(
-        sso_client,
-        sso.UserAccountAssignment(
-            instance_arn=sso_instance.arn,
-            account_id=payload.request.account_id,
-            permission_set_arn=permission_set.arn,
-            user_principal_id=user_principal_id,
-        ),
-    )
-
-    schedule.create_schedule_for_revoker(
-        time_delta=payload.request.permission_duration,
-        schedule_client=schedule_client,
+    handle_account_assignment(
+        permission_set_name=payload.request.permission_set_name,
         account_id=payload.request.account_id,
-        permission_set_arn=permission_set.arn,
-        user_principal_id=user_principal_id,
-        requester_slack_id=requester.id,
-        requester_email=requester.email,
-        approver_slack_id=payload.approver_slack_id,
-        approver_email=approver.email,
+        permission_duration=payload.request.permission_duration,
+        approver=approver,
+        requester=requester,
+        reason=payload.request.reason,
     )
-    dynamodb.log_operation(
-        logger,
-        cfg.dynamodb_table_name,
-        dynamodb.AuditEntry(
-            role_name=payload.request.permission_set_name,
-            account_id=payload.request.account_id,
-            reason=payload.request.reason,
-            requester_slack_id=requester.id,
-            requester_email=requester.email,
-            request_id=account_assignment.request_id,
-            approver_slack_id=payload.approver_slack_id,
-            approver_email=approver.email,
-            operation_type="grant",
-        ),
-    )
+
     return client.chat_postMessage(
         channel=payload.channel_id,
         text=f"Permissions granted to <@{requester.id}>",
@@ -208,7 +178,6 @@ app.action("deny")(
     ack=acknowledge_request,
     lazy=[handle_deny],
 )
-
 
 
 @handle_errors
@@ -262,45 +231,13 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
             channel=cfg.slack_channel_id,
         )
 
-        sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, request.permission_set_name)
-        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
-
-        account_assignment = sso.create_account_assignment_and_wait_for_result(
-            sso_client,
-            sso.UserAccountAssignment(
-                instance_arn=sso_instance.arn,
-                account_id=request.account_id,
-                permission_set_arn=permission_set.arn,
-                user_principal_id=user_principal_id,
-            ),
-        )
-
-        schedule.create_schedule_for_revoker(
-            time_delta=request.permission_duration,
-            schedule_client=schedule_client,
+        handle_account_assignment(
+            permission_set_name=request.permission_set_name,
             account_id=request.account_id,
-            permission_set_arn=permission_set.arn,
-            user_principal_id=user_principal_id,
-            requester_slack_id=request.requester_slack_id,
-            requester_email=requester.email,
-            approver_slack_id="ApprovalIsNotRequired",
-            approver_email="ApprovalIsNotRequired",
-        )
-        dynamodb.log_operation(
-            logger,
-            cfg.dynamodb_table_name,
-            dynamodb.AuditEntry(
-                role_name=request.permission_set_name,
-                account_id=request.account_id,
-                reason=request.reason,
-                requester_slack_id=request.requester_slack_id,
-                requester_email=requester.email,
-                request_id=account_assignment.request_id,
-                approver_slack_id="ApprovalIsNotRequired",
-                approver_email="ApprovalIsNotRequired",
-                operation_type="grant",
-            ),
+            permission_duration=request.permission_duration,
+            approver=requester,
+            requester=requester,
+            reason=request.reason,
         )
         return client.chat_postMessage(
             channel=cfg.slack_channel_id,
@@ -320,45 +257,13 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
             thread_ts=slack_response["ts"],
         )
 
-        sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, request.permission_set_name)
-        user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
-
-        account_assignment = sso.create_account_assignment_and_wait_for_result(
-            sso_client,
-            sso.UserAccountAssignment(
-                instance_arn=sso_instance.arn,
-                account_id=request.account_id,
-                permission_set_arn=permission_set.arn,
-                user_principal_id=user_principal_id,
-            ),
-        )
-
-        schedule.create_schedule_for_revoker(
-            time_delta=request.permission_duration,
-            schedule_client=schedule_client,
+        handle_account_assignment(
+            permission_set_name=request.permission_set_name,
             account_id=request.account_id,
-            permission_set_arn=permission_set.arn,
-            user_principal_id=user_principal_id,
-            requester_slack_id=request.requester_slack_id,
-            requester_email=requester.email,
-            approver_slack_id=request.requester_slack_id,
-            approver_email=requester.email,
-        )
-        dynamodb.log_operation(
-            logger,
-            cfg.dynamodb_table_name,
-            dynamodb.AuditEntry(
-                role_name=request.permission_set_name,
-                account_id=request.account_id,
-                reason=request.reason,
-                requester_slack_id=request.requester_slack_id,
-                requester_email=requester.email,
-                request_id=account_assignment.request_id,
-                approver_slack_id=request.account_id,
-                approver_email=requester.email,
-                operation_type="SelfApproveGrant",
-            ),
+            permission_duration=request.permission_duration,
+            approver=requester,
+            requester=requester,
+            reason=request.reason,
         )
         return client.chat_postMessage(
             channel=cfg.slack_channel_id,
@@ -376,3 +281,54 @@ app.view(slack.RequestForAccessView.CALLBACK_ID)(
 @app.action("timepickeraction")
 def handle_some_action(ack):
     ack()
+
+
+def handle_account_assignment(
+    permission_set_name: str,
+    account_id: str,
+    permission_duration: datetime.timedelta,
+    approver: entities.slack.User,
+    requester: entities.slack.User,
+    reason: str,
+):
+    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
+    user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
+
+    account_assignment = sso.create_account_assignment_and_wait_for_result(
+        sso_client,
+        sso.UserAccountAssignment(
+            instance_arn=sso_instance.arn,
+            account_id=account_id,
+            permission_set_arn=permission_set.arn,
+            user_principal_id=user_principal_id,
+        ),
+    )
+
+    dynamodb.log_operation(
+        logger=logger,
+        table_name=cfg.dynamodb_table_name,
+        audit_entry=dynamodb.AuditEntry(
+            account_id=account_id,
+            role_name=permission_set.name,
+            reason=reason,
+            requester_slack_id=requester.id,
+            requester_email=requester.email,
+            approver_slack_id=approver.id,
+            approver_email=approver.email,
+            request_id=account_assignment.request_id,
+            operation_type="grant",
+        ),
+    )
+
+    schedule.create_schedule_for_revoker(
+        time_delta=permission_duration,
+        schedule_client=schedule_client,
+        account_id=account_id,
+        permission_set_arn=permission_set.arn,
+        user_principal_id=user_principal_id,
+        requester_slack_id=requester.id,
+        requester_email=requester.email,
+        approver_slack_id=approver.email,
+        approver_email=approver.email,
+    )
