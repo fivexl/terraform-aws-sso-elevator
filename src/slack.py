@@ -1,7 +1,12 @@
+import datetime
+import os
+import time
 from datetime import timedelta
 from typing import Literal, Optional, TypeVar, Union
 
 import jmespath as jp
+import slack_sdk.errors
+from aws_lambda_powertools import Logger
 from pydantic import BaseModel, root_validator
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import (
@@ -21,6 +26,9 @@ from slack_sdk.models.blocks import (
 from slack_sdk.models.views import View
 
 import entities
+
+log_level = os.environ.get("LOG_LEVEL", "DEBUG")
+logger = Logger(level=log_level)
 
 
 class RequestForAccess(BaseModel):
@@ -280,13 +288,30 @@ class ButtonClickedPayload(BaseModel):
                 return field["text"].split(": ")[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
 
+
 def parse_user(user: dict) -> entities.slack.User:
     return entities.slack.User.parse_obj({"id": jp.search("user.id", user), "email": jp.search("user.profile.email", user)})
 
+
 def get_user(client: WebClient, id: str) -> entities.slack.User:
     response = client.users_info(user=id)
-    return parse_user(response.data) # type: ignore
+    return parse_user(response.data)  # type: ignore
+
 
 def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
-    response = client.users_lookupByEmail(email=email)
-    return parse_user(response.data) # type: ignore
+    start = datetime.datetime.now()
+    timeout_seconds = 30
+    try:
+        r = client.users_lookupByEmail(email=email)
+        return parse_user(r.data)  # type: ignore
+    except slack_sdk.errors.SlackApiError as e:
+        if e.response["error"] == "ratelimited":
+            if datetime.datetime.now() - start >= datetime.timedelta(seconds=timeout_seconds):
+                raise e
+            logger.info(f"Rate limited when getting slack user by email. Sleeping for 3 seconds. {e}")
+            time.sleep(3)
+            return get_user_by_email(client, email)
+        else:
+            raise e
+    except Exception as e:
+        raise e
