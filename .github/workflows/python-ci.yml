@@ -10,7 +10,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    continue-on-error: true # allow failures, remove it in the future
     defaults:
       run:
         shell: bash
@@ -33,5 +32,6 @@ jobs:
           pip install pytest poetry
           poetry install
       - name: Test with pytest
+        continue-on-error: true # allow failures, remove it in the future
         run: |
           poetry run pytest
