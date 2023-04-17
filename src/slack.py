@@ -280,21 +280,13 @@ class ButtonClickedPayload(BaseModel):
                 return field["text"].split(": ")[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
 
+def parse_user(user: dict) -> entities.slack.User:
+    return entities.slack.User.parse_obj({"id": jp.search("user.id", user), "email": jp.search("user.profile.email", user)})
 
-class SlackUser(BaseModel):
-    id: str
-    email: str
-
-    @root_validator(pre=True)
-    def validate(cls, values):
-        return {"id": jp.search("user.id", values), "email": jp.search("user.profile.email", values)}
-
-
-def get_user(client: WebClient, id: str) -> SlackUser:
+def get_user(client: WebClient, id: str) -> entities.slack.User:
     response = client.users_info(user=id)
-    return SlackUser.parse_obj(response.data)
+    return parse_user(response.data) # type: ignore
 
-
-def get_user_by_email(client: WebClient, email: str) -> SlackUser:
+def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
     response = client.users_lookupByEmail(email=email)
-    return SlackUser.parse_obj(response.data)
+    return parse_user(response.data) # type: ignore
