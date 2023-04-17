@@ -20,7 +20,7 @@ import permissions
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
 
-session = boto3.Session(profile_name="fivexl-master")
+session = boto3.Session()
 org_client = session.client("organizations")  # type: ignore
 sso_client = session.client("sso-admin")  # type: ignore
 identity_center_client = session.client("identitystore")  # type: ignore
