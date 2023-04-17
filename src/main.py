@@ -1,8 +1,6 @@
 import copy
 import functools
 import os
-from dataclasses import dataclass
-from typing import Union
 
 import boto3
 from aws_lambda_powertools import Logger
@@ -17,11 +15,12 @@ import organizations
 import schedule
 import slack
 import sso
+import permissions
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
 
-session = boto3.Session()
+session = boto3.Session(profile_name="fivexl-master")
 org_client = session.client("organizations")  # type: ignore
 sso_client = session.client("sso-admin")  # type: ignore
 identity_center_client = session.client("identitystore")  # type: ignore
@@ -100,7 +99,7 @@ app.shortcut("request_for_access")(
 def handle_button_click(
     client: WebClient, payload: slack.ButtonClickedPayload, approver: slack.SlackUser, requester: slack.SlackUser
 ) -> bool:
-    can_be_approved_by = get_approvers(
+    can_be_approved_by = permissions.get_approvers(
         cfg.statements,
         account_id=payload.request.account_id,
         permission_set_name=payload.request.permission_set_name,
@@ -211,72 +210,13 @@ app.action("deny")(
 )
 
 
-@dataclass
-class RequiresApproval:
-    approvers: set
-
-
-class ApprovalIsNotRequired:
-    ...
-
-
-class SelfApprovalIsAllowedAndRequesterIsApprover:
-    ...
-
-
-DecisionOnRequest = Union[RequiresApproval, ApprovalIsNotRequired, SelfApprovalIsAllowedAndRequesterIsApprover]
-
-
-def get_affected_statements(statements: frozenset[config.Statement], account_id: str, permission_set_name: str) -> list[config.Statement]:
-    return [
-        statement
-        for statement in statements
-        if statement.allows(
-            account_id=account_id,
-            permission_set_name=permission_set_name,
-        )
-    ]
-
-
-def make_decision_on_request(
-    statements: frozenset[config.Statement],
-    account_id: str,
-    permission_set_name: str,
-    requester_email: str,
-) -> DecisionOnRequest:
-    can_be_approved_by = set()
-    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
-    for statement in affected_statements:
-        if statement.approval_is_not_required:
-            return ApprovalIsNotRequired()
-
-        if statement.approvers:
-            if statement.allow_self_approval and requester_email in statement.approvers:
-                return SelfApprovalIsAllowedAndRequesterIsApprover()
-
-            can_be_approved_by.update(approver for approver in statement.approvers if approver != requester_email)
-    return RequiresApproval(approvers=can_be_approved_by)
-
-
-def get_approvers(statements: frozenset[config.Statement], account_id: str, permission_set_name: str, requester_email: str) -> set[str]:
-    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
-    can_be_approved_by = set()
-    for statement in affected_statements:
-        if statement.approvers:
-            if requester_email in statement.approvers:
-                if not statement.allow_self_approval:
-                    can_be_approved_by.update(statement.approvers - {requester_email})
-            else:
-                can_be_approved_by.update(statement.approvers)
-    return can_be_approved_by
-
 
 @handle_errors
 def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient, logger: Logger, context: BoltContext):
     ack()
     request = slack.RequestForAccessView.parse(body)
     requester = slack.get_user(client, id=request.requester_slack_id)
-    decision_on_request = make_decision_on_request(
+    decision_on_request = permissions.make_decision_on_request(
         statements=cfg.statements,
         account_id=request.account_id,
         requester_email=requester.email,
@@ -290,7 +230,7 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
         "reason": request.reason,
         "permission_duration": request.permission_duration,
     }
-    if isinstance(decision_on_request, RequiresApproval):
+    if isinstance(decision_on_request, permissions.RequiresApproval):
         logger.info("RequiresApproval")
         slack_response = client.chat_postMessage(
             blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs),
@@ -310,7 +250,7 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
             channel=cfg.slack_channel_id,
         )
 
-    elif isinstance(decision_on_request, ApprovalIsNotRequired):
+    elif isinstance(decision_on_request, permissions.ApprovalIsNotRequired):
         logger.info("ApprovalIsNotRequired")
         slack_response = client.chat_postMessage(
             blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs, show_buttons=False),
@@ -368,7 +308,7 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
             thread_ts=slack_response["ts"],
         )
 
-    elif isinstance(decision_on_request, SelfApprovalIsAllowedAndRequesterIsApprover):
+    elif isinstance(decision_on_request, permissions.SelfApprovalIsAllowedAndRequesterIsApprover):
         logger.info("SelfApprovalIsAllowedAndRequesterIsApprover")
         slack_response = client.chat_postMessage(
             blocks=slack.build_approval_request_message_blocks(**approval_request_kwargs, show_buttons=False),
