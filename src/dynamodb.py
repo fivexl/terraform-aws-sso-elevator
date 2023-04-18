@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 
 import boto3
+from mypy_boto3_dynamodb import type_defs
 
 
 @dataclass
@@ -18,7 +19,7 @@ class AuditEntry:
     operation_type: str
 
 
-def log_operation(logger: logging.Logger, table_name: str, audit_entry: AuditEntry):
+def log_operation(logger: logging.Logger, table_name: str, audit_entry: AuditEntry) -> type_defs.PutItemOutputTableTypeDef:
     dynamodb = boto3.resource("dynamodb")
     table = dynamodb.Table(table_name)
     now = datetime.now()
