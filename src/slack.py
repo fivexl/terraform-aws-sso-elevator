@@ -69,10 +69,10 @@ class RequestForAccessView:
                 DividerBlock(),
                 SectionBlock(
                     block_id=cls.TIMEPICKER_BLOCK_ID,
-                    text=MarkdownTextObject(text="Choose the time for which the permissions will be granted"),
+                    text=MarkdownTextObject(text="Select the duration for which the authorization will be provided"),
                     accessory=TimePickerElement(
                         action_id=cls.TIMEPICKER_ACTION_ID,
-                        initial_time="00:30",
+                        initial_time="01:00",
                         placeholder=PlainTextObject(text="Select duration"),
                     ),
                 ),
@@ -107,7 +107,7 @@ class RequestForAccessView:
             element=StaticSelectElement(
                 action_id=cls.ACCOUNT_ACTION_ID,
                 placeholder=PlainTextObject(text="Select account"),
-                options=[Option(text=PlainTextObject(text=f"{account.name} #{account.id}"), value=account.id) for account in accounts],
+                options=[Option(text=PlainTextObject(text=f"{account.id} - {account.name}"), value=account.id) for account in accounts],
             ),
         )
 
