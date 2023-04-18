@@ -131,7 +131,7 @@ data "aws_iam_policy_document" "slack_handler" {
     actions = [
       "iam:PutRolePolicy", "iam:CreateRole", "iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies"
     ]
-    resources = ["arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"]
+    resources = ["arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"]
   }
   statement {
     effect = "Allow"
