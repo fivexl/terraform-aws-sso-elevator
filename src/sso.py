@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Callable, Generator, Optional, TypeVar
 
 from aws_lambda_powertools import Logger
+from mypy_boto3_identitystore import IdentityStoreClient
+from mypy_boto3_sso_admin import SSOAdminClient, type_defs
 
 import entities
 import errors
@@ -30,7 +32,7 @@ class AccountAssignmentStatus:
     created_date: Optional[str]
 
     @staticmethod
-    def from_dict(d: dict) -> AccountAssignmentStatus:
+    def from_type_def(d: type_defs.AccountAssignmentOperationStatusTypeDef) -> AccountAssignmentStatus:
         return AccountAssignmentStatus(
             status=d["Status"],  # type: ignore
             request_id=d["RequestId"],  # type: ignore
@@ -74,30 +76,30 @@ class UserAccountAssignment:
         }
 
 
-def create_account_assignment(sso_client, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
-    response = sso_client.create_account_assignment(**assignment.as_dict())
-    return AccountAssignmentStatus.from_dict(response["AccountAssignmentCreationStatus"])
+def create_account_assignment(client: SSOAdminClient, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
+    response = client.create_account_assignment(**assignment.as_dict())
+    return AccountAssignmentStatus.from_type_def(response["AccountAssignmentCreationStatus"])
 
 
-def delete_account_assignment(sso_client, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
-    response = sso_client.delete_account_assignment(**assignment.as_dict())
-    return AccountAssignmentStatus.from_dict(response["AccountAssignmentDeletionStatus"])
+def delete_account_assignment(client: SSOAdminClient, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
+    response = client.delete_account_assignment(**assignment.as_dict())
+    return AccountAssignmentStatus.from_type_def(response["AccountAssignmentDeletionStatus"])
 
 
-def describe_account_assignment_creation_status(sso_client, assignment: UserAccountAssignment, request_id):
-    response = sso_client.describe_account_assignment_creation_status(
+def describe_account_assignment_creation_status(client: SSOAdminClient, assignment: UserAccountAssignment, request_id):
+    response = client.describe_account_assignment_creation_status(
         InstanceArn=assignment.instance_arn,
         AccountAssignmentCreationRequestId=request_id,
     )
-    return AccountAssignmentStatus.from_dict(response["AccountAssignmentCreationStatus"])
+    return AccountAssignmentStatus.from_type_def(response["AccountAssignmentCreationStatus"])
 
 
-def describe_account_assignment_deletion_status(sso_client, assignment: UserAccountAssignment, request_id):
-    response = sso_client.describe_account_assignment_deletion_status(
+def describe_account_assignment_deletion_status(client: SSOAdminClient, assignment: UserAccountAssignment, request_id):
+    response = client.describe_account_assignment_deletion_status(
         InstanceArn=assignment.instance_arn,
         AccountAssignmentDeletionRequestId=request_id,
     )
-    return AccountAssignmentStatus.from_dict(response["AccountAssignmentDeletionStatus"])
+    return AccountAssignmentStatus.from_type_def(response["AccountAssignmentDeletionStatus"])
 
 
 def retry_while(
@@ -126,14 +128,14 @@ def retry_while(
             return response
 
 
-def create_account_assignment_and_wait_for_result(sso_client, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
-    response = create_account_assignment(sso_client, assignment)
+def create_account_assignment_and_wait_for_result(client: SSOAdminClient, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
+    response = create_account_assignment(client, assignment)
     if AccountAssignmentStatus.is_ready(response):
         return response
     else:
 
         def fn():
-            return describe_account_assignment_creation_status(sso_client, assignment, response.request_id)
+            return describe_account_assignment_creation_status(client, assignment, response.request_id)
 
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
     logger.info(f"Account assignment creation result: {result}")
@@ -143,14 +145,14 @@ def create_account_assignment_and_wait_for_result(sso_client, assignment: UserAc
     return result
 
 
-def delete_account_assignment_and_wait_for_result(sso_client, assignment: UserAccountAssignment):
-    response = delete_account_assignment(sso_client, assignment)
+def delete_account_assignment_and_wait_for_result(client: SSOAdminClient, assignment: UserAccountAssignment):
+    response = delete_account_assignment(client, assignment)
     if AccountAssignmentStatus.is_ready(response):
         return response
     else:
 
         def fn():
-            return describe_account_assignment_deletion_status(sso_client, assignment, response.request_id)
+            return describe_account_assignment_deletion_status(client, assignment, response.request_id)
 
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
     logger.info(f"Account assignment deletion result: {result}")
@@ -170,27 +172,27 @@ class IAMIdentityCenterInstance:
     identity_store_id: str
 
     @staticmethod
-    def from_instance_metadata_type_def(td: dict) -> "IAMIdentityCenterInstance":
+    def from_instance_metadata_type_def(td: type_defs.InstanceMetadataTypeDef) -> "IAMIdentityCenterInstance":
         return IAMIdentityCenterInstance(
             arn=td["InstanceArn"],  # type: ignore
             identity_store_id=td["IdentityStoreId"],  # type: ignore
         )
 
 
-def list_sso_instances(sso_client) -> list[IAMIdentityCenterInstance]:
+def list_sso_instances(client: SSOAdminClient) -> list[IAMIdentityCenterInstance]:
     """List all IAM Identity Center Instances
 
     Returns:
         list[IAMIdentityCenterInstance]: List of IAM Identity Center Instances
     """
     instances: list[IAMIdentityCenterInstance] = []
-    paginator = sso_client.get_paginator("list_instances")
+    paginator = client.get_paginator("list_instances")
     for page in paginator.paginate():
         instances.extend(IAMIdentityCenterInstance.from_instance_metadata_type_def(instance) for instance in page["Instances"])
     return instances
 
 
-def describe_sso_instance(sso_client, instance_arn: str) -> IAMIdentityCenterInstance:
+def describe_sso_instance(client: SSOAdminClient, instance_arn: str) -> IAMIdentityCenterInstance:
     """Describe IAM Identity Center Instance
 
     Args:
@@ -199,7 +201,7 @@ def describe_sso_instance(sso_client, instance_arn: str) -> IAMIdentityCenterIns
     Returns:
         IAMIdentityCenterInstance: IAM Identity Center Instance
     """
-    sso_instances = list_sso_instances(sso_client)
+    sso_instances = list_sso_instances(client)
     return next(instance for instance in sso_instances if instance.arn == instance_arn)
 
 
@@ -211,7 +213,7 @@ class AccountAssignment:
     principal_type: str
 
     @staticmethod
-    def from_type_def(td: dict) -> AccountAssignment:
+    def from_type_def(td: type_defs.AccountAssignmentTypeDef) -> AccountAssignment:
         return AccountAssignment(
             account_id=td["AccountId"],  # type: ignore
             permission_set_arn=td["PermissionSetArn"],  # type: ignore
@@ -220,8 +222,10 @@ class AccountAssignment:
         )
 
 
-def list_account_assignments(sso_client, instance_arn: str, account_id: str, permission_set_arn: str) -> list["AccountAssignment"]:
-    paginator = sso_client.get_paginator("list_account_assignments")
+def list_account_assignments(
+    client: SSOAdminClient, instance_arn: str, account_id: str, permission_set_arn: str
+) -> list["AccountAssignment"]:
+    paginator = client.get_paginator("list_account_assignments")
     account_assignments: list[AccountAssignment] = []
 
     for page in paginator.paginate(
@@ -233,7 +237,7 @@ def list_account_assignments(sso_client, instance_arn: str, account_id: str, per
     return account_assignments
 
 
-def parse_permission_set(td: dict) -> entities.aws.PermissionSet:
+def parse_permission_set(td: type_defs.DescribePermissionSetResponseTypeDef) -> entities.aws.PermissionSet:
     ps = td.get("PermissionSet", {})
     return entities.aws.PermissionSet.parse_obj(
         {
@@ -244,37 +248,33 @@ def parse_permission_set(td: dict) -> entities.aws.PermissionSet:
     )
 
 
-def describe_permission_set(sso_client, sso_instance_arn: str, permission_set_arn: str) -> entities.aws.PermissionSet:
-    td = sso_client.describe_permission_set(InstanceArn=sso_instance_arn, PermissionSetArn=permission_set_arn)
+def describe_permission_set(client: SSOAdminClient, sso_instance_arn: str, permission_set_arn: str) -> entities.aws.PermissionSet:
+    td = client.describe_permission_set(InstanceArn=sso_instance_arn, PermissionSetArn=permission_set_arn)
     return parse_permission_set(td)
 
 
-def get_permission_set_by_name(sso_client, sso_instance_arn: str, permission_set_name: str) -> entities.aws.PermissionSet:
+def get_permission_set_by_name(client: SSOAdminClient, sso_instance_arn: str, permission_set_name: str) -> entities.aws.PermissionSet:
     if ps := next(
-        (
-            permission_set
-            for permission_set in list_permission_sets(sso_client, sso_instance_arn)
-            if permission_set.name == permission_set_name
-        ),
+        (permission_set for permission_set in list_permission_sets(client, sso_instance_arn) if permission_set.name == permission_set_name),
         None,
     ):
         return ps
     raise errors.NotFound(f"Permission set with name {permission_set_name} not found")
 
 
-def list_permission_sets_arns(sso_client, sso_instance_arn: str) -> Generator[str, None, None]:
-    paginator = sso_client.get_paginator("list_permission_sets")
+def list_permission_sets_arns(client: SSOAdminClient, sso_instance_arn: str) -> Generator[str, None, None]:
+    paginator = client.get_paginator("list_permission_sets")
     for page in paginator.paginate(InstanceArn=sso_instance_arn):
         yield from page["PermissionSets"]
 
 
-def list_permission_sets(sso_client, sso_instance_arn: str) -> Generator[entities.aws.PermissionSet, None, None]:
-    for permission_set_arn in list_permission_sets_arns(sso_client, sso_instance_arn):
-        yield describe_permission_set(sso_client, sso_instance_arn, permission_set_arn)
+def list_permission_sets(client: SSOAdminClient, sso_instance_arn: str) -> Generator[entities.aws.PermissionSet, None, None]:
+    for permission_set_arn in list_permission_sets_arns(client, sso_instance_arn):
+        yield describe_permission_set(client, sso_instance_arn, permission_set_arn)
 
 
-def get_user_principal_id_by_email(identity_center_client, identity_store_id: str, email: str) -> str:
-    response = identity_center_client.list_users(IdentityStoreId=identity_store_id)
+def get_user_principal_id_by_email(client: IdentityStoreClient, identity_store_id: str, email: str) -> str:
+    response = client.list_users(IdentityStoreId=identity_store_id)
     for user in response["Users"]:
         for user_email in user.get("Emails", []):
             if user_email.get("Value") == email:
@@ -283,8 +283,8 @@ def get_user_principal_id_by_email(identity_center_client, identity_store_id: st
     raise errors.NotFound(f"AWS SSO User with email {email} not found")
 
 
-def get_user_emails(identity_center_client, identity_store_id: str, user_id: str) -> list[str]:
-    user = identity_center_client.describe_user(
+def get_user_emails(client: IdentityStoreClient, identity_store_id: str, user_id: str) -> list[str]:
+    user = client.describe_user(
         IdentityStoreId=identity_store_id,
         UserId=user_id,
     )

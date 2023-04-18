@@ -25,7 +25,7 @@ logger = Logger(level=log_level)
 session = boto3.Session()
 org_client = session.client("organizations")  # type: ignore
 sso_client = session.client("sso-admin")  # type: ignore
-identity_center_client = session.client("identitystore")  # type: ignore
+identitystore_client = session.client("identitystore")  # type: ignore
 schedule_client = session.client("scheduler")  # type: ignore
 
 cfg = config.Config()  # type: ignore
@@ -294,7 +294,7 @@ def handle_account_assignment(
 ):
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
-    user_principal_id = sso.get_user_principal_id_by_email(identity_center_client, sso_instance.identity_store_id, requester.email)
+    user_principal_id = sso.get_user_principal_id_by_email(identitystore_client, sso_instance.identity_store_id, requester.email)
 
     account_assignment = sso.create_account_assignment_and_wait_for_result(
         sso_client,

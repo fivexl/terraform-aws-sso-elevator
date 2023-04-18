@@ -17,7 +17,7 @@ logger = Logger(level=log_level)
 
 org_client = boto3.client("organizations")  # type: ignore
 sso_client = boto3.client("sso-admin")  # type: ignore
-identity_center_client = boto3.client("identitystore")  # type: ignore
+identitystore_client = boto3.client("identitystore")  # type: ignore
 
 
 def lambda_handler(event, __):
@@ -42,7 +42,7 @@ def lambda_handler(event, __):
         logger.info(f"Revoking tmp permissions for account {account.id}")
         for permision_set in permission_sets:
             account_assignments = sso.list_account_assignments(
-                sso_client=sso_client,
+                client=sso_client,
                 instance_arn=sso_instance.arn,
                 account_id=account.id,
                 permission_set_arn=permision_set.arn,
@@ -105,7 +105,7 @@ def slack_notify_user_on_revoke(
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
     aws_user_emails = sso.get_user_emails(
-        identity_center_client,
+        identitystore_client,
         sso_instance.identity_store_id,
         account_assignment.user_principal_id,
     )
