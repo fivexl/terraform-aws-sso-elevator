@@ -1,9 +1,25 @@
-import json
+import os
 from datetime import datetime, timedelta, timezone
 
+import botocore.exceptions
+import jmespath as jp
+from aws_lambda_powertools import Logger
 from mypy_boto3_scheduler import EventBridgeSchedulerClient, type_defs
+from pydantic import BaseModel, ValidationError
 
 import config
+import entities
+import sso
+
+log_level = os.environ.get("LOG_LEVEL", "DEBUG")
+logger = Logger(level=log_level)
+
+
+class RevokeEvent(BaseModel):
+    schedule_name: str
+    approver: entities.slack.User
+    requester: entities.slack.User
+    user_account_assignment: sso.UserAccountAssignment
 
 
 def event_bridge_schedule_after(td: timedelta) -> str:
@@ -11,44 +27,73 @@ def event_bridge_schedule_after(td: timedelta) -> str:
     return f"at({(now + td).replace(microsecond=0).isoformat().replace('+00:00', '')})"
 
 
-def create_schedule_for_revoker(
-    time_delta: timedelta,
+def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str):
+    try:
+        client.delete_schedule(Name=schedule_name)
+    except botocore.exceptions.ClientError as e:
+        if jp.search("Error.Code", e.response) == "ResourceNotFoundException":
+            logger.info(f"schedule with name {schedule_name} was not found for deletion")
+        else:
+            raise e
+    
+
+
+def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> dict[str, sso.UserAccountAssignment]:
+    paginator = client.get_paginator("list_schedules")
+    scheduled_revoke_events = {}
+    for page in paginator.paginate():
+        schedules_names = jp.search("Schedules[*].Name", page)
+        for schedule_name in schedules_names:
+            if not schedule_name:
+                continue
+            full_schedule = client.get_schedule(Name=schedule_name)
+            if event := jp.search("Target.Input", full_schedule):
+                try:
+                    revoke_event = RevokeEvent.parse_raw(event)
+                except ValidationError:
+                    logger.error(f"failed to parse schedule. Name: {schedule_name}, event:{event}")
+                    continue
+                scheduled_revoke_events[schedule_name] = revoke_event.user_account_assignment
+    return scheduled_revoke_events
+
+
+def get_and_delete_schedule_if_already_exist(
+    client: EventBridgeSchedulerClient,
+    user_account_assignment: sso.UserAccountAssignment,
+):
+    for schedule_name, revoke_event in get_scheduled_revoke_events(client).items():
+        if revoke_event == user_account_assignment:
+            delete_schedule(client, schedule_name)
+            logger.info(f"previous schedule:{schedule_name} found and deleted")
+
+
+def schedule_revoke_event(
     schedule_client: EventBridgeSchedulerClient,
-    account_id: str,
-    permission_set_arn: str,
-    user_principal_id: str,
-    requester_slack_id: str,
-    requester_email: str,
-    approver_slack_id: str,
-    approver_email: str,
-) -> type_defs.CreateScheduleOutputTypeDef:
+    time_delta: timedelta,
+    approver: entities.slack.User,
+    requester: entities.slack.User,
+    user_account_assignment: sso.UserAccountAssignment,
+):
     cfg = config.Config()  # type: ignore
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    schedule_expression = event_bridge_schedule_after(time_delta)
-
-    return schedule_client.create_schedule(
-        FlexibleTimeWindow={"Mode": "OFF"},
-        Name=schedule_name,
-        ScheduleExpression=schedule_expression,
-        State="ENABLED",
-        Target=type_defs.TargetTypeDef(
-            Arn=cfg.revoker_function_arn,
-            RoleArn=cfg.schedule_policy_arn,
-            Input=json.dumps(
-                {
-                    "Schedule_name": schedule_name,
-                    "ScheduleExpression": schedule_expression,
-                    "Scheduled_revoke": {
-                        "instance_arn": cfg.sso_instance_arn,
-                        "account_id": account_id,
-                        "permission_set_arn": permission_set_arn,
-                        "user_principal_id": user_principal_id,
-                        "requester_slack_id": requester_slack_id,
-                        "requester_email": requester_email,
-                        "approver_slack_id": approver_slack_id,
-                        "approver_email": approver_email,
-                    },
-                }
+    get_and_delete_schedule_if_already_exist(schedule_client, user_account_assignment)
+    try:
+        schedule_client.create_schedule(
+            FlexibleTimeWindow={"Mode": "OFF"},
+            Name=schedule_name,
+            ScheduleExpression=event_bridge_schedule_after(time_delta),
+            State="ENABLED",
+            Target=type_defs.TargetTypeDef(
+                Arn=cfg.revoker_function_arn,
+                RoleArn=cfg.schedule_policy_arn,
+                Input=RevokeEvent(
+                    schedule_name=schedule_name,
+                    approver=approver,
+                    requester=requester,
+                    user_account_assignment=user_account_assignment,
+                ).json(),
             ),
-        ),
-    )
+        )
+    except botocore.exceptions.ClientError as e:
+        logger.error(f"failed to schedule revoke event: {e}")
+        raise e
