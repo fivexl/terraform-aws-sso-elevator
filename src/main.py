@@ -322,14 +322,15 @@ def handle_account_assignment(
         ),
     )
 
-    schedule.create_schedule_for_revoker(
+    schedule.schedule_revoke_event(
         time_delta=permission_duration,
         schedule_client=schedule_client,
-        account_id=account_id,
-        permission_set_arn=permission_set.arn,
-        user_principal_id=user_principal_id,
-        requester_slack_id=requester.id,
-        requester_email=requester.email,
-        approver_slack_id=approver.email,
-        approver_email=approver.email,
+        approver=approver,
+        requester=requester,
+        user_account_assignment=sso.UserAccountAssignment(
+            instance_arn=sso_instance.arn,
+            account_id=account_id,
+            permission_set_arn=permission_set.arn,
+            user_principal_id=user_principal_id,
+        ),
     )
