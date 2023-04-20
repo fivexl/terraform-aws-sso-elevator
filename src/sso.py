@@ -222,20 +222,27 @@ class AccountAssignment:
         )
 
 
-def list_account_assignments(
-    client: SSOAdminClient, instance_arn: str, account_id: str, permission_set_arn: str
+def list_user_account_assignments(
+    client: SSOAdminClient,
+    instance_arn: str,
+    account_ids: list[str],
+    permission_set_arns: list[str],
 ) -> list["AccountAssignment"]:
     paginator = client.get_paginator("list_account_assignments")
     account_assignments: list[AccountAssignment] = []
 
-    for page in paginator.paginate(
-        InstanceArn=instance_arn,
-        AccountId=account_id,
-        PermissionSetArn=permission_set_arn,
-    ):
-        account_assignments.extend(AccountAssignment.from_type_def(account_assignment) for account_assignment in page["AccountAssignments"])
+    for account_id in account_ids:
+        for permission_set_arn in permission_set_arns:
+            for page in paginator.paginate(
+                InstanceArn=instance_arn,
+                AccountId=account_id,
+                PermissionSetArn=permission_set_arn,
+            ):
+                for account_assignment in page["AccountAssignments"]:
+                    aa = AccountAssignment.from_type_def(account_assignment)
+                    if aa.principal_type == "USER":
+                        account_assignments.append(aa)
     return account_assignments
-
 
 def parse_permission_set(td: type_defs.DescribePermissionSetResponseTypeDef) -> entities.aws.PermissionSet:
     ps = td.get("PermissionSet", {})
