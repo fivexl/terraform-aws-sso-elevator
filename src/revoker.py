@@ -1,6 +1,7 @@
 import os
 
 import boto3
+from pydantic import ValidationError
 import slack_sdk
 from aws_lambda_powertools import Logger
 
@@ -8,9 +9,9 @@ import config
 import dynamodb
 import entities
 import organizations
+import schedule
 import slack
 import sso
-import schedule
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
@@ -18,12 +19,17 @@ logger = Logger(level=log_level)
 org_client = boto3.client("organizations")  # type: ignore
 sso_client = boto3.client("sso-admin")  # type: ignore
 identitystore_client = boto3.client("identitystore")  # type: ignore
+scheduler_client = boto3.client("scheduler")  # type: ignore
 
 
 def lambda_handler(event, __):
     cfg = config.Config()  # type: ignore
     logger.info(f"Got event: {event}")
-    if revoke_event := schedule.RevokeEvent.parse_obj(event):
+    try:
+        revoke_event = schedule.RevokeEvent.parse_obj(event)
+    except ValidationError:
+        pass
+    else:
         return handle_scheduled_account_assignment_deletion(revoke_event, sso_client, cfg)
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
@@ -39,18 +45,33 @@ def lambda_handler(event, __):
     else:
         permission_sets = [ps for ps in sso.list_permission_sets(sso_client, cfg.sso_instance_arn) if ps.name in configured_permission_sets]
 
-    accounts_ids = [ac.id for ac in accounts]
-    permission_sets_arns = [ps.arn for ps in permission_sets]
-    for account_assignment in sso.list_user_account_assignments(sso_client, sso_instance.arn, accounts_ids, permission_sets_arns):
-        handle_account_assignment_deletion(
-            account_assignment=sso.UserAccountAssignment(
-                account_id=account_assignment.account_id,
-                permission_set_arn=account_assignment.permission_set_arn,
-                user_principal_id=account_assignment.principal_id,
-                instance_arn=sso_instance.arn,
-            ),
-            cfg=cfg,
-        )
+    account_assignments = sso.list_user_account_assignments(
+        sso_client,
+        cfg.sso_instance_arn,
+        [a.id for a in accounts],
+        [ps.arn for ps in permission_sets],
+    )
+    for account_assignment in account_assignments:
+        for scheduled_revoke_name, event in schedule.get_scheduled_revoke_events(scheduler_client).items():
+            account_assignment_from_event = sso.AccountAssignment(
+                permission_set_arn=event.permission_set_arn,
+                account_id=event.account_id,
+                principal_id=event.user_principal_id,
+                principal_type="USER",
+            )
+            if account_assignment_from_event == account_assignment:
+                logger.info(f"{account_assignment} already scheduled for revocation: {scheduled_revoke_name}. Skipping")
+                continue
+            else:
+                handle_account_assignment_deletion(
+                    account_assignment=sso.UserAccountAssignment(
+                        account_id=account_assignment.account_id,
+                        permission_set_arn=account_assignment.permission_set_arn,
+                        user_principal_id=account_assignment.principal_id,
+                        instance_arn=sso_instance.arn,
+                    ),
+                    cfg=cfg,
+                )
 
 
 def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssignment, cfg: config.Config):
@@ -144,11 +165,9 @@ def handle_scheduled_account_assignment_deletion(revoke_event: schedule.RevokeEv
             operation_type="revoke",
         ),
     )
-    schedule_client = boto3.client("scheduler")  # type: ignore
 
-    schedule_client.delete_schedule(Name=revoke_event.schedule_name)
+    scheduler_client.delete_schedule(Name=revoke_event.schedule_name)
 
     if cfg.post_update_to_slack:
         account = organizations.describe_account(org_client, account_assignment.account_id)
         slack_notify_user_on_revoke(cfg, account_assignment, permission_set, account)
-
