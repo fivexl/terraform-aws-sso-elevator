@@ -118,6 +118,8 @@ data "aws_iam_policy_document" "revoker" {
     effect = "Allow"
     actions = [
       "scheduler:DeleteSchedule",
+      "scheduler:ListSchedules",
+      "scheduler:GetSchedule",
     ]
     resources = ["*"]
   }
