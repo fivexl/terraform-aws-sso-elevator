@@ -36,6 +36,12 @@ variable "schedule_expression" {
   default     = "cron(0 23 * * ? *)"
 }
 
+variable "schedule_expression_for_check_on_inconsistency" {
+  description = "value for the schedule expression for checking on inconsistency"
+  type        = string
+  default     = "rate(2 hours)"
+}
+
 variable "sso_instance_arn" {
   description = "value for the SSO instance ARN"
   type        = string

@@ -1,9 +1,9 @@
 import os
 
 import boto3
-from pydantic import ValidationError
 import slack_sdk
 from aws_lambda_powertools import Logger
+from pydantic import ValidationError
 
 import config
 import dynamodb
@@ -25,12 +25,15 @@ scheduler_client = boto3.client("scheduler")  # type: ignore
 def lambda_handler(event, __):
     cfg = config.Config()  # type: ignore
     logger.info(f"Got event: {event}")
-    try:
-        revoke_event = schedule.RevokeEvent.parse_obj(event)
-    except ValidationError:
-        pass
-    else:
-        return handle_scheduled_account_assignment_deletion(revoke_event, sso_client, cfg)
+
+    if event["action"] == "event_bridge_revoke":
+        try:
+            revoke_event = schedule.RevokeEvent.parse_raw(event["revoke_event"])
+            return handle_scheduled_account_assignment_deletion(revoke_event, sso_client, cfg)
+        except ValidationError as e:
+            logger.error(f"Failed to parse event: {event}. Error: {e}")
+            raise e
+
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
     configured_accounts = cfg.accounts
@@ -51,16 +54,42 @@ def lambda_handler(event, __):
         [a.id for a in accounts],
         [ps.arn for ps in permission_sets],
     )
-    for account_assignment in account_assignments:
-        for scheduled_revoke_name, event in schedule.get_scheduled_revoke_events(scheduler_client).items():
-            account_assignment_from_event = sso.AccountAssignment(
-                permission_set_arn=event.permission_set_arn,
-                account_id=event.account_id,
-                principal_id=event.user_principal_id,
+    scheduled_revoke_events = schedule.get_scheduled_revoke_events(scheduler_client)
+
+    if event["action"] == "check_on_inconsistency":
+        account_assignments_from_events = [
+            sso.AccountAssignment(
+                permission_set_arn=revoke_event.user_account_assignment.permission_set_arn,
+                account_id=revoke_event.user_account_assignment.account_id,
+                principal_id=revoke_event.user_account_assignment.user_principal_id,
                 principal_type="USER",
             )
-            if account_assignment_from_event == account_assignment:
-                logger.info(f"{account_assignment} already scheduled for revocation: {scheduled_revoke_name}. Skipping")
+            for revoke_event in scheduled_revoke_events
+        ]
+
+        for account_assignment in account_assignments:
+            if account_assignment not in account_assignments_from_events:
+                account = organizations.describe_account(org_client, account_assignment.account_id)
+                logger.warning(f"Found an inconsistent account assignment in :{account.name}. Account assignment: {account_assignment}")
+                slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
+                slack_client.chat_postMessage(
+                    channel=cfg.slack_channel_id,
+                    text=f"Found an inconsistent account assignment in {account.name}. There is no schedule for its revocation. Please check the revoker logs for more details.",
+                )
+
+    if event["action"] == "sso_elevator_scheduled_revocation":
+        account_assignments_from_events = [
+            sso.AccountAssignment(
+                permission_set_arn=revoke_event.user_account_assignment.permission_set_arn,
+                account_id=revoke_event.user_account_assignment.account_id,
+                principal_id=revoke_event.user_account_assignment.user_principal_id,
+                principal_type="USER",
+            )
+            for revoke_event in scheduled_revoke_events
+        ]
+        for account_assignment in account_assignments:
+            if account_assignment in account_assignments_from_events:
+                logger.info(f"{account_assignment} already scheduled for revocation. Skipping")
                 continue
             else:
                 handle_account_assignment_deletion(
