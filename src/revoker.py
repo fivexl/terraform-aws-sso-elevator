@@ -165,8 +165,7 @@ def handle_scheduled_account_assignment_deletion(revoke_event: schedule.RevokeEv
             operation_type="revoke",
         ),
     )
-
-    scheduler_client.delete_schedule(Name=revoke_event.schedule_name)
+    schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
 
     if cfg.post_update_to_slack:
         account = organizations.describe_account(org_client, account_assignment.account_id)
