@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -35,25 +36,24 @@ def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str):
             logger.info(f"schedule with name {schedule_name} was not found for deletion")
         else:
             raise e
-    
 
 
-def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> dict[str, sso.UserAccountAssignment]:
+def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> list[RevokeEvent]:
     paginator = client.get_paginator("list_schedules")
-    scheduled_revoke_events = {}
+    scheduled_revoke_events = []
     for page in paginator.paginate(GroupName= "SSO_Elevator_revoke"):
         schedules_names = jp.search("Schedules[*].Name", page)
         for schedule_name in schedules_names:
             if not schedule_name:
                 continue
             full_schedule = client.get_schedule(GroupName="SSO_Elevator_revoke",Name=schedule_name)
-            if event := jp.search("Target.Input", full_schedule):
+            if event := json.loads(jp.search("Target.Input", full_schedule))["revoke_event"]:
                 try:
                     revoke_event = RevokeEvent.parse_raw(event)
                 except ValidationError:
                     logger.error(f"failed to parse schedule. Name: {schedule_name}, event:{event}")
                     continue
-                scheduled_revoke_events[schedule_name] = revoke_event.user_account_assignment
+                scheduled_revoke_events.append(revoke_event)
     return scheduled_revoke_events
 
 
@@ -61,10 +61,10 @@ def get_and_delete_schedule_if_already_exist(
     client: EventBridgeSchedulerClient,
     user_account_assignment: sso.UserAccountAssignment,
 ):
-    for schedule_name, revoke_event in get_scheduled_revoke_events(client).items():
-        if revoke_event == user_account_assignment:
-            delete_schedule(client, schedule_name)
-            logger.info(f"previous schedule:{schedule_name} found and deleted")
+    for revoke_event in get_scheduled_revoke_events(client):
+        if revoke_event.user_account_assignment == user_account_assignment:
+            delete_schedule(client, revoke_event.schedule_name)
+            logger.info(f"previous schedule:{revoke_event.schedule_name} found and deleted")
 
 
 def schedule_revoke_event(
@@ -87,12 +87,17 @@ def schedule_revoke_event(
             Target=type_defs.TargetTypeDef(
                 Arn=cfg.revoker_function_arn,
                 RoleArn=cfg.schedule_policy_arn,
-                Input=RevokeEvent(
-                    schedule_name=schedule_name,
-                    approver=approver,
-                    requester=requester,
-                    user_account_assignment=user_account_assignment,
-                ).json(),
+                Input=json.dumps(
+                    {
+                        "action": "event_bridge_revoke",
+                        "revoke_event": RevokeEvent(
+                            schedule_name=schedule_name,
+                            approver=approver,
+                            requester=requester,
+                            user_account_assignment=user_account_assignment,
+                        ).json(),
+                    },
+                ),
             ),
         )
     except botocore.exceptions.ClientError as e:

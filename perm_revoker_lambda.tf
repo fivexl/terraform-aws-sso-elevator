@@ -49,9 +49,13 @@ module "access_revoker" {
   allowed_triggers = {
     cron = {
       principal  = "events.amazonaws.com"
-      source_arn = aws_cloudwatch_event_rule.every_night.arn
+      source_arn = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.arn
     }
-  }
+    check_inconsistency = {
+      principal  = "events.amazonaws.com"
+      source_arn = aws_cloudwatch_event_rule.sso_elevator_check_on_inconsistency.arn
+    }
+    }
 
   attach_policy_json = true
   policy_json        = data.aws_iam_policy_document.revoker.json
@@ -128,16 +132,34 @@ resource "aws_scheduler_schedule_group" "One_time_schedule_group" {
   name = "SSO_Elevator_revoke"
 }
 
-resource "aws_cloudwatch_event_rule" "every_night" {
-  name                = "every-night"
-  description         = "Trigger every night"
+resource "aws_cloudwatch_event_rule" "sso_elevator_scheduled_revocation" {
+  name                = "sso_elevator_scheduled_revocation"
+  description         = "Triggers on schedule to revoke temporary permissions"
   schedule_expression = var.schedule_expression
   tags                = var.tags
 }
 
-resource "aws_cloudwatch_event_target" "revoker" {
-  rule = aws_cloudwatch_event_rule.every_night.name
+resource "aws_cloudwatch_event_target" "sso_elevator_scheduled_revocation" {
+  rule = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
   arn  = module.access_revoker.lambda_function_arn
+  input = jsonencode({
+    "action": "sso_elevator_scheduled_revocation"
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "sso_elevator_check_on_inconsistency" {
+  name                = "sso_elevator_check_on_inconsistency"
+  description         = "Triggers on schedule to check on inconsistency"
+  schedule_expression = var.schedule_expression_for_check_on_inconsistency
+  tags                = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "check_inconsistency" {
+  rule = aws_cloudwatch_event_rule.sso_elevator_check_on_inconsistency.name
+  arn  = module.access_revoker.lambda_function_arn
+  input = jsonencode({
+    "action": "check_on_inconsistency"
+  })
 }
 
 resource "aws_iam_role" "eventbridge_role" {
