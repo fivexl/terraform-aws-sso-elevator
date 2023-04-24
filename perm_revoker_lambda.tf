@@ -55,7 +55,7 @@ module "access_revoker" {
       principal  = "events.amazonaws.com"
       source_arn = aws_cloudwatch_event_rule.sso_elevator_check_on_inconsistency.arn
     }
-    }
+  }
 
   attach_policy_json = true
   policy_json        = data.aws_iam_policy_document.revoker.json
@@ -143,7 +143,7 @@ resource "aws_cloudwatch_event_target" "sso_elevator_scheduled_revocation" {
   rule = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
   arn  = module.access_revoker.lambda_function_arn
   input = jsonencode({
-    "action": "sso_elevator_scheduled_revocation"
+    "action" : "sso_elevator_scheduled_revocation"
   })
 }
 
@@ -158,7 +158,7 @@ resource "aws_cloudwatch_event_target" "check_inconsistency" {
   rule = aws_cloudwatch_event_rule.sso_elevator_check_on_inconsistency.name
   arn  = module.access_revoker.lambda_function_arn
   input = jsonencode({
-    "action": "check_on_inconsistency"
+    "action" : "check_on_inconsistency"
   })
 }
 
