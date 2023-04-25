@@ -6,7 +6,7 @@ authors = ["Eremin <haru.eaa@gmail.com>"]
 packages = [{include = "python-boto3"}]
 
 [tool.poetry.dependencies]
-python = "^3.10.6"
+python = "^3.10.10"
 boto3 = "^1.26.97"
 
 
