@@ -128,9 +128,6 @@ data "aws_iam_policy_document" "revoker" {
     resources = ["*"]
   }
 }
-resource "aws_scheduler_schedule_group" "One_time_schedule_group" {
-  name = "SSO_Elevator_revoke"
-}
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_scheduled_revocation" {
   name                = "sso_elevator_scheduled_revocation"
