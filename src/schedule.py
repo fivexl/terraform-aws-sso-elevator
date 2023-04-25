@@ -30,7 +30,7 @@ def event_bridge_schedule_after(td: timedelta) -> str:
 
 def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str):
     try:
-        client.delete_schedule(GroupName="SSO_Elevator_revoke",Name=schedule_name)
+        client.delete_schedule(GroupName="sso_elevator_revoke",Name=schedule_name)
     except botocore.exceptions.ClientError as e:
         if jp.search("Error.Code", e.response) == "ResourceNotFoundException":
             logger.info(f"schedule with name {schedule_name} was not found for deletion")
@@ -41,12 +41,12 @@ def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str):
 def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> list[RevokeEvent]:
     paginator = client.get_paginator("list_schedules")
     scheduled_revoke_events = []
-    for page in paginator.paginate(GroupName= "SSO_Elevator_revoke"):
+    for page in paginator.paginate(GroupName= "sso_elevator_revoke"):
         schedules_names = jp.search("Schedules[*].Name", page)
         for schedule_name in schedules_names:
             if not schedule_name:
                 continue
-            full_schedule = client.get_schedule(GroupName="SSO_Elevator_revoke",Name=schedule_name)
+            full_schedule = client.get_schedule(GroupName="sso_elevator_revoke",Name=schedule_name)
             if event := json.loads(jp.search("Target.Input", full_schedule))["revoke_event"]:
                 try:
                     revoke_event = RevokeEvent.parse_raw(event)
@@ -81,7 +81,7 @@ def schedule_revoke_event(
         schedule_client.create_schedule(
             FlexibleTimeWindow={"Mode": "OFF"},
             Name=schedule_name,
-            GroupName="SSO_Elevator_revoke",
+            GroupName="sso_elevator_revoke",
             ScheduleExpression=event_bridge_schedule_after(time_delta),
             State="ENABLED",
             Target=type_defs.TargetTypeDef(
