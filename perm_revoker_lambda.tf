@@ -1,6 +1,6 @@
 module "access_revoker" {
   source  = "terraform-aws-modules/lambda/aws"
-  version = "4.13.0"
+  version = "4.16.0"
 
   function_name = local.revoker_lambda_name
   description   = "Revokes temporary permissions"
@@ -11,8 +11,8 @@ module "access_revoker" {
   hash_extra = local.revoker_lambda_name
 
   build_in_docker = var.build_in_docker
-  runtime         = "python3.9"
-  docker_image    = "build-python3.9-poetry"
+  runtime         = "python3.10"
+  docker_image    = "build-python3.10-poetry"
   docker_file     = "${path.module}/src/docker/Dockerfile"
   source_path = [
     {
