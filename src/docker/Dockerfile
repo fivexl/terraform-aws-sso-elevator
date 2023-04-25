@@ -1,3 +1,3 @@
-FROM public.ecr.aws/sam/build-python3.9
+FROM public.ecr.aws/lambda/python:3.10
 
 RUN pip install poetry==1.2.2

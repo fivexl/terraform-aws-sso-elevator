@@ -11,7 +11,7 @@ logger = Logger(level=log_level)
 
 class Statement(BaseModel):
     resource_type: Literal["Account", "OU"]
-    resource: frozenset[Union[str, Literal["*"]]]
+    resource: frozenset[str | Literal["*"]] # frozenset[Union[str, Literal["*"]]]
     permission_set: frozenset[Union[str, Literal["*"]]]
     approvers: Optional[frozenset[str]]
     approval_is_not_required: bool = False
