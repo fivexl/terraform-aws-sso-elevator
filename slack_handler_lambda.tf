@@ -10,7 +10,7 @@ module "access_requester_slack_handler" {
 
   build_in_docker = var.build_in_docker
   runtime         = "python3.10"
-  docker_image    = "build-python3.10-poetry"
+  docker_image    = "lambda/python:3.10"
   docker_file     = "${path.module}/src/docker/Dockerfile"
   hash_extra      = local.requester_lambda_name
   source_path = [

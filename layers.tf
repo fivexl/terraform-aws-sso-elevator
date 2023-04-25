@@ -10,7 +10,7 @@ module "powertools_pydantic" {
   compatible_runtimes = ["python3.10"]
   build_in_docker     = var.build_in_docker
   runtime             = "python3.10"
-  docker_image        = "build-python3.10-poetry"
+  docker_image        = "lambda/python:3.10"
   docker_file         = "${path.module}/src/docker/Dockerfile"
   source_path = [{
     poetry_install = true
@@ -32,7 +32,7 @@ module "slack_bolt" {
   compatible_runtimes = ["python3.10"]
   build_in_docker     = var.build_in_docker
   runtime             = "python3.10"
-  docker_image        = "build-python3.10-poetry"
+  docker_image        = "lambda/python:3.10"
   docker_file         = "${path.module}/src/docker/Dockerfile"
   source_path = [{
     poetry_install = true
@@ -54,7 +54,7 @@ module "python_boto3" {
   compatible_runtimes = ["python3.10"]
   build_in_docker     = var.build_in_docker
   runtime             = "python3.10"
-  docker_image        = "build-python3.10-poetry"
+  docker_image        = "lambda/python:3.10"
   docker_file         = "${path.module}/src/docker/Dockerfile"
   source_path = [{
     poetry_install = true

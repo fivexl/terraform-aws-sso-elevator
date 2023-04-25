@@ -6,7 +6,7 @@ authors = ["Eremin <haru.eaa@gmail.com>"]
 packages = [{include = "powertools_pydantic"}]
 
 [tool.poetry.dependencies]
-python = "^3.10.6"
+python = "^3.10.10"
 aws-lambda-powertools = {extras = ["parser"], version = "^2.11.0"}
 
 
