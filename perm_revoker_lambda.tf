@@ -209,7 +209,7 @@ resource "aws_iam_role_policy" "eventbridge_policy" {
 resource "aws_lambda_permission" "eventbridge" {
   statement_id  = "AllowEventBridge"
   action        = "lambda:InvokeFunction"
-  function_name = local.revoker_lambda_name
+  function_name = module.access_revoker.lambda_function_name
   principal     = "scheduler.amazonaws.com"
   source_arn    = aws_iam_role.eventbridge_role.arn
 }
