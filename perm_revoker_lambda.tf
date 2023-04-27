@@ -69,9 +69,7 @@ module "access_revoker" {
   cloudwatch_logs_retention_in_days = 365
 
   layers = [
-    module.powertools_pydantic.lambda_layer_arn,
-    module.slack_bolt.lambda_layer_arn,
-    module.python_boto3.lambda_layer_arn,
+    module.sso_elevator_dependencies.lambda_layer_arn,
   ]
 
   tags = var.tags
