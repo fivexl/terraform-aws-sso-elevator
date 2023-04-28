@@ -17,7 +17,7 @@ The module deploys two AWS Lambda functions: access-requester and access-revoker
 For auditing purposes, information about all access grants and revocations is stored in Amazon DynamoDB. Additionally, the access-revoker continuously reconciles the audit log and issues warnings if it detects inconsistencies in permission set assignments.
 
 # Important Considerations!
-When onboarding your organization, be aware that the access-revoker will revoke all user-level permission set assignments in the accounts specified in the configuration. If you specify Accounts: '*' in any rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
+When onboarding your organization, be aware that the access-revoker will revoke all user-level permission set assignments in the accounts specified in the configuration. If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
 
 ## More info
 - [Permission Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
@@ -29,7 +29,26 @@ When onboarding your organization, be aware that the access-revoker will revoke 
 
 Post review [url](https://github.com/fivexl/terraform-aws-sso-elevator/compare/review...main)
 
-# Usage
+# Deployment and Usage
+
+## Note on dependencies
+
+Lambdas are built using Python 3.10 and rely on Poetry for package management and dependency resolution. To run Terraform, both Python 3.10 and Poetry need to be installed on your system. If these tools are not available, you can opt to package the Lambdas using Docker by providing the appropriate flag to the module.
+
+The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
+
+## Module configuration options for Account, PermissionSet, Approvers, and automatic approval
+
+The "Account," "PermissionSet," and "Approvers" options can be either a single string or a list of strings, depending on the desired configuration. The "Account" and "PermissionSet" options can also be set to "*" as a wildcard to match all available accounts or permissions.
+
+At the moment, the "ResourceType" only accepts one value, which is "Account." Therefore, in this context, resources should be referred to as AWS accounts.
+
+To simplify the configuration process, you can use a wildcard (*) for both "Account" and "PermissionSet." This signifies that the configuration applies to all available accounts or/and permission sets, without the need to specify each one individually. Note! If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts, i.e. this way you will tell module to manage all accounts. We recommend stating with one or two accounts and then expanding as you go.
+
+The automatic approval of requests can be enabled in two scenarios. First, if "AllowSelfApproval" is set to true and the person requesting access is also listed in the "Approvers" list, the request will be approved automatically. This can be useful in situations where users with specific roles can grant themselves access without needing approval from another party. Second, if "ApprovalIsNotRequired" is set to true, it indicates that approval is not necessary for access requests, and they will be approved automatically.
+
+## Terraform deployment example
+
 ```terraform
 
 data "aws_ssoadmin_instances" "this" {}
@@ -61,15 +80,6 @@ module "aws_sso_elevator" {
   revoker_post_update_to_slack = true
 
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
-
-  # "Resource", "PermissionSet", "Approvers" can be a string or a list of strings
-  # "Resource" & "PermissionSet" can be set to "*" to match all
-
-  # Request will be approved automatically if:
-  # - "AllowSelfApproval" is set to true, and requester is in "Approvers" list
-  # - "ApprovalIsNotRequired" is set to true
-
-  # If there is only one approver, and "AllowSelfApproval" isn't set to true, nobody will be able to approve the request
 
   config = [
     {
@@ -126,7 +136,7 @@ output "aws_sso_elevator_lambda_function_url" {
 }
 ```
 
-### Slack App creation
+## Slack App creation
 1. Go to https://api.slack.com/
 2. Click `create an app`
 3. Click `From an app manifest`
