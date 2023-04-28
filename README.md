@@ -1,23 +1,35 @@
 [![FivexL](https://releases.fivexl.io/fivexlbannergit.jpg)](https://fivexl.io/)
 
-# Terraform module to temporary assign AWS IAM Identity Center (SSO) Permission sets to a user
+# Terraform module to allow temporary assignment of AWS IAM Identity Center (Successor to AWS Single Sign-On) Permission sets to a user via Slack form
 
-## Why this module?
+# Introduction
+Currently, AWS IAM Identity Center does not support the temporary assignment of permission sets to users. As a result, teams using AWS IAM Identity Center are forced to either create highly restricted permission sets or rely on AWS IAM role chaining. Both approaches have significant drawbacks and result in an overly complex security model. The desired solution is one where AWS operators are granted access only when necessary and for the exact duration needed, with a default state of no access or read-only access.
 
-This module allows you to avoid permanently assigned permission sets and achieve the least privilege access to your AWS accounts. It allows you to assign permission sets to a user for a limited time and revoke them automatically after a specified period of time.
+The terraform-aws-sso-elevator module addresses this issue by allowing the implementation of temporary elevated access to AWS accounts while avoiding permanently assigned permission sets, thereby achieving the principle of least privilege access.
 
-- It will also help you to create more simple permission sets for your users. This will allow you to avoid creating complex IAM policies.
-- Each account, OU, or AWS Organization could have their own list of approvers 
+For more information on temporary elevated access for AWS and the AWS-provided solution, visit [Managing temporary elevated access to your AWS environment](https://aws.amazon.com/blogs/security/managing-temporary-elevated-access-to-your-aws-environment/).
+
+The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a Slack form. We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
+
+# Functionality
+The module deploys two AWS Lambda functions: access-requester and access-revoker. The access-requester handles requests from Slack, creating user-level permission set assignments and an Amazon EventBridge trigger that activates the access-revoker Lambda when it is time to revoke access. The access-revoker revokes user access when triggered by EventBridge and also runs daily to revoke any user-level permission set assignments without an associated EventBridge trigger. Group-level permission sets are not affected.
+
+For auditing purposes, information about all access grants and revocations is stored in Amazon DynamoDB. Additionally, the access-revoker continuously reconciles the audit log and issues warnings if it detects inconsistencies in permission set assignments.
+
+# Important Considerations!
+When onboarding your organization, be aware that the access-revoker will revoke all user-level permission set assignments in the accounts specified in the configuration. If you specify Accounts: '*' in any rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
 
 ## More info
 - [Permission Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
 - [User and groups](https://docs.aws.amazon.com/singlesignon/latest/userguide/users-groups-provisioning.html)
 
+# Development
+
 ## Post review
 
 Post review [url](https://github.com/fivexl/terraform-aws-sso-elevator/compare/review...main)
 
-## Usage
+# Usage
 ```terraform
 
 data "aws_ssoadmin_instances" "this" {}
