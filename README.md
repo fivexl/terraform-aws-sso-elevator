@@ -13,6 +13,10 @@ This module allows you to avoid permanently assigned permission sets and achieve
 - [Permission Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
 - [User and groups](https://docs.aws.amazon.com/singlesignon/latest/userguide/users-groups-provisioning.html)
 
+## Post review
+
+Post review [url](https://github.com/fivexl/terraform-aws-sso-elevator/compare/review...main)
+
 ## Usage
 ```terraform
 
