@@ -9,21 +9,6 @@ log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
 
 
-class Statement(BaseModel):
-    resource_type: Literal["Account", "OU"]
-    resource: frozenset[str | Literal["*"]] # frozenset[Union[str, Literal["*"]]]
-    permission_set: frozenset[Union[str, Literal["*"]]]
-    approvers: Optional[frozenset[str]]
-    approval_is_not_required: bool = False
-    allow_self_approval: bool = False
-
-    class Config:
-        frozen = True
-
-    def affects(self, account_id: str, permission_set_name: str) -> bool:
-        account_match = account_id in self.resource or "*" in self.resource
-        permission_set_match = permission_set_name in self.permission_set or "*" in self.permission_set
-        return account_match and permission_set_match
 
 
 @dataclass
