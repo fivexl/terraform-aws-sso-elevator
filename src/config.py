@@ -1,6 +1,6 @@
 from pydantic import BaseSettings, root_validator
 
-from permissions import Statement
+from access_control import Statement
 
 
 def parse_statement(_dict: dict) -> Statement:
