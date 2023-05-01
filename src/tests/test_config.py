@@ -71,7 +71,7 @@ def valid_config_dict(statements_as_json: bool = True):
 @example(valid_config_dict() | {"post_update_to_slack": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
 @settings(max_examples=50)
 def test_config_load_environment_variables(dict_config: dict):
-    os.environ |= dict_config
+    os.environ = dict_config
     config.Config()  # type: ignore
 
 
