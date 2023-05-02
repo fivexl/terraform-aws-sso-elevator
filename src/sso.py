@@ -16,7 +16,7 @@ import errors
 T = TypeVar("T")
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
-logger = Logger(level=log_level)
+logger = Logger(level=log_level, service="sso", json_default=entities.json_default)
 
 
 @dataclass

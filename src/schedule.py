@@ -6,14 +6,15 @@ import botocore.exceptions
 import jmespath as jp
 from aws_lambda_powertools import Logger
 from mypy_boto3_scheduler import EventBridgeSchedulerClient, type_defs
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
+from entities import BaseModel
 
 import config
 import entities
 import sso
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
-logger = Logger(level=log_level)
+logger = Logger(level=log_level, json_default=entities.json_default)
 
 cfg = config.Config()  # type: ignore
 

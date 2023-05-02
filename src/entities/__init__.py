@@ -1,3 +1,2 @@
-from . import aws
-from . import aws
-from . import slack
+from . import aws, slack
+from .model import BaseModel, json_default
