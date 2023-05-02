@@ -19,16 +19,6 @@ For auditing purposes, information about all access grants and revocations is st
 # Important Considerations!
 When onboarding your organization, be aware that the access-revoker will revoke all user-level permission set assignments in the accounts specified in the configuration. If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
 
-## More info
-- [Permission Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
-- [User and groups](https://docs.aws.amazon.com/singlesignon/latest/userguide/users-groups-provisioning.html)
-
-# Development
-
-## Post review
-
-Post review [url](https://github.com/fivexl/terraform-aws-sso-elevator/compare/review...main)
-
 # Deployment and Usage
 
 ## Note on dependencies
@@ -37,15 +27,34 @@ Lambdas are built using Python 3.10 and rely on Poetry for package management an
 
 The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
 
-## Module configuration options for Account, PermissionSet, Approvers, and automatic approval
+## Module configuration options and automatic approval
 
-The "Account," "PermissionSet," and "Approvers" options can be either a single string or a list of strings, depending on the desired configuration. The "Account" and "PermissionSet" options can also be set to "*" as a wildcard to match all available accounts or permissions.
+### Configuration structure
 
-At the moment, the "ResourceType" only accepts one value, which is "Account." Therefore, in this context, resources should be referred to as AWS accounts.
+The configuration is a list of dictionaries, where each dictionary represents a single configuration rule.
 
-To simplify the configuration process, you can use a wildcard (*) for both "Account" and "PermissionSet." This signifies that the configuration applies to all available accounts or/and permission sets, without the need to specify each one individually. Note! If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts, i.e. this way you will tell module to manage all accounts. We recommend stating with one or two accounts and then expanding as you go.
+Each configuration rule specifies which resource(s) the rule applies to, which permission set(s) are being requested, who the approvers are, and any additional options for approving the request.
 
-The automatic approval of requests can be enabled in two scenarios. First, if "AllowSelfApproval" is set to true and the person requesting access is also listed in the "Approvers" list, the request will be approved automatically. This can be useful in situations where users with specific roles can grant themselves access without needing approval from another party. Second, if "ApprovalIsNotRequired" is set to true, it indicates that approval is not necessary for access requests, and they will be approved automatically.
+The fields in the configuration dictionary are:
+
+- `ResourceType`: The type of resource being requested, e.g. "Account". Currently only "Account" is supported.
+- `Resource`: The resource(s) being requested. This can be a string or a list of strings. If set to "*", the rule matches all resources of the specified ResourceType.
+- `PermissionSet`: The permission set(s) being requested. This can be a string or a list of strings. If set to "*", the rule matches all permission sets for the specified Resource and ResourceType.
+- `Approvers`: The list of approvers for the request. This can be a string or a list of strings.
+- `AllowSelfApproval`: A boolean indicating whether the requester can approve their own request if they are in the Approvers list. Defaults to false.
+- `ApprovalIsNotRequired`: A boolean indicating whether the request can be approved automatically without any approvers. Defaults to false.
+
+### Automatic Approval
+Requests will be approved automatically if either of the following conditions are met:
+
+- AllowSelfApproval is set to true and the requester is in the Approvers list.
+- ApprovalIsNotRequired is set to true.
+
+### Aggregation of Rules
+The approval decision and final list of reviewers will be calculated dynamically based on the aggregate of all rules. If you have a rule that specifies that someone is an approver for all accounts, then that person will be automatically added to all requests, even if there are more detailed rules for specific accounts or permission sets.
+
+### Single Approver
+If there is only one approver and AllowSelfApproval is not set to true, nobody will be able to approve the request.
 
 ## Terraform deployment example
 
@@ -268,3 +277,13 @@ settings:
 |------|-------------|
 | <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
 <!-- END OF PRE-COMMIT-TERRAFORM DOCS HOOK -->
+
+## More info
+- [Permission Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
+- [User and groups](https://docs.aws.amazon.com/singlesignon/latest/userguide/users-groups-provisioning.html)
+
+# Development
+
+## Post review
+
+Post review [url](https://github.com/fivexl/terraform-aws-sso-elevator/compare/review...main)
