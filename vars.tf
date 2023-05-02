@@ -75,6 +75,16 @@ variable "requester_lambda_name_postfix" {
   default = ""
 }
 
+variable "schedule_group_name_postfix" {
+  type    = string
+  default = ""
+}
+
+variable "schedule_role_name_postfix" {
+  type    = string
+  default = ""
+}
+
 variable "revoker_post_update_to_slack" {
   description = "value for the revoker post update to Slack"
   type        = bool

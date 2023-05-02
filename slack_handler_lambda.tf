@@ -33,6 +33,8 @@ module "access_requester_slack_handler" {
     SLACK_SIGNING_SECRET = var.slack_signing_secret
     SLACK_BOT_TOKEN      = var.slack_bot_token
     SLACK_CHANNEL_ID     = var.slack_channel_id
+    SCHEDULE_GROUP_NAME  = local.schedule_group_name
+
 
     DYNAMODB_TABLE_NAME         = module.dynamodb_table_requests.dynamodb_table_id
     SSO_INSTANCE_ARN            = local.sso_instance_arn

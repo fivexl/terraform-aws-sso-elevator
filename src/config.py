@@ -25,6 +25,8 @@ class Config(BaseSettings):
     schedule_policy_arn: str
     revoker_function_arn: str
     revoker_function_name: str
+    schedule_group_name: str 
+
 
     post_update_to_slack: bool = False
     slack_channel_id: str

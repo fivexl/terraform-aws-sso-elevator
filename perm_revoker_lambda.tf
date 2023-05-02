@@ -34,6 +34,7 @@ module "access_revoker" {
     SLACK_SIGNING_SECRET = var.slack_signing_secret
     SLACK_BOT_TOKEN      = var.slack_bot_token
     SLACK_CHANNEL_ID     = var.slack_channel_id
+    SCHEDULE_GROUP_NAME  = local.schedule_group_name
 
     DYNAMODB_TABLE_NAME         = module.dynamodb_table_requests.dynamodb_table_id
     SSO_INSTANCE_ARN            = local.sso_instance_arn
@@ -158,7 +159,7 @@ resource "aws_cloudwatch_event_target" "check_inconsistency" {
 }
 
 resource "aws_iam_role" "eventbridge_role" {
-  name = "EventBridgeRoleForSSOElevator"
+  name = "event-bridge-role-for-sso-elevator${var.schedule_role_name_postfix}"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [

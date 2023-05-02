@@ -15,6 +15,7 @@ import sso
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 logger = Logger(level=log_level)
 
+cfg = config.Config()  # type: ignore
 
 class RevokeEvent(BaseModel):
     schedule_name: str
@@ -30,7 +31,7 @@ def event_bridge_schedule_after(td: timedelta) -> str:
 
 def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str):
     try:
-        client.delete_schedule(GroupName="sso_elevator_revoke",Name=schedule_name)
+        client.delete_schedule(GroupName=cfg.schedule_group_name,Name=schedule_name)
     except botocore.exceptions.ClientError as e:
         if jp.search("Error.Code", e.response) == "ResourceNotFoundException":
             logger.info(f"schedule with name {schedule_name} was not found for deletion")
@@ -41,12 +42,12 @@ def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str):
 def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> list[RevokeEvent]:
     paginator = client.get_paginator("list_schedules")
     scheduled_revoke_events = []
-    for page in paginator.paginate(GroupName= "sso_elevator_revoke"):
+    for page in paginator.paginate(GroupName= cfg.schedule_group_name):
         schedules_names = jp.search("Schedules[*].Name", page)
         for schedule_name in schedules_names:
             if not schedule_name:
                 continue
-            full_schedule = client.get_schedule(GroupName="sso_elevator_revoke",Name=schedule_name)
+            full_schedule = client.get_schedule(GroupName=cfg.schedule_group_name,Name=schedule_name)
             if event := json.loads(jp.search("Target.Input", full_schedule))["revoke_event"]:
                 try:
                     revoke_event = RevokeEvent.parse_raw(event)
@@ -66,7 +67,6 @@ def get_and_delete_schedule_if_already_exist(
             delete_schedule(client, revoke_event.schedule_name)
             logger.info(f"previous schedule:{revoke_event.schedule_name} found and deleted")
 
-
 def schedule_revoke_event(
     schedule_client: EventBridgeSchedulerClient,
     time_delta: timedelta,
@@ -74,14 +74,13 @@ def schedule_revoke_event(
     requester: entities.slack.User,
     user_account_assignment: sso.UserAccountAssignment,
 ):
-    cfg = config.Config()  # type: ignore
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     get_and_delete_schedule_if_already_exist(schedule_client, user_account_assignment)
     try:
         schedule_client.create_schedule(
             FlexibleTimeWindow={"Mode": "OFF"},
             Name=schedule_name,
-            GroupName="sso_elevator_revoke",
+            GroupName=cfg.schedule_group_name,
             ScheduleExpression=event_bridge_schedule_after(time_delta),
             State="ENABLED",
             Target=type_defs.TargetTypeDef(
