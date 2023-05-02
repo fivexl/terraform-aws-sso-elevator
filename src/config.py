@@ -34,6 +34,7 @@ class Config(BaseSettings):
     sso_instance_arn: str
 
     log_level: str = "INFO"
+    slack_app_log_level: str = "INFO"
     statements: frozenset[Statement]
 
     accounts: frozenset[str]
