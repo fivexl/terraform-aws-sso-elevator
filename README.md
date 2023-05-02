@@ -82,52 +82,69 @@ module "aws_sso_elevator" {
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
   config = [
+    # This could be a config for dev/stage account where developers can self-serve
+    # permissions
+    # Allows Bob and Alice to approve requests for all
+    # PermissionSets in accounts dev_account_id and stage_account_id as
+    # well as approve its own requests
+    # You have to specify at AllowSelfApproval: true or specify two approvers
+    # so you do not lock out approver
     {
       "ResourceType" : "Account",
-      "Resource" : "account_id",
+      "Resource" : ["dev_account_id", "stage_account_id"],
       "PermissionSet" : "*",
-      "Approvers" : "email@gmail.com",
+      "Approvers" : ["bob@corp.com", "alice@corp.com"],
       "AllowSelfApproval" : true,
     },
+    # This could be an option for a financial person
+    # allows self approval for Billing PermissionSet
+    # for account_id for user finances@corp.com
     {
       "ResourceType" : "Account",
       "Resource" : "account_id",
       "PermissionSet" : "Billing",
-      "Approvers" : "email@gmail.com",
+      "Approvers" : "finances@corp.com",
       "AllowSelfApproval" : true,
     },
-    {
-      "ResourceType" : "Account",
-      "Resource" : ["account_id", "account_id"],
-      "PermissionSet" : "ReadOnlyPlus",
-      "Approvers" : "email@gmail.com",
-    },
+    # Your typical CTO - can approve all accounts and all permissions
+    # as well as his/hers own requests to avoid lock out
+    # Careful withi Resource * since it will cause revocation of all
+    # non-module-created user-level permission set assigments in all
+    # accounts, add this one later when you are done with single account
+    # testing
     {
       "ResourceType" : "Account",
       "Resource" : "*",
-      "PermissionSet" : "ReadOnlyPlus",
-      "ApprovalIsNotRequired" : true,
+      "PermissionSet" : "*",
+      "Approvers" : "cto@corp.com",
+      "AllowSelfApproval" : true,
     },
+    # Read only config for production accounts so developers
+    # can check prod when needed
+    {
+      "ResourceType" : "Account",
+      "Resource" : ["prod_account_id", "prod_account_id2"],
+      "PermissionSet" : "ReadOnly",
+      "AllowSelfApproval" : true,
+    },
+    # Prod access
+    {
+      "ResourceType" : "Account",
+      "Resource" : ["prod_account_id", "prod_account_id2"],
+      "PermissionSet" : "AdministratorAccess",
+      "Approvers" : ["manager@corp.com", "ciso@corp.com"],
+      "ApprovalIsNotRequired" : false,
+      "AllowSelfApproval" : false,
+    },
+    # example of list being used for permissions sets
     {
       "ResourceType" : "Account",
       "Resource" : "account_id",
       "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
-      "Approvers" : ["email@gmail.com"], 
+      "Approvers" : ["ciso@corp.com"], 
       "AllowSelfApproval" : true,
     },
-    {
 
-      # No rescuer hath the rescuer.
-      # No Lord hath the champion,
-      # no mother and no father,
-      # only nothingness above.
-
-      "ResourceType" : "Account",
-      "Resource" : "*",
-      "PermissionSet" : "*",
-      "Approvers" : "org_wide_approver@gmail.com",
-      "AllowSelfApproval" : true,
-    },
   ]
 }
 
