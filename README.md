@@ -2,6 +2,30 @@
 
 # Terraform module to allow temporary assignment of AWS IAM Identity Center (Successor to AWS Single Sign-On) Permission sets to a user via Slack form
 
+- [Introduction](#introduction)
+- [Functionality](#functionality)
+- [Important Considerations](#important-considerations)
+- [Deployment and Usage](#deployment-and-usage)
+  * [Note on dependencies](#note-on-dependencies)
+  * [Module configuration options and automatic approval](#module-configuration-options-and-automatic-approval)
+    + [Configuration structure](#configuration-structure)
+    + [Automatic Approval](#automatic-approval)
+    + [Aggregation of Rules](#aggregation-of-rules)
+    + [Single Approver](#single-approver)
+  * [Terraform deployment example](#terraform-deployment-example)
+  * [Slack App creation](#slack-app-creation)
+- [Terraform docs](#terraform-docs)
+  * [Requirements](#requirements)
+  * [Providers](#providers)
+  * [Modules](#modules)
+  * [Resources](#resources)
+  * [Inputs](#inputs)
+  * [Outputs](#outputs)
+  * [More info](#more-info)
+- [Development](#development)
+  * [Post review](#post-review)
+
+
 # Introduction
 Currently, AWS IAM Identity Center does not support the temporary assignment of permission sets to users. As a result, teams using AWS IAM Identity Center are forced to either create highly restricted permission sets or rely on AWS IAM role chaining. Both approaches have significant drawbacks and result in an overly complex security model. The desired solution is one where AWS operators are granted access only when necessary and for the exact duration needed, with a default state of no access or read-only access.
 
@@ -16,7 +40,7 @@ The module deploys two AWS Lambda functions: access-requester and access-revoker
 
 For auditing purposes, information about all access grants and revocations is stored in Amazon DynamoDB. Additionally, the access-revoker continuously reconciles the audit log and issues warnings if it detects inconsistencies in permission set assignments.
 
-# Important Considerations!
+# Important Considerations
 When onboarding your organization, be aware that the access-revoker will revoke all user-level permission set assignments in the accounts specified in the configuration. If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
 
 # Deployment and Usage
@@ -202,6 +226,8 @@ settings:
 9. Copy `Signing Secret` # for `slack_signing_secret` module input
 10. Copy `Bot User OAuth Token` # for `slack_bot_token` module input
 
+# Terraform docs
+
 <!-- BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK -->
 ## Requirements
 
@@ -286,4 +312,5 @@ settings:
 
 ## Post review
 
-Post review [url](https://github.com/fivexl/terraform-aws-sso-elevator/compare/review...main)
+- Post review [url](https://github.com/fivexl/terraform-aws-sso-elevator/compare/review...main)
+- ToC generated with [this](https://ecotrust-canada.github.io/markdown-toc/)
