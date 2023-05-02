@@ -1,22 +1,20 @@
 from __future__ import annotations
 
 import datetime
-import os
 import time
 from dataclasses import dataclass
 from typing import Callable, Generator, Optional, TypeVar
 
-from aws_lambda_powertools import Logger
 from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_sso_admin import SSOAdminClient, type_defs
 
+import config
 import entities
 import errors
 
 T = TypeVar("T")
 
-log_level = os.environ.get("LOG_LEVEL", "DEBUG")
-logger = Logger(level=log_level, service="sso", json_default=entities.json_default)
+logger = config.get_logger(service="sso")
 
 
 @dataclass
@@ -138,10 +136,12 @@ def create_account_assignment_and_wait_for_result(client: SSOAdminClient, assign
             return describe_account_assignment_creation_status(client, assignment, response.request_id)
 
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
-    logger.info(f"Account assignment creation result: {result}")
     if AccountAssignmentStatus.is_failed(result):
-        logger.error(f"Failed to create account assignment: {result}")
-        raise errors.FailedToUpdatePermissions("Failed to create account assignment.")
+        e = errors.AccountAssignmentError("Failed to create account assignment.")
+        logger.exception(e, extra={"status": result})
+        raise e
+
+    logger.info("Account assignment creation finished successfully.")
     return result
 
 
@@ -155,7 +155,12 @@ def delete_account_assignment_and_wait_for_result(client: SSOAdminClient, assign
             return describe_account_assignment_deletion_status(client, assignment, response.request_id)
 
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
-    logger.info(f"Account assignment deletion result: {result}")
+
+    if AccountAssignmentStatus.is_failed(result):
+        e = errors.AccountAssignmentError("Failed to delete account assignment.")
+        logger.exception(e, extra={"status": result})
+        raise e
+    logger.info("Account assignment deletion finished successfully.")
     return result
 
 
@@ -243,6 +248,7 @@ def list_user_account_assignments(
                     if aa.principal_type == "USER":
                         account_assignments.append(aa)
     return account_assignments
+
 
 def parse_permission_set(td: type_defs.DescribePermissionSetResponseTypeDef) -> entities.aws.PermissionSet:
     ps = td.get("PermissionSet", {})

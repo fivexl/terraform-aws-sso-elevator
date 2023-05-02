@@ -1,8 +1,5 @@
-import os
-
 import boto3
 import slack_sdk
-from aws_lambda_powertools import Logger
 from pydantic import ValidationError
 
 import config
@@ -13,8 +10,8 @@ import schedule
 import slack
 import sso
 
-log_level = os.environ.get("LOG_LEVEL", "DEBUG")
-logger = Logger(level=log_level)
+cfg = config.Config()  # type: ignore
+logger = config.get_logger(service="revoker")
 
 org_client = boto3.client("organizations")  # type: ignore
 sso_client = boto3.client("sso-admin")  # type: ignore
@@ -23,15 +20,14 @@ scheduler_client = boto3.client("scheduler")  # type: ignore
 
 
 def lambda_handler(event, __):
-    cfg = config.Config()  # type: ignore
-    logger.info(f"Got event: {event}")
+    logger.info("Got event", extra={"event": event})
 
     if event["action"] == "event_bridge_revoke":
         try:
             revoke_event = schedule.RevokeEvent.parse_raw(event["revoke_event"])
             return handle_scheduled_account_assignment_deletion(revoke_event, sso_client, cfg)
         except ValidationError as e:
-            logger.error(f"Failed to parse event: {event}. Error: {e}")
+            logger.exception(e, extra={"event": event})
             raise e
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
@@ -70,11 +66,14 @@ def lambda_handler(event, __):
         for account_assignment in account_assignments:
             if account_assignment not in account_assignments_from_events:
                 account = organizations.describe_account(org_client, account_assignment.account_id)
-                logger.warning(f"Found an inconsistent account assignment in :{account.name}. Account assignment: {account_assignment}")
+                logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
                 slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
                 slack_client.chat_postMessage(
                     channel=cfg.slack_channel_id,
-                    text=f"Found an inconsistent account assignment in {account.name}. There is no schedule for its revocation. Please check the revoker logs for more details.",
+                    text=(
+                        f"Found an inconsistent account assignment in {account.name}."
+                        "There is no schedule for its revocation. Please check the revoker logs for more details."
+                    ),
                 )
 
     if event["action"] == "sso_elevator_scheduled_revocation":
@@ -89,7 +88,10 @@ def lambda_handler(event, __):
         ]
         for account_assignment in account_assignments:
             if account_assignment in account_assignments_from_events:
-                logger.info(f"{account_assignment} already scheduled for revocation. Skipping")
+                logger.info(
+                    "Account assignment already scheduled for revocation. Skipping.",
+                    extra={"account_assignment": account_assignment},
+                )
                 continue
             else:
                 handle_account_assignment_deletion(
@@ -104,7 +106,7 @@ def lambda_handler(event, __):
 
 
 def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssignment, cfg: config.Config):
-    logger.info(f"Got account assignment for deletion: {account_assignment}")
+    logger.info("Handling account assignment deletion", extra={"account_assignment": account_assignment})
 
     assignment_status = sso.delete_account_assignment_and_wait_for_result(
         sso_client,
@@ -117,8 +119,7 @@ def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssign
         account_assignment.permission_set_arn,
     )
 
-    response = dynamodb.log_operation(
-        logger,
+    dynamodb.log_operation(
         cfg.dynamodb_table_name,
         dynamodb.AuditEntry(
             role_name=permission_set.name,
@@ -132,7 +133,6 @@ def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssign
             operation_type="revoke",
         ),
     )
-    logger.debug(response)
 
     if cfg.post_update_to_slack:
         account = organizations.describe_account(org_client, account_assignment.account_id)
@@ -167,8 +167,8 @@ def slack_notify_user_on_revoke(
 
 
 def handle_scheduled_account_assignment_deletion(revoke_event: schedule.RevokeEvent, sso_client, cfg: config.Config):
+    logger.info("Handling scheduled account assignment deletion", extra={"revoke_event": revoke_event})
     account_assignment = revoke_event.user_account_assignment
-    logger.info(f"Got account assignment for deletion: {account_assignment}")
     assignment_status = sso.delete_account_assignment_and_wait_for_result(
         sso_client,
         account_assignment,
@@ -180,7 +180,6 @@ def handle_scheduled_account_assignment_deletion(revoke_event: schedule.RevokeEv
     )
 
     dynamodb.log_operation(
-        logger,
         cfg.dynamodb_table_name,
         dynamodb.AuditEntry(
             role_name=permission_set.name,

@@ -1,7 +1,7 @@
 class ConfigurationError(Exception):
     ...
 
-class FailedToUpdatePermissions(ConfigurationError):
+class AccountAssignmentError(ConfigurationError):
     ...
 
 class NotFound(ConfigurationError):

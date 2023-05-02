@@ -1,5 +1,9 @@
+from typing import Optional
+
+from aws_lambda_powertools import Logger
 from pydantic import BaseSettings, root_validator
 
+import entities
 from access_control import Statement
 
 
@@ -25,8 +29,7 @@ class Config(BaseSettings):
     schedule_policy_arn: str
     revoker_function_arn: str
     revoker_function_name: str
-    schedule_group_name: str 
-
+    schedule_group_name: str
 
     post_update_to_slack: bool = False
     slack_channel_id: str
@@ -55,3 +58,14 @@ class Config(BaseSettings):
             if statement.resource_type == "Account":
                 accounts.update(statement.resource)
         return values | {"accounts": accounts, "permission_sets": permission_sets, "statements": frozenset(statements)}
+
+
+def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Logger:
+    kwargs = {
+        "json_default": entities.json_default,
+        "level": level or get_config().log_level,
+    }
+    if service:
+        kwargs["service"] = service
+    return Logger(**kwargs)
+
