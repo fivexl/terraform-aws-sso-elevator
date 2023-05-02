@@ -132,21 +132,12 @@ data "aws_iam_policy_document" "slack_handler" {
       "iam:CreateRole",
       "iam:GetRole",
       "iam:ListAttachedRolePolicies",
-      "iam:ListRolePolicies"
-    ]
-    resources = ["arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"]
-  }
-  statement {
-    effect = "Allow"
-    actions = [
-      "iam:PutRolePolicy",
-      "iam:AttachRolePolicy",
-      "iam:CreateRole",
-      "iam:GetRole",
-      "iam:ListAttachedRolePolicies",
       "iam:ListRolePolicies",
     ]
-    resources = ["arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"]
+    resources = [
+      "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+      "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"
+    ]
   }
   statement {
     effect = "Allow"
