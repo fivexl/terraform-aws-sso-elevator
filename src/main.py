@@ -29,7 +29,8 @@ identitystore_client = session.client("identitystore")  # type: ignore
 schedule_client = session.client("scheduler")  # type: ignore
 
 cfg = config.Config()  # type: ignore
-app = App(process_before_response=True, logger=logger)
+slack_app_logger = Logger(service="slack", level=cfg.slack_app_log_level)
+app = App(process_before_response=True, logger=slack_app_logger)
 
 
 def lambda_handler(event, context):
