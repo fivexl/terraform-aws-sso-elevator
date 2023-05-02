@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from .model import BaseModel
+
 
 class User(BaseModel):
     id: str

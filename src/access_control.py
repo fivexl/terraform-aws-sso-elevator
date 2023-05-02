@@ -1,6 +1,7 @@
-from dataclasses import dataclass
 from enum import Enum
+from typing import FrozenSet
 
+from entities import BaseModel
 from statement import Statement, get_affected_statements
 
 
@@ -12,21 +13,19 @@ class DecisionReason(Enum):
     NoApprovers = "NoApprovers"
 
 
-
-@dataclass
-class AccessRequestDecision:
+class AccessRequestDecision(BaseModel):
     grant: bool
     reason: DecisionReason
-    based_on_statements: frozenset[Statement]
-    approvers: frozenset[str] = frozenset()
+    based_on_statements: FrozenSet[Statement]
+    approvers: FrozenSet[str] = frozenset()
 
 
 def make_decision_on_access_request(
-    statements: frozenset[Statement],
+    statements: FrozenSet[Statement],
     permission_set_name: str,
     account_id: str,
     requester_email: str,
-) -> AccessRequestDecision:  
+) -> AccessRequestDecision:
     affected_statements = get_affected_statements(statements, account_id, permission_set_name)
     decision_based_on_statements: set[Statement] = set()
     potential_approvers = set()
@@ -48,7 +47,7 @@ def make_decision_on_access_request(
         decision_based_on_statements.add(statement)
         potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
 
-    if len(decision_based_on_statements) == 0: # sourcery skip
+    if len(decision_based_on_statements) == 0:  # sourcery skip
         return AccessRequestDecision(
             grant=False,
             reason=DecisionReason.NoStatements,
@@ -69,10 +68,11 @@ def make_decision_on_access_request(
         based_on_statements=frozenset(decision_based_on_statements),
     )
 
-@dataclass
-class ApproveRequestDecision:
+
+class ApproveRequestDecision(BaseModel):
     permit: bool
-    based_on_statements: frozenset[Statement]
+    based_on_statements: FrozenSet[Statement]
+
 
 def make_decision_on_approve_request(
     statements: frozenset[Statement],

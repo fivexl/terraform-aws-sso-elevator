@@ -1,7 +1,9 @@
 from enum import Enum
-from typing import Union
+from typing import FrozenSet, Union
 
-from pydantic import BaseModel, ConstrainedStr, EmailStr, Field
+from pydantic import ConstrainedStr, EmailStr, Field
+
+from entities import BaseModel
 
 
 class ResourceType(str, Enum):
@@ -26,19 +28,16 @@ class WildCard(ConstrainedStr):
 
 
 class BaseStatement(BaseModel):
-    permission_set: frozenset[Union[PermissionSetName, WildCard]]
+    permission_set: FrozenSet[Union[PermissionSetName, WildCard]]
 
     allow_self_approval: bool = False
     approval_is_not_required: bool = False
-    approvers: frozenset[EmailStr] = Field(default_factory=frozenset)
-
-    class Config:
-        frozen = True
+    approvers: FrozenSet[EmailStr] = Field(default_factory=frozenset)
 
 
 class Statement(BaseStatement):
     resource_type: ResourceType = Field(ResourceType.Account, const=True)
-    resource: frozenset[Union[AWSAccountId, WildCard]]
+    resource: FrozenSet[Union[AWSAccountId, WildCard]]
 
     def affects(self, account_id: str, permission_set_name: str) -> bool:
         return (account_id in self.resource or "*" in self.resource) and (
@@ -46,10 +45,10 @@ class Statement(BaseStatement):
         )
 
 
-def get_affected_statements(statements: frozenset[Statement], account_id: str, permission_set_name: str) -> frozenset[Statement]:
+def get_affected_statements(statements: FrozenSet[Statement], account_id: str, permission_set_name: str) -> FrozenSet[Statement]:
     return frozenset(statement for statement in statements if statement.affects(account_id, permission_set_name))
 
 
 class OUStatement(BaseStatement):
     resource_type: ResourceType = Field(ResourceType.OU, const=True)
-    resource: frozenset[Union[AWSOUName, WildCard]]
+    resource: FrozenSet[Union[AWSOUName, WildCard]]

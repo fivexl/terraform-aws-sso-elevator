@@ -7,7 +7,7 @@ from typing import Literal, Optional, TypeVar, Union
 import jmespath as jp
 import slack_sdk.errors
 from aws_lambda_powertools import Logger
-from pydantic import BaseModel, root_validator
+from pydantic import root_validator
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import (
     ActionsBlock,
@@ -26,9 +26,10 @@ from slack_sdk.models.blocks import (
 from slack_sdk.models.views import View
 
 import entities
-
+from entities import BaseModel
+import entities
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
-logger = Logger(level=log_level)
+logger = Logger(level=log_level, json_default=entities.json_default)
 
 
 class RequestForAccess(BaseModel):

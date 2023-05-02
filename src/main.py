@@ -9,18 +9,18 @@ from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
 
+import access_control
 import config
 import dynamodb
 import entities
 import errors
 import organizations
-import access_control
 import schedule
 import slack
 import sso
 
 log_level = os.environ.get("LOG_LEVEL", "DEBUG")
-logger = Logger(level=log_level)
+logger = Logger(level=log_level, json_default=entities.json_default)
 
 session = boto3.Session()
 org_client = session.client("organizations")  # type: ignore
@@ -29,7 +29,7 @@ identitystore_client = session.client("identitystore")  # type: ignore
 schedule_client = session.client("scheduler")  # type: ignore
 
 cfg = config.Config()  # type: ignore
-slack_app_logger = Logger(service="slack", level=cfg.slack_app_log_level)
+slack_app_logger = Logger(service="slack", level=cfg.slack_app_log_level, json_default=entities.json_default)
 app = App(process_before_response=True, logger=slack_app_logger)
 
 
