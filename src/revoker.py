@@ -150,16 +150,16 @@ def slack_notify_user_on_revoke(
         sso_instance.identity_store_id,
         account_assignment.user_principal_id,
     )
-    user_slack_id = None
+    user_name = None
 
     for email in aws_user_emails:
         try:
             slack_user = slack.get_user_by_email(slack_client, email)
-            user_slack_id = slack_user.id
+            user_name = slack_user.real_name
         except Exception:
             continue
 
-    mention = f"<@{user_slack_id}>" if user_slack_id is not None else aws_user_emails[0]
+    mention = f"{user_name}" if user_name is not None else aws_user_emails[0]
     slack_client.chat_postMessage(
         channel=cfg.slack_channel_id,
         text=f"Revoked role {permission_set.name} for user {mention} in account {account.name}",
