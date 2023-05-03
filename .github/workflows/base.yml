@@ -68,7 +68,7 @@ jobs:
       TF_CLI_ARGS_apply: "-compact-warnings"     
     services:
       localstack-service:
-        image: localstack/localstack
+        image: localstack/localstack:latest
         ports:
           - "4566:4566"
           - "4510-4559:4510-4559"
