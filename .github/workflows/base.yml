@@ -106,8 +106,7 @@ jobs:
       - name: terraform drop unsupported by localstack
         run: |
           rm sheduler_group.tf
-          rm layers.tf
-
+          
       - name: terraform init
         run: tflocal init -backend-config=./tests/localstack-backend.tf
         
