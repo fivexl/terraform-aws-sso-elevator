@@ -69,3 +69,11 @@ def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Lo
         kwargs["service"] = service
     return Logger(**kwargs)
 
+
+_config: Optional[Config] = None
+
+def get_config() -> Config:
+    global _config
+    if _config is None:
+        _config = Config()  # type: ignore
+    return _config
