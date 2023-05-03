@@ -69,7 +69,7 @@ def valid_config_dict(statements_as_json: bool = True):
 
 @given(config_dict())
 @example(valid_config_dict())
-@example({}).xfail(raises=KeyError, reason="Empty dict is not a valid config")
+@example({}).xfail(raises=ValidationError, reason="Empty dict is not a valid config")
 @example(valid_config_dict() | {"post_update_to_slack": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
 @settings(max_examples=50)
 def test_config_load_environment_variables(dict_config: dict):
