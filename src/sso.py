@@ -11,6 +11,7 @@ from mypy_boto3_sso_admin import SSOAdminClient, type_defs
 import config
 import entities
 import errors
+from entities.aws import PermissionSet
 
 T = TypeVar("T")
 
@@ -302,3 +303,11 @@ def get_user_emails(client: IdentityStoreClient, identity_store_id: str, user_id
         UserId=user_id,
     )
     return [email["Value"] for email in user["Emails"] if "Value" in email]
+
+
+def get_permission_sets_from_config(client: SSOAdminClient, cfg: config.Config) -> list[PermissionSet]:
+    if "*" in cfg.permission_sets:
+        permission_sets = list(list_permission_sets(client, cfg.sso_instance_arn))
+    else:
+        permission_sets = [ps for ps in list_permission_sets(client, cfg.sso_instance_arn) if ps.name in cfg.permission_sets]
+    return permission_sets

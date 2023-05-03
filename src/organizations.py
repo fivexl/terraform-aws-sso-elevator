@@ -1,5 +1,6 @@
 from mypy_boto3_organizations import OrganizationsClient, type_defs
 
+import config
 from entities.aws import Account
 
 
@@ -15,3 +16,11 @@ def list_accounts(client: OrganizationsClient) -> list[Account]:
 def describe_account(client: OrganizationsClient, account_id: str) -> Account:
     account = client.describe_account(AccountId=account_id)["Account"]
     return parse_account(account)
+
+
+def get_accounts_from_config(client: OrganizationsClient, cfg: config.Config) -> list[Account]:
+    if "*" in cfg.accounts:
+        accounts = list_accounts(client)
+    else:
+        accounts = [ac for ac in list_accounts(client) if ac.id in cfg.accounts]
+    return accounts

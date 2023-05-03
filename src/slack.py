@@ -1,7 +1,7 @@
 import datetime
 import time
 from datetime import timedelta
-from typing import Literal, Optional, TypeVar, Union
+from typing import Optional, TypeVar, Union
 
 import jmespath as jp
 import slack_sdk.errors
@@ -224,16 +224,16 @@ def build_approval_request_message_blocks(
                 block_id="buttons",
                 elements=[
                     ButtonElement(
-                        action_id="approve",
+                        action_id=entities.ApproverAction.Approve.value,
                         text=PlainTextObject(text="Approve"),
                         style="primary",
-                        value="approve",
+                        value=entities.ApproverAction.Approve.value,
                     ),
                     ButtonElement(
-                        action_id="deny",
+                        action_id=entities.ApproverAction.Deny.value,
                         text=PlainTextObject(text="Deny"),
                         style="danger",
-                        value="deny",
+                        value=entities.ApproverAction.Deny.value,
                     ),
                 ],
             )
@@ -241,17 +241,17 @@ def build_approval_request_message_blocks(
     return blocks
 
 
-def button_click_info_block(action: Literal["approve", "deny"], approver_slack_id: str) -> SectionBlock:
+def button_click_info_block(action: entities.ApproverAction, approver_slack_id: str) -> SectionBlock:
     return SectionBlock(
         block_id="footer",
         text=MarkdownTextObject(
-            text=f"<@{approver_slack_id}> pressed {action} button",
+            text=f"<@{approver_slack_id}> pressed {action.value} button",
         ),
     )
 
 
 class ButtonClickedPayload(BaseModel):
-    action: Literal["approve", "deny"]
+    action: entities.ApproverAction
     approver_slack_id: str
     thread_ts: str
     channel_id: str
