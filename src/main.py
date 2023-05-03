@@ -199,6 +199,7 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
             show_buttons=bool(decision.approvers),
         ),
         channel=cfg.slack_channel_id,
+        text=f"Request for access to {account.name} account from {requester.real_name}",
     )
     match decision.reason:
         case access_control.DecisionReason.ApprovalNotRequired:
