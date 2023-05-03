@@ -1,6 +1,13 @@
 import pytest
 
-from access_control import AccessRequestDecision, ApproveRequestDecision, DecisionReason, make_decision_on_approve_request, make_decision_on_access_request
+import entities
+from access_control import (
+    AccessRequestDecision,
+    ApproveRequestDecision,
+    DecisionReason,
+    make_decision_on_access_request,
+    make_decision_on_approve_request,
+)
 from statement import Statement
 
 
@@ -232,6 +239,7 @@ def test_make_access_decision(test_case):
     [
         {  # approver is approver
             "in": {
+                "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
                     [
                         Statement.parse_obj(
@@ -250,6 +258,7 @@ def test_make_access_decision(test_case):
                 "approver_email": "approver@example.com",
             },
             "out": ApproveRequestDecision(
+                grant=True,
                 permit=True,
                 based_on_statements=frozenset(
                     [
@@ -267,6 +276,7 @@ def test_make_access_decision(test_case):
         },
         {  # approver is approver but self approval is not allowed
             "in": {
+                "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
                     [
                         Statement.parse_obj(
@@ -286,6 +296,7 @@ def test_make_access_decision(test_case):
                 "approver_email": "approver@example.com",
             },
             "out": ApproveRequestDecision(
+                grant=False,
                 permit=False,
                 based_on_statements=frozenset(
                     [
@@ -303,6 +314,7 @@ def test_make_access_decision(test_case):
         },
         {  # approver is not an approver
             "in": {
+                "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
                     [
                         Statement.parse_obj(
@@ -321,6 +333,7 @@ def test_make_access_decision(test_case):
                 "approver_email": "notapprover@example.com",
             },
             "out": ApproveRequestDecision(
+                grant=False,
                 permit=False,
                 based_on_statements=frozenset(),
             ),

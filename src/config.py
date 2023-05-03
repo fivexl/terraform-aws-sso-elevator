@@ -1,10 +1,11 @@
+import os
 from typing import Optional
 
 from aws_lambda_powertools import Logger
 from pydantic import BaseSettings, root_validator
 
 import entities
-from access_control import Statement
+from statement import Statement
 
 
 def parse_statement(_dict: dict) -> Statement:
@@ -50,7 +51,7 @@ class Config(BaseSettings):
 
     @root_validator(pre=True)
     def get_accounts_and_permission_sets(cls, values: dict):
-        statements = {parse_statement(st) for st in values["statements"]}  # type: ignore
+        statements = {parse_statement(st) for st in values.get("statements", [])}  # type: ignore
         permission_sets = set()
         accounts = set()
         for statement in statements:
@@ -63,7 +64,7 @@ class Config(BaseSettings):
 def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Logger:
     kwargs = {
         "json_default": entities.json_default,
-        "level": level or get_config().log_level,
+        "level": level or os.environ.get("LOG_LEVEL", "INFO"),
     }
     if service:
         kwargs["service"] = service
@@ -71,6 +72,7 @@ def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Lo
 
 
 _config: Optional[Config] = None
+
 
 def get_config() -> Config:
     global _config
