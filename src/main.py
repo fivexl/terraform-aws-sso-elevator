@@ -26,7 +26,7 @@ sso_client = session.client("sso-admin")  # type: ignore
 identitystore_client = session.client("identitystore")  # type: ignore
 schedule_client = session.client("scheduler")  # type: ignore
 
-cfg = config.Config()  # type: ignore
+cfg = config.get_config()
 app = App(
     process_before_response=True,
     logger=config.get_logger(service="slack", level=cfg.slack_app_log_level),

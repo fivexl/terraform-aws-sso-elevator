@@ -12,7 +12,7 @@ import sso
 from entities import BaseModel
 
 logger = config.get_logger(service="schedule")
-cfg = config.Config()  # type: ignore
+cfg = config.get_config()
 
 
 class RevokeEvent(BaseModel):
@@ -50,8 +50,8 @@ def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> list[Revo
             if event := json.loads(jp.search("Target.Input", full_schedule))["revoke_event"]:
                 try:
                     revoke_event = RevokeEvent.parse_raw(event)
-                except ValidationError:
-                    logger.error("Failed to parse schedule for revoke event", extra={"schedule_name": schedule_name, "event": event})
+                except ValidationError as e:
+                    logger.error("Failed to parse schedule for revoke event", extra={"schedule_name": schedule_name, "event": event, "error": e})
                     continue
                 scheduled_revoke_events.append(revoke_event)
     return scheduled_revoke_events

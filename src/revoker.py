@@ -10,7 +10,7 @@ import schedule
 import slack
 import sso
 
-cfg = config.Config()  # type: ignore
+cfg = config.get_config()
 logger = config.get_logger(service="revoker")
 
 org_client = boto3.client("organizations")  # type: ignore

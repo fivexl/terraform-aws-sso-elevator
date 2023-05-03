@@ -107,7 +107,9 @@ class RequestForAccessView:
             element=StaticSelectElement(
                 action_id=cls.ACCOUNT_ACTION_ID,
                 placeholder=PlainTextObject(text="Select account"),
-                options=[Option(text=PlainTextObject(text=f"{account.id} - {account.name}"), value=account.id) for account in sorted_accounts],
+                options=[
+                    Option(text=PlainTextObject(text=f"{account.id} - {account.name}"), value=account.id) for account in sorted_accounts
+                ],
             ),
         )
 
@@ -121,7 +123,8 @@ class RequestForAccessView:
                 action_id=cls.PERMISSION_SET_ACTION_ID,
                 placeholder=PlainTextObject(text="Select permission set"),
                 options=[
-                    Option(text=PlainTextObject(text=permission_set.name), value=permission_set.name) for permission_set in sorted_permission_sets
+                    Option(text=PlainTextObject(text=permission_set.name), value=permission_set.name)
+                    for permission_set in sorted_permission_sets
                 ],
             ),
         )
