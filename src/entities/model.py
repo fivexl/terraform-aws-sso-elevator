@@ -1,4 +1,5 @@
 import dataclasses
+import enum
 from typing import FrozenSet
 
 from pydantic import BaseModel as PydanticBaseModel
@@ -27,4 +28,6 @@ def json_default(o: object):
         return o.dict()
     elif dataclasses.is_dataclass(o):
         return dataclasses.asdict(o)
+    elif isinstance(o, enum.Enum):
+        return o.value
     return str(o)
