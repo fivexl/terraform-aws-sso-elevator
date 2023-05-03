@@ -100,18 +100,20 @@ class RequestForAccessView:
 
     @classmethod
     def build_select_account_input_block(cls, accounts: list[entities.aws.Account]) -> InputBlock:
+        sorted_accounts = sorted(accounts, key=lambda account: account.name)
         return InputBlock(
             block_id=cls.ACCOUNT_BLOCK_ID,
             label=PlainTextObject(text="Select account"),
             element=StaticSelectElement(
                 action_id=cls.ACCOUNT_ACTION_ID,
                 placeholder=PlainTextObject(text="Select account"),
-                options=[Option(text=PlainTextObject(text=f"{account.id} - {account.name}"), value=account.id) for account in accounts],
+                options=[Option(text=PlainTextObject(text=f"{account.id} - {account.name}"), value=account.id) for account in sorted_accounts],
             ),
         )
 
     @classmethod
     def build_select_permission_set_input_block(cls, permission_sets: list[entities.aws.PermissionSet]) -> InputBlock:
+        sorted_permission_sets = sorted(permission_sets, key=lambda permission_set: permission_set.name)
         return InputBlock(
             block_id=cls.PERMISSION_SET_BLOCK_ID,
             label=PlainTextObject(text="Select permission set"),
@@ -119,7 +121,7 @@ class RequestForAccessView:
                 action_id=cls.PERMISSION_SET_ACTION_ID,
                 placeholder=PlainTextObject(text="Select permission set"),
                 options=[
-                    Option(text=PlainTextObject(text=permission_set.name), value=permission_set.name) for permission_set in permission_sets
+                    Option(text=PlainTextObject(text=permission_set.name), value=permission_set.name) for permission_set in sorted_permission_sets
                 ],
             ),
         )
