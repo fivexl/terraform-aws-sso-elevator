@@ -1,5 +1,3 @@
-import copy
-import datetime
 import functools
 
 import boto3
@@ -10,21 +8,17 @@ from slack_sdk import WebClient
 
 import access_control
 import config
-import dynamodb
 import entities
 import errors
 import organizations
-import schedule
 import slack
 import sso
 
 logger = config.get_logger(service="main")
 
 session = boto3.Session()
-org_client = session.client("organizations")  # type: ignore
-sso_client = session.client("sso-admin")  # type: ignore
-identitystore_client = session.client("identitystore")  # type: ignore
-schedule_client = session.client("scheduler")  # type: ignore
+org_client = session.client("organizations")
+sso_client = session.client("sso-admin")
 
 cfg = config.get_config()
 app = App(
@@ -80,16 +74,9 @@ def show_initial_form(client: WebClient, body: dict, ack: Ack):
 def load_select_options(client: WebClient, body: dict):
     logger.info("Loading select options for view (accounts and permission sets)")
     logger.debug("Request body", extra={"body": body})
-    if "*" in cfg.accounts:
-        accounts = organizations.list_accounts(org_client)
-    else:
-        accounts = [ac for ac in organizations.list_accounts(org_client) if ac.id in cfg.accounts]
 
-    if "*" in cfg.permission_sets:
-        permission_sets = list(sso.list_permission_sets(sso_client, cfg.sso_instance_arn))
-    else:
-        permission_sets = [ps for ps in sso.list_permission_sets(sso_client, cfg.sso_instance_arn) if ps.name in cfg.permission_sets]
-
+    accounts = organizations.get_accounts_from_config(client=org_client, cfg=cfg)
+    permission_sets = sso.get_permission_sets_from_config(client=sso_client, cfg=cfg)
     trigger_id = body["trigger_id"]
 
     view = slack.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
@@ -111,7 +98,8 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
     requester = slack.get_user(client, id=payload.request.requester_slack_id)
 
     decision = access_control.make_decision_on_approve_request(
-        cfg.statements,
+        action=payload.action,
+        statements=cfg.statements,
         account_id=payload.request.account_id,
         permission_set_name=payload.request.permission_set_name,
         approver_email=approver.email,
@@ -122,28 +110,20 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
     if not decision.permit:
         return client.chat_postMessage(
             channel=payload.channel_id,
-            text=f"<@{approver.id}> you can not {payload.action} this request",
+            text=f"<@{approver.id}> you can not {payload.action.value} this request",
             thread_ts=payload.thread_ts,
         )
 
-    blocks = copy.deepcopy(payload.message["blocks"])
-    blocks = slack.remove_blocks(blocks, block_ids=["buttons"])
+    blocks = slack.remove_blocks(payload.message["blocks"], block_ids=["buttons"])
     blocks.append(slack.button_click_info_block(payload.action, approver.id))
     client.chat_update(
         channel=payload.channel_id,
         ts=payload.thread_ts,
         blocks=blocks,
     )
-    if payload.action == "deny":
-        return
 
-    client.chat_postMessage(
-        channel=payload.channel_id,
-        text="Updating permissions as requested...",
-        thread_ts=payload.thread_ts,
-    )
-
-    handle_account_assignment(
+    access_control.execute_decision(
+        decision=decision,
         permission_set_name=payload.request.permission_set_name,
         account_id=payload.request.account_id,
         permission_duration=payload.request.permission_duration,
@@ -154,7 +134,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
 
     return client.chat_postMessage(
         channel=payload.channel_id,
-        text=f"Permissions granted to <@{requester.id}>",
+        text=f"Permissions granted to <@{requester.id}>." if decision.permit else f"<@{requester.id}> your request was denied.",
         thread_ts=payload.thread_ts,
     )
 
@@ -163,19 +143,19 @@ def acknowledge_request(ack: Ack):
     ack()
 
 
-app.action("approve")(
+app.action(entities.ApproverAction.Approve.value)(
     ack=acknowledge_request,
     lazy=[handle_button_click],
 )
 
-app.action("deny")(
+app.action(entities.ApproverAction.Deny.value)(
     ack=acknowledge_request,
     lazy=[handle_button_click],
 )
 
 
 @handle_errors
-def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient, logger: Logger, context: BoltContext):
+def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient, context: BoltContext):
     logger.info("Handling request for access submittion")
     request = slack.RequestForAccessView.parse(body)
     logger.info("View submitted", extra={"view": request})
@@ -216,10 +196,9 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
             text = "There are no statements for this Permission Set & Account."
 
     client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
-    if not decision.grant:
-        return
 
-    handle_account_assignment(
+    access_control.execute_decision(
+        decision=decision,
         permission_set_name=request.permission_set_name,
         account_id=request.account_id,
         permission_duration=request.permission_duration,
@@ -227,11 +206,13 @@ def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient
         requester=requester,
         reason=request.reason,
     )
-    return client.chat_postMessage(
-        channel=cfg.slack_channel_id,
-        text=f"Permissions granted to <@{requester.id}>",
-        thread_ts=slack_response["ts"],
-    )
+
+    if decision.grant:
+        return client.chat_postMessage(
+            channel=cfg.slack_channel_id,
+            text=f"Permissions granted to <@{requester.id}>",
+            thread_ts=slack_response["ts"],
+        )
 
 
 app.view(slack.RequestForAccessView.CALLBACK_ID)(
@@ -243,56 +224,3 @@ app.view(slack.RequestForAccessView.CALLBACK_ID)(
 @app.action("timepickeraction")
 def handle_timepickeraction(ack):
     ack()
-
-
-def handle_account_assignment(
-    permission_set_name: str,
-    account_id: str,
-    permission_duration: datetime.timedelta,
-    approver: entities.slack.User,
-    requester: entities.slack.User,
-    reason: str,
-):
-    logger.info("Handling account assignment")
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
-    user_principal_id = sso.get_user_principal_id_by_email(identitystore_client, sso_instance.identity_store_id, requester.email)
-    account_assignment = sso.UserAccountAssignment(
-        instance_arn=sso_instance.arn,
-        account_id=account_id,
-        permission_set_arn=permission_set.arn,
-        user_principal_id=user_principal_id,
-    )
-    logger.info("Creating account assignment", extra={"account_assignment": account_assignment})
-    account_assignment_status = sso.create_account_assignment_and_wait_for_result(
-        sso_client,
-        account_assignment,
-    )
-
-    dynamodb.log_operation(
-        table_name=cfg.dynamodb_table_name,
-        audit_entry=dynamodb.AuditEntry(
-            account_id=account_id,
-            role_name=permission_set.name,
-            reason=reason,
-            requester_slack_id=requester.id,
-            requester_email=requester.email,
-            approver_slack_id=approver.id,
-            approver_email=approver.email,
-            request_id=account_assignment_status.request_id,
-            operation_type="grant",
-        ),
-    )
-
-    schedule.schedule_revoke_event(
-        time_delta=permission_duration,
-        schedule_client=schedule_client,
-        approver=approver,
-        requester=requester,
-        user_account_assignment=sso.UserAccountAssignment(
-            instance_arn=sso_instance.arn,
-            account_id=account_id,
-            permission_set_arn=permission_set.arn,
-            user_principal_id=user_principal_id,
-        ),
-    )
