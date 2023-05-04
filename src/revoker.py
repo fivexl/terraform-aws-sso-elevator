@@ -17,6 +17,7 @@ org_client = boto3.client("organizations")  # type: ignore
 sso_client = boto3.client("sso-admin")  # type: ignore
 identitystore_client = boto3.client("identitystore")  # type: ignore
 scheduler_client = boto3.client("scheduler")  # type: ignore
+slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
 
 
 def lambda_handler(event, __):
@@ -67,11 +68,11 @@ def lambda_handler(event, __):
             if account_assignment not in account_assignments_from_events:
                 account = organizations.describe_account(org_client, account_assignment.account_id)
                 logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
-                slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
+                mention = create_slack_mention_by_principal_id(account_assignment)
                 slack_client.chat_postMessage(
                     channel=cfg.slack_channel_id,
                     text=(
-                        f"Found an inconsistent account assignment in {account.name}."
+                        f"Found an inconsistent account assignment in {account.name}-{account.id} for {mention}. "
                         "There is no schedule for its revocation. Please check the revoker logs for more details."
                     ),
                 )
@@ -140,26 +141,12 @@ def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssign
 
 
 def slack_notify_user_on_revoke(
-    cfg, account_assignment: sso.UserAccountAssignment, permission_set: entities.aws.PermissionSet, account: entities.aws.Account
+    cfg,
+    account_assignment: sso.AccountAssignment | sso.UserAccountAssignment,
+    permission_set: entities.aws.PermissionSet,
+    account: entities.aws.Account,
 ):
-    slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-
-    aws_user_emails = sso.get_user_emails(
-        identitystore_client,
-        sso_instance.identity_store_id,
-        account_assignment.user_principal_id,
-    )
-    user_name = None
-
-    for email in aws_user_emails:
-        try:
-            slack_user = slack.get_user_by_email(slack_client, email)
-            user_name = slack_user.real_name
-        except Exception:
-            continue
-
-    mention = f"{user_name}" if user_name is not None else aws_user_emails[0]
+    mention = create_slack_mention_by_principal_id(account_assignment)
     slack_client.chat_postMessage(
         channel=cfg.slack_channel_id,
         text=f"Revoked role {permission_set.name} for user {mention} in account {account.name}",
@@ -168,22 +155,22 @@ def slack_notify_user_on_revoke(
 
 def handle_scheduled_account_assignment_deletion(revoke_event: schedule.RevokeEvent, sso_client, cfg: config.Config):
     logger.info("Handling scheduled account assignment deletion", extra={"revoke_event": revoke_event})
-    account_assignment = revoke_event.user_account_assignment
+    user_account_assignment = revoke_event.user_account_assignment
     assignment_status = sso.delete_account_assignment_and_wait_for_result(
         sso_client,
-        account_assignment,
+        user_account_assignment,
     )
     permission_set = sso.describe_permission_set(
         sso_client,
-        sso_instance_arn=account_assignment.instance_arn,
-        permission_set_arn=account_assignment.permission_set_arn,
+        sso_instance_arn=user_account_assignment.instance_arn,
+        permission_set_arn=user_account_assignment.permission_set_arn,
     )
 
     dynamodb.log_operation(
         cfg.dynamodb_table_name,
         dynamodb.AuditEntry(
             role_name=permission_set.name,
-            account_id=account_assignment.account_id,
+            account_id=user_account_assignment.account_id,
             reason="scheduled_revocation",
             requester_slack_id=revoke_event.requester.id,
             requester_email=revoke_event.requester.email,
@@ -196,5 +183,24 @@ def handle_scheduled_account_assignment_deletion(revoke_event: schedule.RevokeEv
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
 
     if cfg.post_update_to_slack:
-        account = organizations.describe_account(org_client, account_assignment.account_id)
-        slack_notify_user_on_revoke(cfg, account_assignment, permission_set, account)
+        account = organizations.describe_account(org_client, user_account_assignment.account_id)
+        slack_notify_user_on_revoke(cfg, user_account_assignment, permission_set, account)
+
+
+def create_slack_mention_by_principal_id(account_assignment: sso.AccountAssignment | sso.UserAccountAssignment):
+    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    aws_user_emails = sso.get_user_emails(
+        identitystore_client,
+        sso_instance.identity_store_id,
+        account_assignment.principal_id if isinstance(account_assignment, sso.AccountAssignment) else account_assignment.user_principal_id,
+    )
+    user_name = None
+
+    for email in aws_user_emails:
+        try:
+            slack_user = slack.get_user_by_email(slack_client, email)
+            user_name = slack_user.real_name
+        except Exception:
+            continue
+
+    return f"{user_name}" if user_name is not None else aws_user_emails[0]
