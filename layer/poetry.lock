@@ -25,18 +25,18 @@ validation = ["fastjsonschema (>=2.14.5,<3.0.0)"]
 
 [[package]]
 name = "boto3"
-version = "1.26.121"
+version = "1.26.126"
 description = "The AWS SDK for Python"
 category = "main"
 optional = false
 python-versions = ">= 3.7"
 files = [
-    {file = "boto3-1.26.121-py3-none-any.whl", hash = "sha256:827342a6b94b18daed937b0743f43958d1d3b9d5423ec995c19ae74b82cd54bc"},
-    {file = "boto3-1.26.121.tar.gz", hash = "sha256:f87d694c351eba1dfd19b5bef5892a1047e7adb09c57c2c00049de209a8ab55d"},
+    {file = "boto3-1.26.126-py3-none-any.whl", hash = "sha256:a0a049d16dabf559bd86d4622a985549154c6918f779f373fb7588bd3cf1272d"},
+    {file = "boto3-1.26.126.tar.gz", hash = "sha256:ea7dc518399106ee300b867596c92d2b7b498ee7721db935915cdd53339a9f92"},
 ]
 
 [package.dependencies]
-botocore = ">=1.29.121,<1.30.0"
+botocore = ">=1.29.126,<1.30.0"
 jmespath = ">=0.7.1,<2.0.0"
 s3transfer = ">=0.6.0,<0.7.0"
 
@@ -45,14 +45,14 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "botocore"
-version = "1.29.121"
+version = "1.29.126"
 description = "Low-level, data-driven core of boto 3."
 category = "main"
 optional = false
 python-versions = ">= 3.7"
 files = [
-    {file = "botocore-1.29.121-py3-none-any.whl", hash = "sha256:4030b2cde8c8c7b58c657c27e5e4ec0edb7a0cab84e31b0fe752dddee2735d68"},
-    {file = "botocore-1.29.121.tar.gz", hash = "sha256:955c1dd244b6286d9e17dc525d1459a2a74a1c4e519f35006c72f184fbce0760"},
+    {file = "botocore-1.29.126-py3-none-any.whl", hash = "sha256:a2c5cedb26b364386d02f9ed0a3492da6a322a82e539e54600fbc7190a49660d"},
+    {file = "botocore-1.29.126.tar.gz", hash = "sha256:e7549da5d69b37e8e1f63fcc18fbb9b23f05db8dcb4118019497eee4dad57ff7"},
 ]
 
 [package.dependencies]
@@ -197,14 +197,14 @@ testing-without-asyncio = ["Flask-Sockets (>=0.2,<1)", "Jinja2 (==3.0.3)", "Werk
 
 [[package]]
 name = "slack-sdk"
-version = "3.21.2"
+version = "3.21.3"
 description = "The Slack API Platform SDK for Python"
 category = "main"
 optional = false
 python-versions = ">=3.6.0"
 files = [
-    {file = "slack_sdk-3.21.2-py2.py3-none-any.whl", hash = "sha256:fd04ca4aae3071fbd6b284b11ef39b6c72d687b1a2118f40dbcba9921da07d62"},
-    {file = "slack_sdk-3.21.2.tar.gz", hash = "sha256:cb74aa764ae32cd61971baa745d8bdf50ffea4ad06e4a0a2ab1e879ae6918496"},
+    {file = "slack_sdk-3.21.3-py2.py3-none-any.whl", hash = "sha256:de3c07b92479940b61cd68c566f49fbc9974c8f38f661d26244078f3903bb9cc"},
+    {file = "slack_sdk-3.21.3.tar.gz", hash = "sha256:20829bdc1a423ec93dac903470975ebf3bc76fd3fd91a4dadc0eeffc940ecb0c"},
 ]
 
 [package.extras]
