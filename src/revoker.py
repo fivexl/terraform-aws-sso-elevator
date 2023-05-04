@@ -132,6 +132,7 @@ def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssign
             approver_slack_id="NA",
             approver_email="NA",
             operation_type="revoke",
+            permission_duration="NA",
         ),
     )
 
@@ -178,6 +179,7 @@ def handle_scheduled_account_assignment_deletion(revoke_event: schedule.RevokeEv
             approver_slack_id=revoke_event.approver.id,
             approver_email=revoke_event.approver.email,
             operation_type="revoke",
+            permission_duration=revoke_event.permission_duration,
         ),
     )
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)

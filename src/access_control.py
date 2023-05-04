@@ -169,11 +169,12 @@ def execute_decision(
             approver_email=approver.email,
             request_id=account_assignment_status.request_id,
             operation_type="grant",
+            permission_duration=permission_duration,
         ),
     )
 
     schedule.schedule_revoke_event(
-        time_delta=permission_duration,
+        permission_duration=permission_duration,
         schedule_client=schedule_client,
         approver=approver,
         requester=requester,

@@ -20,6 +20,7 @@ class RevokeEvent(BaseModel):
     approver: entities.slack.User
     requester: entities.slack.User
     user_account_assignment: sso.UserAccountAssignment
+    permission_duration: timedelta
 
 
 def event_bridge_schedule_after(td: timedelta) -> str:
@@ -51,7 +52,9 @@ def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> list[Revo
                 try:
                     revoke_event = RevokeEvent.parse_raw(event)
                 except ValidationError as e:
-                    logger.error("Failed to parse schedule for revoke event", extra={"schedule_name": schedule_name, "event": event, "error": e})
+                    logger.error(
+                        "Failed to parse schedule for revoke event", extra={"schedule_name": schedule_name, "event": event, "error": e}
+                    )
                     continue
                 scheduled_revoke_events.append(revoke_event)
     return scheduled_revoke_events
@@ -69,7 +72,7 @@ def get_and_delete_schedule_if_already_exist(
 
 def schedule_revoke_event(
     schedule_client: EventBridgeSchedulerClient,
-    time_delta: timedelta,
+    permission_duration: timedelta,
     approver: entities.slack.User,
     requester: entities.slack.User,
     user_account_assignment: sso.UserAccountAssignment,
@@ -82,13 +85,14 @@ def schedule_revoke_event(
         approver=approver,
         requester=requester,
         user_account_assignment=user_account_assignment,
+        permission_duration=permission_duration,
     )
     logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
     schedule_client.create_schedule(
         FlexibleTimeWindow={"Mode": "OFF"},
         Name=schedule_name,
         GroupName=cfg.schedule_group_name,
-        ScheduleExpression=event_bridge_schedule_after(time_delta),
+        ScheduleExpression=event_bridge_schedule_after(permission_duration),
         State="ENABLED",
         Target=type_defs.TargetTypeDef(
             Arn=cfg.revoker_function_arn,
