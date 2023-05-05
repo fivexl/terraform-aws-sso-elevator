@@ -31,13 +31,13 @@ variable "slack_channel_id" {
 }
 
 variable "schedule_expression" {
-  description = "value for the schedule expression"
+  description = "recovation schedule expression (will revoke all user-level assignments unknown to the Elevator)"
   type        = string
   default     = "cron(0 23 * * ? *)"
 }
 
 variable "schedule_expression_for_check_on_inconsistency" {
-  description = "value for the schedule expression for checking on inconsistency"
+  description = "how often revoker should check for inconsistency (warn if found unknown user-level assignments)"
   type        = string
   default     = "rate(2 hours)"
 }
