@@ -1,3 +1,5 @@
+import datetime
+
 import pytest
 
 import entities
@@ -5,16 +7,29 @@ from access_control import (
     AccessRequestDecision,
     ApproveRequestDecision,
     DecisionReason,
+    execute_decision,
     make_decision_on_access_request,
     make_decision_on_approve_request,
 )
 from statement import Statement
 
 
-@pytest.mark.parametrize(
-    "test_case",
-    [
-        {  # approval is not required
+@pytest.fixture
+def execute_decision_info():
+    return {
+        "permission_set_name": "1233321",
+        "account_id": "1233321",
+        "permission_duration": datetime.timedelta(days=1),
+        "approver": entities.slack.User(email="email@email", id="123", real_name="123"),
+        "requester": entities.slack.User(email="email@email", id="123", real_name="123"),
+        "reason": "",
+    }
+
+
+@pytest.fixture(
+    params=[
+        {
+            "description": "Grant access if approval is not required",
             "in": {
                 "statements": frozenset(
                     [
@@ -49,7 +64,8 @@ from statement import Statement
                 ),
             ),
         },
-        {  # requester is not an approver
+        {
+            "description": "Request requires approval if requester is not an approver",
             "in": {
                 "statements": frozenset(
                     [
@@ -85,7 +101,84 @@ from statement import Statement
                 ),
             ),
         },
-        {  # self approval is allowed and requester is approver
+        {
+            "description": "requester is not an approver and self approval is allowed - RequiresApproval",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["one@example.com"],
+                                "allow_self_approval": True,
+                            }
+                        )
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "second@example.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.RequiresApproval,
+                approvers=frozenset(["one@example.com"]),
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["one@example.com"],
+                                "allow_self_approval": True,
+                            }
+                        )
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "requester is an approver, but self approval is not allowed, and there is other approver - RequiresApproval",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["approver@example.com", "approver2@example.com"],
+                            }
+                        )
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "approver@example.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.RequiresApproval,
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["approver@example.com", "approver2@example.com"],
+                            }
+                        )
+                    ]
+                ),
+                approvers=frozenset({"approver2@example.com"}),
+            ),
+        },
+        {
+            "description": "self approval is allowed and requester is approver -SelfApproval",
             "in": {
                 "statements": frozenset(
                     [
@@ -122,7 +215,8 @@ from statement import Statement
                 ),
             ),
         },
-        {  # no approvers
+        {
+            "description": "no approvers - NoApprovers",
             "in": {
                 "statements": frozenset(
                     [
@@ -157,7 +251,8 @@ from statement import Statement
                 ),
             ),
         },
-        {  #  requester is an approver, but self approval is not allowed
+        {
+            "description": "requester is an approver, but self approval is not allowed - NoApprovers",
             "in": {
                 "statements": frozenset(
                     [
@@ -192,7 +287,71 @@ from statement import Statement
                 ),
             ),
         },
-        {  # requester is an approver, self approval is not allowed, but there are other approvers
+        {
+            "description": "no approvers but self approval is allowed - NoApprovers",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "allow_self_approval": True,
+                            }
+                        )
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "example@example.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.NoApprovers,
+                based_on_statements=frozenset(
+                    frozenset(
+                        [
+                            Statement.parse_obj(
+                                {
+                                    "resource_type": "Account",
+                                    "resource": ["*"],
+                                    "permission_set": ["*"],
+                                    "allow_self_approval": True,
+                                }
+                            )
+                        ]
+                    )
+                ),
+            ),
+        },
+        {
+            "description": "statement is not affected by the access request - NoStatements",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["ReadOnlyAccess"],
+                                "approvers": ["approver@example.com"],
+                            }
+                        ),
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "requester@example.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.NoStatements,
+                based_on_statements=frozenset([]),
+            ),
+        },
+        {
+            "description": "multiple statements affecting the access request, some require approval and some don't",
             "in": {
                 "statements": frozenset(
                     [
@@ -201,9 +360,61 @@ from statement import Statement
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
                                 "permission_set": ["AdministratorAccess"],
-                                "approvers": ["requester@example.com", "approver@example.com"],
+                                "approvers": ["approver@example.com"],
                             }
-                        )
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approval_is_not_required": True,
+                            }
+                        ),
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "approver@example.com",
+            },
+            "out": AccessRequestDecision(
+                grant=True,
+                reason=DecisionReason.ApprovalNotRequired,
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approval_is_not_required": True,
+                            }
+                        ),
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "multiple statements affecting the access request, with different sets of approvers.",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["approver1@example.com"],
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["approver2@example.com"],
+                            }
+                        ),
                     ]
                 ),
                 "account_id": "111111111111",
@@ -213,7 +424,7 @@ from statement import Statement
             "out": AccessRequestDecision(
                 grant=False,
                 reason=DecisionReason.RequiresApproval,
-                approvers=frozenset(["approver@example.com"]),
+                approvers=frozenset(["approver1@example.com", "approver2@example.com"]),
                 based_on_statements=frozenset(
                     [
                         Statement.parse_obj(
@@ -221,23 +432,32 @@ from statement import Statement
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
                                 "permission_set": ["AdministratorAccess"],
-                                "approvers": ["requester@example.com", "approver@example.com"],
+                                "approvers": ["approver1@example.com"],
                             }
-                        )
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["approver2@example.com"],
+                            }
+                        ),
                     ]
                 ),
             ),
         },
     ],
+    ids=lambda t: t["description"],
 )
-def test_make_access_decision(test_case):
-    assert make_decision_on_access_request(**test_case["in"]) == test_case["out"]
+def test_cases_for_access_request_decision(request):
+    return request.param
 
 
-@pytest.mark.parametrize(
-    "test_case",
-    [
-        {  # approver is approver
+@pytest.fixture(
+    params=[
+        {
+            "description": "approver is approver",
             "in": {
                 "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
@@ -274,7 +494,8 @@ def test_make_access_decision(test_case):
                 ),
             ),
         },
-        {  # approver is approver but self approval is not allowed
+        {
+            "description": "approver is approver but self approval is not allowed",
             "in": {
                 "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
@@ -312,7 +533,8 @@ def test_make_access_decision(test_case):
                 ),
             ),
         },
-        {  # approver is not an approver
+        {
+            "description": "approver is not an approver",
             "in": {
                 "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
@@ -339,6 +561,51 @@ def test_make_access_decision(test_case):
             ),
         },
     ],
+    ids=lambda t: t["description"],
 )
-def test_can_approve_request(test_case):
-    assert make_decision_on_approve_request(**test_case["in"]) == test_case["out"]
+def test_cases_for_approve_request_decision(request):
+    return request.param
+
+
+def test_make_decision_on_access_request(test_cases_for_access_request_decision):
+    assert make_decision_on_access_request(**test_cases_for_access_request_decision["in"]) == test_cases_for_access_request_decision["out"]
+
+
+def test_make_decision_on_approve_request(test_cases_for_approve_request_decision):
+    assert (
+        make_decision_on_approve_request(**test_cases_for_approve_request_decision["in"]) == test_cases_for_approve_request_decision["out"]
+    )
+
+
+def test_execute_access_request_decision(
+    test_cases_for_access_request_decision,
+    execute_decision_info,
+):
+    if test_cases_for_access_request_decision["out"].grant is not True:
+        assert execute_decision(decision=test_cases_for_access_request_decision["out"], **execute_decision_info) is False
+
+
+def test_execute_approve_request_decision(
+    test_cases_for_approve_request_decision,
+    execute_decision_info,
+):
+    if test_cases_for_approve_request_decision["out"].grant is not True:
+        assert execute_decision(decision=test_cases_for_approve_request_decision["out"], **execute_decision_info) is False
+
+
+def test_make_and_excute_access_request_decision(
+    test_cases_for_access_request_decision,
+    execute_decision_info,
+):
+    decision = make_decision_on_access_request(**test_cases_for_access_request_decision["in"])
+    if decision.grant is not True:
+        assert execute_decision(decision=decision, **execute_decision_info) is False
+
+
+def test_make_and_excute_approve_request_decision(
+    test_cases_for_approve_request_decision,
+    execute_decision_info,
+):
+    decision = make_decision_on_approve_request(**test_cases_for_approve_request_decision["in"])
+    if decision.grant is not True:
+        assert execute_decision(decision=decision, **execute_decision_info) is False
