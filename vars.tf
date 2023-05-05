@@ -94,5 +94,5 @@ variable "revoker_post_update_to_slack" {
 variable "build_in_docker" {
   description = "Whether to build the lambda in a docker container or using local python (poetry)"
   type        = bool
-  default     = false
+  default     = true
 }
