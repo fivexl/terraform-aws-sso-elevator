@@ -138,7 +138,7 @@ def execute_decision(
     logger.info("Executing decision")
     if not decision.grant:
         logger.info("Access request denied")
-        return
+        return False  # Temporary solution for testing
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
@@ -185,3 +185,4 @@ def execute_decision(
             user_principal_id=user_principal_id,
         ),
     )
+    return True  # Temporary solution for testing
