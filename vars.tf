@@ -86,9 +86,9 @@ variable "schedule_role_name_postfix" {
 }
 
 variable "revoker_post_update_to_slack" {
-  description = "value for the revoker post update to Slack"
+  description = "Should revoker send a confirmation of the revocation to Slack?"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "build_in_docker" {
