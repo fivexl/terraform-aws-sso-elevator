@@ -38,8 +38,9 @@ def config_dict(statements: SearchStrategy = strategies.jsonstr(st.lists(strateg
             "schedule_group_name": strategies.json_safe_text,
             "slack_channel_id": strategies.json_safe_text,
             "slack_bot_token": strategies.json_safe_text,
-            "dynamodb_table_name": strategies.json_safe_text,
             "sso_instance_arn": strategies.json_safe_text,
+            "s3_bucket_for_audit_entry_name": strategies.json_safe_text,
+            "s3_bucket_prefix_for_partitions": strategies.json_safe_text,
             "log_level": st.one_of(st.just("INFO"), st.just("DEBUG"), st.just("WARNING"), st.just("ERROR"), st.just("CRITICAL")),
             "post_update_to_slack": strategies.str_bool,
             "statements": statements,
@@ -59,11 +60,13 @@ def valid_config_dict(statements_as_json: bool = True):
         "schedule_group_name": "x",
         "slack_channel_id": "x",
         "slack_bot_token": "x",
-        "dynamodb_table_name": "x",
         "sso_instance_arn": "x",
         "log_level": "INFO",
         "post_update_to_slack": "False",
         "statements": statements,
+        "s3_bucket_for_audit_entry_name": "x",
+        "s3_bucket_prefix_for_partitions": "x",
+
     }
 
 
