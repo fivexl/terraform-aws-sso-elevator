@@ -108,13 +108,20 @@ variable "build_in_docker" {
 
 variable "s3_bucket_for_audit_entry_name" {
   description = "Name of the S3 bucket"
+  type        = string
   default     = "sso-elevator-logs"
 }
 
 variable "s3_bucket_prefix_for_partitions" {
   description = "The prefix for the S3 bucket partitions"
+  type        = string
   default     = "logs"
 }
 
+variable "name_of_existing_s3_bucket" {
+  description = "Pass it if you want to use an existing bucket"
+  type        = string
+  default     = ""
+}
 
 
