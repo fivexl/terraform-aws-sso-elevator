@@ -111,6 +111,12 @@ module "aws_sso_elevator" {
   schedule_expression_for_check_on_inconsistency = "rate(1 hour)" 
   build_in_docker = true
   revoker_post_update_to_slack = true
+  # If you want to use your own S3 bucket for audit_entry logs
+  # then you can specify it name there:
+  name_of_existing_s3_bucket = "your-s3-bucket-name"
+  # If you dont pass name_of_existing_s3_bucket then module will create new bucket
+  s3_bucket_for_audit_entry_name   = "sso-elevator-logs"
+  s3_bucket_prefix_for_partitions  = "logs"
 
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
@@ -142,7 +148,7 @@ module "aws_sso_elevator" {
     # Your typical CTO - can approve all accounts and all permissions
     # as well as his/hers own requests to avoid lock out
     # Careful withi Resource * since it will cause revocation of all
-    # non-module-created user-level permission set assigments in all
+    # non-module-created user-level permission set assignments in all
     # accounts, add this one later when you are done with single account
     # testing
     {
@@ -243,7 +249,7 @@ settings:
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 4.64 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 4.66.1 |
 
 ## Modules
 
@@ -251,10 +257,8 @@ settings:
 |------|--------|---------|
 | <a name="module_access_requester_slack_handler"></a> [access\_requester\_slack\_handler](#module\_access\_requester\_slack\_handler) | terraform-aws-modules/lambda/aws | 4.16.0 |
 | <a name="module_access_revoker"></a> [access\_revoker](#module\_access\_revoker) | terraform-aws-modules/lambda/aws | 4.16.0 |
-| <a name="module_dynamodb_table_requests"></a> [dynamodb\_table\_requests](#module\_dynamodb\_table\_requests) | terraform-aws-modules/dynamodb-table/aws | 1.2.2 |
-| <a name="module_powertools_pydantic"></a> [powertools\_pydantic](#module\_powertools\_pydantic) | terraform-aws-modules/lambda/aws | 4.16.0 |
-| <a name="module_python_boto3"></a> [python\_boto3](#module\_python\_boto3) | terraform-aws-modules/lambda/aws | 4.16.0 |
-| <a name="module_slack_bolt"></a> [slack\_bolt](#module\_slack\_bolt) | terraform-aws-modules/lambda/aws | 4.16.0 |
+| <a name="module_sso_elevator_bucket"></a> [sso\_elevator\_bucket](#module\_sso\_elevator\_bucket) | terraform-aws-modules/s3-bucket/aws | 3.6.0 |
+| <a name="module_sso_elevator_dependencies"></a> [sso\_elevator\_dependencies](#module\_sso\_elevator\_dependencies) | terraform-aws-modules/lambda/aws | 4.16.0 |
 
 ## Resources
 
@@ -284,13 +288,19 @@ settings:
 | <a name="input_build_in_docker"></a> [build\_in\_docker](#input\_build\_in\_docker) | Whether to build the lambda in a docker container or using local python (poetry) | `bool` | `true` | no |
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | n/a | yes |
 | <a name="input_log_level"></a> [log\_level](#input\_log\_level) | value for the log level | `string` | `"INFO"` | no |
+| <a name="input_name_of_existing_s3_bucket"></a> [name\_of\_existing\_s3\_bucket](#input\_name\_of\_existing\_s3\_bucket) | Pass it if you want to use an existing bucket | `string` | `""` | no |
 | <a name="input_requester_lambda_name"></a> [requester\_lambda\_name](#input\_requester\_lambda\_name) | value for the requester lambda name | `string` | `"access-requester"` | no |
-| <a name="input_requester_lambda_name_postfix"></a> [requester\_lambda\_name\_postfix](#input\_requester\_lambda\_name\_postfix) | n/a | `string` | `""` | no |
+| <a name="input_requester_lambda_name_postfix"></a> [requester\_lambda\_name\_postfix](#input\_requester\_lambda\_name\_postfix) | For dev purposes | `string` | `""` | no |
 | <a name="input_revoker_lambda_name"></a> [revoker\_lambda\_name](#input\_revoker\_lambda\_name) | value for the revoker lambda name | `string` | `"access-revoker"` | no |
-| <a name="input_revoker_lambda_name_postfix"></a> [revoker\_lambda\_name\_postfix](#input\_revoker\_lambda\_name\_postfix) | n/a | `string` | `""` | no |
+| <a name="input_revoker_lambda_name_postfix"></a> [revoker\_lambda\_name\_postfix](#input\_revoker\_lambda\_name\_postfix) | For dev purposes | `string` | `""` | no |
 | <a name="input_revoker_post_update_to_slack"></a> [revoker\_post\_update\_to\_slack](#input\_revoker\_post\_update\_to\_slack) | Should revoker send a confirmation of the revocation to Slack? | `bool` | `true` | no |
+| <a name="input_s3_bucket_for_audit_entry_name"></a> [s3\_bucket\_for\_audit\_entry\_name](#input\_s3\_bucket\_for\_audit\_entry\_name) | Name of the S3 bucket | `string` | `"sso-elevator-logs"` | no |
+| <a name="input_s3_bucket_name_postfix"></a> [s3\_bucket\_name\_postfix](#input\_s3\_bucket\_name\_postfix) | For dev purposes | `string` | `""` | no |
+| <a name="input_s3_bucket_prefix_for_partitions"></a> [s3\_bucket\_prefix\_for\_partitions](#input\_s3\_bucket\_prefix\_for\_partitions) | The prefix for the S3 bucket partitions | `string` | `"logs"` | no |
 | <a name="input_schedule_expression"></a> [schedule\_expression](#input\_schedule\_expression) | recovation schedule expression (will revoke all user-level assignments unknown to the Elevator) | `string` | `"cron(0 23 * * ? *)"` | no |
 | <a name="input_schedule_expression_for_check_on_inconsistency"></a> [schedule\_expression\_for\_check\_on\_inconsistency](#input\_schedule\_expression\_for\_check\_on\_inconsistency) | how often revoker should check for inconsistency (warn if found unknown user-level assignments) | `string` | `"rate(2 hours)"` | no |
+| <a name="input_schedule_group_name_postfix"></a> [schedule\_group\_name\_postfix](#input\_schedule\_group\_name\_postfix) | For dev purposes | `string` | `""` | no |
+| <a name="input_schedule_role_name_postfix"></a> [schedule\_role\_name\_postfix](#input\_schedule\_role\_name\_postfix) | For dev purposes | `string` | `""` | no |
 | <a name="input_slack_bot_token"></a> [slack\_bot\_token](#input\_slack\_bot\_token) | value for the Slack bot token | `string` | n/a | yes |
 | <a name="input_slack_channel_id"></a> [slack\_channel\_id](#input\_slack\_channel\_id) | value for the Slack channel ID | `string` | n/a | yes |
 | <a name="input_slack_signing_secret"></a> [slack\_signing\_secret](#input\_slack\_signing\_secret) | value for the Slack signing secret | `string` | n/a | yes |

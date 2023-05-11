@@ -39,6 +39,9 @@ module "aws_sso_elevator" {
 
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
+  s3_bucket_for_audit_entry_name  = "sso-elevator-logs"
+  s3_bucket_prefix_for_partitions = "logs"
+
   # "Resource", "PermissionSet", "Approvers" can be a string or a list of strings
   # "Resource" & "PermissionSet" can be set to "*" to match all
 
