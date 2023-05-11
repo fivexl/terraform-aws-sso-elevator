@@ -36,7 +36,6 @@ module "access_requester_slack_handler" {
     SCHEDULE_GROUP_NAME  = local.schedule_group_name
 
 
-    DYNAMODB_TABLE_NAME             = module.dynamodb_table_requests.dynamodb_table_id
     SSO_INSTANCE_ARN                = local.sso_instance_arn
     STATEMENTS                      = jsonencode(var.config)
     POWERTOOLS_LOGGER_LOG_EVENT     = true
@@ -128,12 +127,6 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:sso:::permissionSet/*/*",
       "arn:aws:sso:::account/*"
     ]
-  }
-  statement {
-    sid       = "AllowStrongAuditLogToDynamo"
-    effect    = "Allow"
-    actions   = ["dynamodb:PutItem"]
-    resources = [module.dynamodb_table_requests.dynamodb_table_arn]
   }
   statement {
     effect = "Allow"
