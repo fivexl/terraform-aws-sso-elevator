@@ -5,8 +5,8 @@ from typing import FrozenSet
 import boto3
 
 import config
-import dynamodb
 import entities
+import s3
 import schedule
 import sso
 from entities import BaseModel
@@ -157,9 +157,8 @@ def execute_decision(
         account_assignment,
     )
 
-    dynamodb.log_operation(
-        table_name=cfg.dynamodb_table_name,
-        audit_entry=dynamodb.AuditEntry(
+    s3.log_operation(
+        audit_entry=s3.AuditEntry(
             account_id=account_id,
             role_name=permission_set.name,
             reason=reason,

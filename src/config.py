@@ -36,7 +36,6 @@ class Config(BaseSettings):
     slack_channel_id: str
     slack_bot_token: str
 
-    dynamodb_table_name: str
     sso_instance_arn: str
 
     log_level: str = "INFO"
@@ -45,6 +44,9 @@ class Config(BaseSettings):
 
     accounts: frozenset[str]
     permission_sets: frozenset[str]
+
+    s3_bucket_for_audit_entry_name: str
+    s3_bucket_prefix_for_partitions: str
 
     class Config:
         frozen = True

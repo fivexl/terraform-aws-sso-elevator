@@ -66,25 +66,34 @@ variable "requester_lambda_name" {
 }
 
 variable "revoker_lambda_name_postfix" {
-  type    = string
-  default = ""
+  description = "For dev purposes"
+  type        = string
+  default     = ""
 }
 
 variable "requester_lambda_name_postfix" {
-  type    = string
-  default = ""
+  description = "For dev purposes"
+  type        = string
+  default     = ""
 }
 
 variable "schedule_group_name_postfix" {
-  type    = string
-  default = ""
+  description = "For dev purposes"
+  type        = string
+  default     = ""
 }
 
 variable "schedule_role_name_postfix" {
-  type    = string
-  default = ""
+  description = "For dev purposes"
+  type        = string
+  default     = ""
 }
 
+variable "s3_bucket_name_postfix" {
+  description = "For dev purposes"
+  type        = string
+  default     = ""
+}
 variable "revoker_post_update_to_slack" {
   description = "Should revoker send a confirmation of the revocation to Slack?"
   type        = bool
@@ -96,3 +105,16 @@ variable "build_in_docker" {
   type        = bool
   default     = true
 }
+
+variable "s3_bucket_for_audit_entry_name" {
+  description = "Name of the S3 bucket"
+  default     = "sso-elevator-logs"
+}
+
+variable "s3_bucket_prefix_for_partitions" {
+  description = "The prefix for the S3 bucket partitions"
+  default     = "logs"
+}
+
+
+
