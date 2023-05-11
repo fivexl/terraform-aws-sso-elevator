@@ -36,13 +36,15 @@ module "access_requester_slack_handler" {
     SCHEDULE_GROUP_NAME  = local.schedule_group_name
 
 
-    DYNAMODB_TABLE_NAME         = module.dynamodb_table_requests.dynamodb_table_id
-    SSO_INSTANCE_ARN            = local.sso_instance_arn
-    STATEMENTS                  = jsonencode(var.config)
-    POWERTOOLS_LOGGER_LOG_EVENT = true
-    SCHEDULE_POLICY_ARN         = aws_iam_role.eventbridge_role.arn
-    REVOKER_FUNCTION_ARN        = local.revoker_lambda_arn
-    REVOKER_FUNCTION_NAME       = local.revoker_lambda_name
+    DYNAMODB_TABLE_NAME             = module.dynamodb_table_requests.dynamodb_table_id
+    SSO_INSTANCE_ARN                = local.sso_instance_arn
+    STATEMENTS                      = jsonencode(var.config)
+    POWERTOOLS_LOGGER_LOG_EVENT     = true
+    SCHEDULE_POLICY_ARN             = aws_iam_role.eventbridge_role.arn
+    REVOKER_FUNCTION_ARN            = local.revoker_lambda_arn
+    REVOKER_FUNCTION_NAME           = local.revoker_lambda_name
+    S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
+    S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_prefix_for_partitions
   }
 
   create_lambda_function_url = true
@@ -98,6 +100,13 @@ data "aws_iam_policy_document" "slack_handler" {
       "lambda:GetFunction"
     ]
     resources = [local.requester_lambda_arn]
+  }
+  statement {
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+    ]
+    resources = ["${local.s3_bucket_arn}/*"]
   }
   statement {
     sid    = "AllowListSSOInstances"

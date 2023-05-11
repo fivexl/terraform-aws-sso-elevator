@@ -3,9 +3,9 @@ import slack_sdk
 from pydantic import ValidationError
 
 import config
-import dynamodb
 import entities
 import organizations
+import s3
 import schedule
 import slack
 import sso
@@ -120,9 +120,8 @@ def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssign
         account_assignment.permission_set_arn,
     )
 
-    dynamodb.log_operation(
-        cfg.dynamodb_table_name,
-        dynamodb.AuditEntry(
+    s3.log_operation(
+        s3.AuditEntry(
             role_name=permission_set.name,
             account_id=account_assignment.account_id,
             reason="automated revocation",
@@ -167,9 +166,8 @@ def handle_scheduled_account_assignment_deletion(revoke_event: schedule.RevokeEv
         permission_set_arn=user_account_assignment.permission_set_arn,
     )
 
-    dynamodb.log_operation(
-        cfg.dynamodb_table_name,
-        dynamodb.AuditEntry(
+    s3.log_operation(
+        s3.AuditEntry(
             role_name=permission_set.name,
             account_id=user_account_assignment.account_id,
             reason="scheduled_revocation",

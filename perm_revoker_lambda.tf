@@ -41,10 +41,12 @@ module "access_revoker" {
     STATEMENTS                  = jsonencode(var.config)
     POWERTOOLS_LOGGER_LOG_EVENT = true
 
-    POST_UPDATE_TO_SLACK  = var.revoker_post_update_to_slack
-    SCHEDULE_POLICY_ARN   = aws_iam_role.eventbridge_role.arn
-    REVOKER_FUNCTION_ARN  = local.revoker_lambda_arn
-    REVOKER_FUNCTION_NAME = local.revoker_lambda_name
+    POST_UPDATE_TO_SLACK            = var.revoker_post_update_to_slack
+    SCHEDULE_POLICY_ARN             = aws_iam_role.eventbridge_role.arn
+    REVOKER_FUNCTION_ARN            = local.revoker_lambda_arn
+    REVOKER_FUNCTION_NAME           = local.revoker_lambda_name
+    S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
+    S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_prefix_for_partitions
   }
 
   allowed_triggers = {
@@ -125,6 +127,13 @@ data "aws_iam_policy_document" "revoker" {
       "scheduler:GetSchedule",
     ]
     resources = ["*"]
+  }
+  statement {
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+    ]
+    resources = ["${local.s3_bucket_arn}/*"]
   }
 }
 
