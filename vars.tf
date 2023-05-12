@@ -124,4 +124,20 @@ variable "name_of_existing_s3_bucket" {
   default     = ""
 }
 
+variable "object_lock_for_s3_bucket" {
+  description = "Enable object lock"
+  type        = bool
+  default     = false
+}
+
+variable "name_of_logging_bucket_for_s3" {
+  description = "Bucket for storing s3 logs"
+  type        = string
+  default     = ""
+}
+variable "mfa_delete" {
+  description = "Whether to enable MFA delete for the S3 bucket"
+  type        = bool
+  default     = false 
+}
 
