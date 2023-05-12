@@ -4,7 +4,7 @@
 
 - [Introduction](#introduction)
 - [Functionality](#functionality)
-- [Important Considerations](#important-considerations)
+- [Important Considerations and Assumptions](#important-considerations-and-assumptions)
 - [Deployment and Usage](#deployment-and-usage)
   * [Note on dependencies](#note-on-dependencies)
   * [Module configuration options and automatic approval](#module-configuration-options-and-automatic-approval)
@@ -69,8 +69,11 @@ For auditing purposes, information about all access grants and revocations is st
 
 Additionally, the Access-Revoker continuously reconciles the revocation schedule with all user-level permission set assignments and issues warnings if it detects assignments without a revocation schedule (presumably created by someone manually). By default, the Access-Revoker will automatically revoke all unknown user-level permission set assignments daily. However, you can configure it to operate more or less frequently.
 
-# Important Considerations
-When onboarding your organization, be aware that the access-revoker will revoke all user-level permission set assignments in the accounts specified in the configuration. If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
+# Important Considerations and Assumptions
+
+SSO elevator assumes that your Slack user email will match SSO user id otherwise it won't be able to match Slack user sendign request to an AWS SSO user.
+
+When onboarding your organization, be aware that the access-revoker will revoke all user-level Permission Set assignments in the AWS accounts you specified in the module configuration. If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
 
 # Deployment and Usage
 
