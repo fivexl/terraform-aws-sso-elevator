@@ -41,6 +41,9 @@ module "aws_sso_elevator" {
 
   s3_bucket_for_audit_entry_name  = "sso-elevator-logs"
   s3_bucket_prefix_for_partitions = "logs"
+  object_lock_for_s3_bucket        = true
+  mfa_delete = true
+  name_of_logging_bucket_for_s3    = "s3_acces_logs"
 
   # "Resource", "PermissionSet", "Approvers" can be a string or a list of strings
   # "Resource" & "PermissionSet" can be set to "*" to match all
