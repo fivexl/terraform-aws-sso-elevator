@@ -143,12 +143,19 @@ module "aws_sso_elevator" {
   schedule_expression_for_check_on_inconsistency = "rate(1 hour)" 
   build_in_docker = true
   revoker_post_update_to_slack = true
-  # If you want to use your own S3 bucket for audit_entry logs
+
+  # If you want to use your own S3 bucket for audit_entry logs,
   # then you can specify it name there:
   name_of_existing_s3_bucket = "your-s3-bucket-name"
+
   # If you dont pass name_of_existing_s3_bucket then module will create new bucket
   s3_bucket_for_audit_entry_name   = "sso-elevator-logs"
   s3_bucket_prefix_for_partitions  = "logs"
+  object_lock_for_s3_bucket        = true
+  mfa_delete = true
+  name_of_logging_bucket_for_s3    = "name_of_bucket_for_logs"
+  # If name_of_logging_bucket_for_s3 was not specified,
+  # then s3_access_logs will be save in s3_bucket_for_audit_entry_name/s3_access_logs/
 
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
