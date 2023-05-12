@@ -36,6 +36,33 @@ For more information on temporary elevated access for AWS and the AWS-provided s
 The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a Slack form. We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
 
 # Functionality
+
+```mermaid
+flowchart TB
+    User[User]
+    Approver[Approver]
+    Slack1[Slack form]
+    Slack2[Slack message]
+    Slack3[Slack notification]
+    Handler[AWS Lambda - Access Requester]
+    Revoker[AWS Lambda - Access Revoker]
+    SSO[AWS SSO]
+    EB[AWS Event Bridge]
+    S3[AWS S3 bucket - audit logs]
+    User --> | 1. submits form in Slack| Slack1
+    Slack1 --> | 2. sends request to access-requester| Handler
+    Handler --> | 3. sends a message to Slack channel with approve/deny buttons and tags approvers | Approver
+    Approver --> | 4. pressed approve button in Slack message | Slack2
+    Slack2 --> | 5. Send approved request to access-requester | Handler
+    Handler --> | 6. creates user-level permission set assigment based on approved request| SSO
+    Handler --> | 7. creates revocation schedule | EB
+    Handler --> | 8. logs audit record | S3
+    EB --> | 9. sends revocation event when times come | Revoker
+    Revoker --> | 10. revokes user-level permission set assignment | SSO
+    Revoker --> | 11. logs audit record | S3
+    Revoker --> | 12. send notification about revocation | Slack3
+```
+
 The module deploys two AWS Lambda functions: access-requester and access-revoker. The access-requester handles requests from Slack, creating user-level permission set assignments and an Amazon EventBridge trigger that activates the access-revoker Lambda when it is time to revoke access. The access-revoker revokes user access when triggered by EventBridge and also runs daily to revoke any user-level permission set assignments without an associated EventBridge trigger. Group-level permission sets are not affected.
 
 For auditing purposes, information about all access grants and revocations is stored in S3. See [documentation here](athena_query/) to find out how to configure AWS Athena to query audit logs.
