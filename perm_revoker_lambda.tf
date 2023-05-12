@@ -126,7 +126,7 @@ data "aws_iam_policy_document" "revoker" {
     actions = [
       "s3:PutObject",
     ]
-    resources = ["${local.s3_bucket_arn}/*"]
+    resources = ["${local.s3_bucket_arn}/${var.s3_bucket_prefix_for_partitions}/*"]
   }
 }
 
