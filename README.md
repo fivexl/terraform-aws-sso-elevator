@@ -49,7 +49,7 @@ flowchart TB
     SSO[AWS SSO]
     EB[AWS Event Bridge]
     S3[AWS S3 bucket - audit logs]
-    User --> | 1. submits form in Slack| Slack1
+    User --> | 1. submits form in Slack - CMD+K, search access | Slack1
     Slack1 --> | 2. sends request to access-requester| Handler
     Handler --> | 3. sends a message to Slack channel with approve/deny buttons and tags approvers | Approver
     Approver --> | 4. pressed approve button in Slack message | Slack2
