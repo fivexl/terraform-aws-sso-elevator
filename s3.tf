@@ -1,7 +1,7 @@
 module "sso_elevator_bucket" {
   count   = var.name_of_existing_s3_bucket == "" ? 1 : 0
   source  = "terraform-aws-modules/s3-bucket/aws"
-  version = "3.6.0"
+  version = "3.10.1"
 
   bucket = local.s3_bucket_name
 
