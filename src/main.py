@@ -96,6 +96,15 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack.get_user(client, id=payload.approver_slack_id)
     requester = slack.get_user(client, id=payload.request.requester_slack_id)
+    
+    if payload.action == entities.ApproverAction.Discard:
+        slack.remove_buttons(payload, client, approver)
+        return client.chat_postMessage(
+            channel=payload.channel_id,
+            text=f"Request was discarded by<@{approver.id}> ",
+            thread_ts=payload.thread_ts,
+        )
+    
 
     decision = access_control.make_decision_on_approve_request(
         action=payload.action,
@@ -107,20 +116,14 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
     )
     logger.info("Decision on request was made", extra={"decision": decision})
 
+
     if not decision.permit:
         return client.chat_postMessage(
             channel=payload.channel_id,
-            text=f"<@{approver.id}> you can not {payload.action.value} this request",
+            text=f"<@{approver.id}> you can not approve this request",
             thread_ts=payload.thread_ts,
         )
-
-    blocks = slack.remove_blocks(payload.message["blocks"], block_ids=["buttons"])
-    blocks.append(slack.button_click_info_block(payload.action, approver.id))
-    client.chat_update(
-        channel=payload.channel_id,
-        ts=payload.thread_ts,
-        blocks=blocks,
-    )
+    slack.remove_buttons(payload, client, approver)
 
     access_control.execute_decision(
         decision=decision,
@@ -134,7 +137,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
 
     return client.chat_postMessage(
         channel=payload.channel_id,
-        text=f"Permissions granted to <@{requester.id}>." if decision.permit else f"<@{requester.id}> your request was denied.",
+        text=f"Permissions granted to <@{requester.id}>.",
         thread_ts=payload.thread_ts,
     )
 
@@ -148,7 +151,7 @@ app.action(entities.ApproverAction.Approve.value)(
     lazy=[handle_button_click],
 )
 
-app.action(entities.ApproverAction.Deny.value)(
+app.action(entities.ApproverAction.Discard.value)(
     ack=acknowledge_request,
     lazy=[handle_button_click],
 )
