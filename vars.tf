@@ -135,9 +135,10 @@ variable "name_of_logging_bucket_for_s3" {
   type        = string
   default     = ""
 }
+
 variable "mfa_delete" {
   description = "Whether to enable MFA delete for the S3 bucket"
   type        = bool
-  default     = false 
+  default     = false
 }
 
