@@ -90,7 +90,7 @@ class ApproveRequestDecision(BaseModel):
     """Decision on approver request
 
     grant: bool - Create account assignment, if grant is True
-    permit: bool - Allow approver to make an action (Approve/Deny) if permit is True
+    permit: bool - Allow approver to make an action Approve if permit is True
     based_on_statements: FrozenSet[Statement]
     """
 

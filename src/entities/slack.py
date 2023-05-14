@@ -5,7 +5,7 @@ from .model import BaseModel
 
 class ApproverAction(Enum):
     Approve = "approve"
-    Deny = "deny"
+    Discard = "discard"
 
 
 class User(BaseModel):

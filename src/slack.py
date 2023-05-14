@@ -230,10 +230,10 @@ def build_approval_request_message_blocks(
                         value=entities.ApproverAction.Approve.value,
                     ),
                     ButtonElement(
-                        action_id=entities.ApproverAction.Deny.value,
-                        text=PlainTextObject(text="Deny"),
+                        action_id=entities.ApproverAction.Discard.value,
+                        text=PlainTextObject(text="Discard"),
                         style="danger",
-                        value=entities.ApproverAction.Deny.value,
+                        value=entities.ApproverAction.Discard.value,
                     ),
                 ],
             )
@@ -321,3 +321,12 @@ def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
             raise e
     except Exception as e:
         raise e
+
+def remove_buttons(payload: ButtonClickedPayload, client: WebClient, approver: entities.slack.User) -> list[Block]:
+    blocks = remove_blocks(payload.message["blocks"], block_ids=["buttons"])
+    blocks.append(button_click_info_block(payload.action, approver.id))
+    client.chat_update(
+        channel=payload.channel_id,
+        ts=payload.thread_ts,
+        blocks=blocks,
+    )
