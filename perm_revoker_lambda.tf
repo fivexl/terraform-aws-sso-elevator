@@ -8,6 +8,9 @@ module "access_revoker" {
   publish       = true
   timeout       = 300
 
+  depends_on = [
+    null_resource.version_check,
+  ]
   hash_extra = local.revoker_lambda_name
 
   build_in_docker = var.build_in_docker

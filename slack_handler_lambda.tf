@@ -8,6 +8,10 @@ module "access_requester_slack_handler" {
   publish       = true
   timeout       = 30
 
+  depends_on = [
+    null_resource.version_check,
+  ]
+
   build_in_docker = var.build_in_docker
   runtime         = "python3.10"
   docker_image    = "lambda/python:3.10"
