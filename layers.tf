@@ -11,8 +11,8 @@ module "sso_elevator_dependencies" {
 
   compatible_runtimes = ["python3.10"]
   build_in_docker     = var.build_in_docker
-  runtime             = "python3.10"
-  docker_image        = "lambda/python:3.10"
+  runtime             = "python${local.python_version}"
+  docker_image        = "lambda/python:${local.python_version}"
   docker_file         = "${path.module}/src/docker/Dockerfile"
   source_path = [{
     poetry_install = true
