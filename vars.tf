@@ -94,6 +94,7 @@ variable "s3_bucket_name_postfix" {
   type        = string
   default     = ""
 }
+
 variable "revoker_post_update_to_slack" {
   description = "Should revoker send a confirmation of the revocation to Slack?"
   type        = bool
