@@ -14,8 +14,8 @@ module "access_revoker" {
   hash_extra = local.revoker_lambda_name
 
   build_in_docker = var.build_in_docker
-  runtime         = "python3.10"
-  docker_image    = "lambda/python:3.10"
+  runtime         = "python${local.python_version}"
+  docker_image    = "lambda/python:${local.python_version}"
   docker_file     = "${path.module}/src/docker/Dockerfile"
   source_path = [
     {
