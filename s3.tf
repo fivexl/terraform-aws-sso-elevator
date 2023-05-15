@@ -18,11 +18,6 @@ module "sso_elevator_bucket" {
     mfa_delete = var.mfa_delete
   }
 
-  logging = {
-    target_bucket = var.name_of_logging_bucket_for_s3 != "" ? var.name_of_logging_bucket_for_s3 : local.s3_bucket_name
-    target_prefix = var.name_of_logging_bucket_for_s3 != "" ? "" : "s3_access_logs/"
-  }
-
   object_lock_enabled = var.object_lock_for_s3_bucket
 
   object_lock_configuration = var.object_lock_for_s3_bucket ? {
@@ -38,4 +33,12 @@ module "sso_elevator_bucket" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_logging" "bucket_logging" {
+  count = var.name_of_logging_bucket_for_s3 != "" ? 1 : 0
+
+  bucket        = local.s3_bucket_name
+  target_bucket = var.name_of_logging_bucket_for_s3
+  target_prefix = ""
 }
