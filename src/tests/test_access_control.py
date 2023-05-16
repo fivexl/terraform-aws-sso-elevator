@@ -13,6 +13,8 @@ from access_control import (
 )
 from statement import Statement
 
+# ruff: noqa: ANN201, ANN001
+
 
 @pytest.fixture
 def execute_decision_info():

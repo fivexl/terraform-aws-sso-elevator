@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10.10"
-boto3-stubs = {extras = ["dynamodb", "identitystore", "organizations", "scheduler", "sso-admin"], version = "^1.26.115"}
+boto3-stubs = {extras = ["dynamodb", "identitystore", "organizations", "s3", "scheduler", "sso-admin"], version = "^1.26.134"}
 pydantic = {extras = ["email"], version = "^1.10.7"}
 
 [tool.poetry.group.dev.dependencies]
@@ -31,10 +31,13 @@ build-backend = "poetry.core.masonry.api"
 line-length = 140
 
 [tool.ruff]
-# Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.
 select = [
   # pyflakes
   "F",
+  # flake8-annotations
+  "ANN",
+  # flake8-unused-arguments 
+  "ARG",
   # pycodestyle
   "E", "W",
   # flake8-2020
@@ -45,8 +48,6 @@ select = [
   "Q",
   # flake8-debugger
   "T10",
-  # flake8-gettext
-  "INT",
   # pylint
   "PLC", "PLE", "PLR", "PLW",
   # misc lints

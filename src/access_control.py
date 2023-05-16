@@ -99,7 +99,7 @@ class ApproveRequestDecision(BaseModel):
     based_on_statements: FrozenSet[Statement]
 
 
-def make_decision_on_approve_request(
+def make_decision_on_approve_request(  # noqa: PLR0913
     action: entities.ApproverAction,
     statements: frozenset[Statement],
     permission_set_name: str,
@@ -126,7 +126,7 @@ def make_decision_on_approve_request(
     )
 
 
-def execute_decision(
+def execute_decision(  # noqa: PLR0913
     decision: AccessRequestDecision | ApproveRequestDecision,
     permission_set_name: str,
     account_id: str,
@@ -134,7 +134,7 @@ def execute_decision(
     approver: entities.slack.User,
     requester: entities.slack.User,
     reason: str,
-):
+) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
         logger.info("Access request denied")

@@ -9,7 +9,7 @@ from statement import Statement
 
 
 def parse_statement(_dict: dict) -> Statement:
-    def to_set_if_list_or_str(v):
+    def to_set_if_list_or_str(v: list | str) -> frozenset[str]:
         if isinstance(v, list):
             return frozenset(v)
         return frozenset([v]) if isinstance(v, str) else v
@@ -52,8 +52,8 @@ class Config(BaseSettings):
         frozen = True
 
     @root_validator(pre=True)
-    def get_accounts_and_permission_sets(cls, values: dict):
-        statements = {parse_statement(st) for st in values.get("statements", [])}  # type: ignore
+    def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
+        statements = {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
         permission_sets = set()
         accounts = set()
         for statement in statements:
@@ -77,7 +77,7 @@ _config: Optional[Config] = None
 
 
 def get_config() -> Config:
-    global _config
+    global _config  # noqa: PLW0603
     if _config is None:
-        _config = Config()  # type: ignore
+        _config = Config()
     return _config

@@ -5,6 +5,7 @@ from aws_lambda_powertools import Logger
 from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
+from slack_sdk.web.slack_response import SlackResponse
 
 import access_control
 import config
@@ -27,23 +28,23 @@ app = App(
 )
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
 
 
-def error_handler(client: WebClient, e: Exception, logger: Logger, context: BoltContext):
+def error_handler(client: WebClient, e: Exception, logger: Logger, context: BoltContext) -> None:
     logger.exception(e)
     if isinstance(e, errors.ConfigurationError):
         text = f"<@{context['user_id']}> Your request for AWS permissions failed with error: {e}. Check logs for more details."
         client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
 
 
-def handle_errors(fn):
+def handle_errors(fn):  # noqa: ANN001, ANN201
     # Default slack error handler (app.error) does not handle all exceptions. Or at least I did not find how to do it.
     # So I created this error handler.
     @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         try:
             return fn(*args, **kwargs)
         except Exception as e:
@@ -61,17 +62,17 @@ trigger_view_map = {}
 # and available in both functions, we can use it as a key. The value is the view_id.
 
 
-def show_initial_form(client: WebClient, body: dict, ack: Ack):
+def show_initial_form(client: WebClient, body: dict, ack: Ack) -> SlackResponse:
     ack()
     logger.info("Showing initial form")
     logger.debug("Request body", extra={"body": body})
     trigger_id = body["trigger_id"]
     response = client.views_open(trigger_id=trigger_id, view=slack.RequestForAccessView.build())
-    trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore
+    trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
     return response
 
 
-def load_select_options(client: WebClient, body: dict):
+def load_select_options(client: WebClient, body: dict) -> SlackResponse:
     logger.info("Loading select options for view (accounts and permission sets)")
     logger.debug("Request body", extra={"body": body})
 
@@ -90,13 +91,13 @@ app.shortcut("request_for_access")(
 
 
 @handle_errors
-def handle_button_click(body: dict, client: WebClient, context: BoltContext):
+def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # noqa: ARG001
     logger.info("Handling button click")
     payload = slack.ButtonClickedPayload.parse_obj(body)
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack.get_user(client, id=payload.approver_slack_id)
     requester = slack.get_user(client, id=payload.request.requester_slack_id)
-    
+
     if payload.action == entities.ApproverAction.Discard:
         slack.remove_buttons(payload, client, approver)
         return client.chat_postMessage(
@@ -104,7 +105,6 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
             text=f"Request was discarded by<@{approver.id}> ",
             thread_ts=payload.thread_ts,
         )
-    
 
     decision = access_control.make_decision_on_approve_request(
         action=payload.action,
@@ -115,7 +115,6 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
         requester_email=requester.email,
     )
     logger.info("Decision on request was made", extra={"decision": decision})
-
 
     if not decision.permit:
         return client.chat_postMessage(
@@ -142,7 +141,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext):
     )
 
 
-def acknowledge_request(ack: Ack):
+def acknowledge_request(ack: Ack):  # noqa: ANN201
     ack()
 
 
@@ -158,7 +157,12 @@ app.action(entities.ApproverAction.Discard.value)(
 
 
 @handle_errors
-def handle_request_for_access_submittion(body: dict, ack: Ack, client: WebClient, context: BoltContext):
+def handle_request_for_access_submittion(
+    body: dict,
+    ack: Ack,  # noqa: ARG001
+    client: WebClient,
+    context: BoltContext,  # noqa: ARG001
+) -> SlackResponse | None:
     logger.info("Handling request for access submittion")
     request = slack.RequestForAccessView.parse(body)
     logger.info("View submitted", extra={"view": request})
@@ -225,5 +229,5 @@ app.view(slack.RequestForAccessView.CALLBACK_ID)(
 
 
 @app.action("timepickeraction")
-def handle_timepickeraction(ack):
+def handle_timepickeraction(ack):  # noqa: ANN201, ANN001
     ack()
