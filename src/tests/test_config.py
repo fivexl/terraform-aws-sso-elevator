@@ -10,6 +10,7 @@ import config
 
 from . import strategies
 
+# ruff: noqa
 VALID_STATEMENT_DICT = {
     "ResourceType": "Account",
     "Resource": ["111111111111"],
@@ -66,7 +67,6 @@ def valid_config_dict(statements_as_json: bool = True):
         "statements": statements,
         "s3_bucket_for_audit_entry_name": "x",
         "s3_bucket_prefix_for_partitions": "x",
-
     }
 
 

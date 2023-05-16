@@ -6,6 +6,8 @@ from urllib.parse import parse_qsl, urlencode
 
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
+# ruff: noqa: ANN201, ANN001, ANN204, ANN101
+
 
 def decode_body(raw_body: str) -> dict:
     """Decode the body of a Slack request"""

@@ -5,6 +5,8 @@ from typing import Literal
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
+# ruff: noqa: ANN201
+
 
 def jsonstr(strategy: SearchStrategy) -> SearchStrategy:
     return st.builds(
@@ -34,6 +36,7 @@ json_safe_text = st.text(
     min_size=1,
     max_size=200,
 )
+
 
 def resource_type_st(resource_type: Literal["Account", "OU", "Any"] = "Any"):
     if resource_type == "Account":

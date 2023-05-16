@@ -26,6 +26,10 @@ from slack_sdk.models.views import View
 import config
 import entities
 from entities import BaseModel
+from slack_sdk.web.slack_response import SlackResponse
+
+
+# ruff: noqa: ANN102, PGH003
 
 logger = config.get_logger(service="slack")
 
@@ -183,7 +187,7 @@ def timepicker_str_to_timedelta(time_str: str) -> timedelta:
     return timedelta(hours=int(hours), minutes=int(minutes))
 
 
-def humanize_timedelta(td: timedelta):
+def humanize_timedelta(td: timedelta) -> str:
     # example 12h 30m
     hours, remainder = divmod(td.seconds, 3600)
     minutes, _ = divmod(remainder, 60)
@@ -197,14 +201,14 @@ def unhumanize_timedelta(td_str: str) -> timedelta:
     return timedelta(hours=int(hours), minutes=int(minutes))
 
 
-def build_approval_request_message_blocks(
+def build_approval_request_message_blocks(  # noqa: PLR0913
     requester_slack_id: str,
     account: entities.aws.Account,
     role_name: str,
     reason: str,
     permission_duration: timedelta,
     show_buttons: bool = True,
-):
+) -> list[Block]:
     blocks: list[Block] = [
         SectionBlock(block_id="header", text=MarkdownTextObject(text="AWS account access request.")),
         SectionBlock(
@@ -262,7 +266,7 @@ class ButtonClickedPayload(BaseModel):
         frozen = True
 
     @root_validator(pre=True)
-    def validate_payload(cls, values: dict):
+    def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
@@ -322,10 +326,11 @@ def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
     except Exception as e:
         raise e
 
-def remove_buttons(payload: ButtonClickedPayload, client: WebClient, approver: entities.slack.User) -> list[Block]:
+
+def remove_buttons(payload: ButtonClickedPayload, client: WebClient, approver: entities.slack.User) -> SlackResponse:
     blocks = remove_blocks(payload.message["blocks"], block_ids=["buttons"])
     blocks.append(button_click_info_block(payload.action, approver.id))
-    client.chat_update(
+    return client.chat_update(
         channel=payload.channel_id,
         ts=payload.thread_ts,
         blocks=blocks,

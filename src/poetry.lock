@@ -112,14 +112,14 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "boto3-stubs"
-version = "1.26.126"
-description = "Type annotations for boto3 1.26.126 generated with mypy-boto3-builder 7.14.5"
+version = "1.26.134"
+description = "Type annotations for boto3 1.26.134 generated with mypy-boto3-builder 7.14.5"
 category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "boto3-stubs-1.26.126.tar.gz", hash = "sha256:9bfc4525dd73ddd7125dbe4e62ad36aaa603c686886cc84539f2a9353fb0f6ad"},
-    {file = "boto3_stubs-1.26.126-py3-none-any.whl", hash = "sha256:f6a04c5b65261766183b6d90421b11682884a361ed98b2842382dcbc703c9954"},
+    {file = "boto3-stubs-1.26.134.tar.gz", hash = "sha256:fb6a0a875c371fbec9b4176c9fe2d1f8cb14d70e2b61ec53dbe8c24c67d002f8"},
+    {file = "boto3_stubs-1.26.134-py3-none-any.whl", hash = "sha256:02d897f3a4864ecfe0789a02df005ae15c283c813b29e086765d26d420c22cd2"},
 ]
 
 [package.dependencies]
@@ -127,6 +127,7 @@ botocore-stubs = "*"
 mypy-boto3-dynamodb = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"dynamodb\""}
 mypy-boto3-identitystore = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"identitystore\""}
 mypy-boto3-organizations = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"organizations\""}
+mypy-boto3-s3 = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"s3\""}
 mypy-boto3-scheduler = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"scheduler\""}
 mypy-boto3-sso-admin = {version = ">=1.26.0,<1.27.0", optional = true, markers = "extra == \"sso-admin\""}
 types-s3transfer = "*"
@@ -166,7 +167,7 @@ backup-gateway = ["mypy-boto3-backup-gateway (>=1.26.0,<1.27.0)"]
 backupstorage = ["mypy-boto3-backupstorage (>=1.26.0,<1.27.0)"]
 batch = ["mypy-boto3-batch (>=1.26.0,<1.27.0)"]
 billingconductor = ["mypy-boto3-billingconductor (>=1.26.0,<1.27.0)"]
-boto3 = ["boto3 (==1.26.126)", "botocore (==1.29.126)"]
+boto3 = ["boto3 (==1.26.134)", "botocore (==1.29.134)"]
 braket = ["mypy-boto3-braket (>=1.26.0,<1.27.0)"]
 budgets = ["mypy-boto3-budgets (>=1.26.0,<1.27.0)"]
 ce = ["mypy-boto3-ce (>=1.26.0,<1.27.0)"]
@@ -704,6 +705,18 @@ files = [
 typing-extensions = ">=4.1.0"
 
 [[package]]
+name = "mypy-boto3-s3"
+version = "1.26.127"
+description = "Type annotations for boto3.S3 1.26.127 service generated with mypy-boto3-builder 7.14.5"
+category = "main"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "mypy-boto3-s3-1.26.127.tar.gz", hash = "sha256:0e548b97c6a2589f7bff5d26a1ca101622749771379226e3ad0822629d0613c5"},
+    {file = "mypy_boto3_s3-1.26.127-py3-none-any.whl", hash = "sha256:21e647caa18d98dbbc706597c9b27d41674f18850f42b2cfdb9a39b39820e470"},
+]
+
+[[package]]
 name = "mypy-boto3-scheduler"
 version = "1.26.35"
 description = "Type annotations for boto3.EventBridgeScheduler 1.26.35 service generated with mypy-boto3-builder 7.12.0"
@@ -1071,4 +1084,4 @@ socks = ["PySocks (>=1.5.6,!=1.5.7,<2.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10.10"
-content-hash = "d24b6b0f8dddb0f1bba621294f61aa9dd8d3e5bbd347711c9f4147391332d87e"
+content-hash = "1bb522ccf7899ed4e0da072ac0d9daf4253b161570ab6cbb0541457615ea1d5b"

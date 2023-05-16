@@ -3,16 +3,19 @@ from __future__ import annotations
 import datetime
 import time
 from dataclasses import dataclass
-from typing import Callable, Generator, Optional, TypeVar
-
-from mypy_boto3_identitystore import IdentityStoreClient
-from mypy_boto3_sso_admin import SSOAdminClient, type_defs
+from typing import TYPE_CHECKING, Callable, Generator, Optional, TypeVar
 
 import config
 import entities
 import errors
-from entities.aws import PermissionSet
 
+if TYPE_CHECKING:
+    from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_sso_admin import SSOAdminClient, type_defs
+
+    from entities.aws import PermissionSet
+
+# ruff: noqa: PGH003
 T = TypeVar("T")
 
 logger = config.get_logger(service="sso")
@@ -64,7 +67,7 @@ class UserAccountAssignment:
     permission_set_arn: str
     user_principal_id: str
 
-    def as_dict(self) -> dict:
+    def as_dict(self: UserAccountAssignment) -> dict:
         return {
             "InstanceArn": self.instance_arn,
             "TargetId": self.account_id,
@@ -85,7 +88,9 @@ def delete_account_assignment(client: SSOAdminClient, assignment: UserAccountAss
     return AccountAssignmentStatus.from_type_def(response["AccountAssignmentDeletionStatus"])
 
 
-def describe_account_assignment_creation_status(client: SSOAdminClient, assignment: UserAccountAssignment, request_id):
+def describe_account_assignment_creation_status(
+    client: SSOAdminClient, assignment: UserAccountAssignment, request_id: str
+) -> AccountAssignmentStatus:
     response = client.describe_account_assignment_creation_status(
         InstanceArn=assignment.instance_arn,
         AccountAssignmentCreationRequestId=request_id,
@@ -93,7 +98,9 @@ def describe_account_assignment_creation_status(client: SSOAdminClient, assignme
     return AccountAssignmentStatus.from_type_def(response["AccountAssignmentCreationStatus"])
 
 
-def describe_account_assignment_deletion_status(client: SSOAdminClient, assignment: UserAccountAssignment, request_id):
+def describe_account_assignment_deletion_status(
+    client: SSOAdminClient, assignment: UserAccountAssignment, request_id: str
+) -> AccountAssignmentStatus:
     response = client.describe_account_assignment_deletion_status(
         InstanceArn=assignment.instance_arn,
         AccountAssignmentDeletionRequestId=request_id,
@@ -133,7 +140,7 @@ def create_account_assignment_and_wait_for_result(client: SSOAdminClient, assign
         return response
     else:
 
-        def fn():
+        def fn() -> AccountAssignmentStatus:
             return describe_account_assignment_creation_status(client, assignment, response.request_id)
 
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
@@ -146,13 +153,13 @@ def create_account_assignment_and_wait_for_result(client: SSOAdminClient, assign
     return result
 
 
-def delete_account_assignment_and_wait_for_result(client: SSOAdminClient, assignment: UserAccountAssignment):
+def delete_account_assignment_and_wait_for_result(client: SSOAdminClient, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
     response = delete_account_assignment(client, assignment)
     if AccountAssignmentStatus.is_ready(response):
         return response
     else:
 
-        def fn():
+        def fn() -> AccountAssignmentStatus:
             return describe_account_assignment_deletion_status(client, assignment, response.request_id)
 
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)

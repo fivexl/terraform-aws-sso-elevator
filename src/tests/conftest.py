@@ -3,7 +3,7 @@ import os
 import boto3
 
 
-def pytest_sessionstart(session):
+def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
     mock_env = {
         "schedule_policy_arn": "x",
         "revoker_function_arn": "x",

@@ -28,7 +28,7 @@ def event_bridge_schedule_after(td: timedelta) -> str:
     return f"at({(now + td).replace(microsecond=0).isoformat().replace('+00:00', '')})"
 
 
-def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str):
+def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str) -> None:
     try:
         client.delete_schedule(GroupName=cfg.schedule_group_name, Name=schedule_name)
         logger.info("Schedule deleted", extra={"schedule_name": schedule_name})
@@ -63,7 +63,7 @@ def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> list[Revo
 def get_and_delete_schedule_if_already_exist(
     client: EventBridgeSchedulerClient,
     user_account_assignment: sso.UserAccountAssignment,
-):
+) -> None:
     for revoke_event in get_scheduled_revoke_events(client):
         if revoke_event.user_account_assignment == user_account_assignment:
             logger.info("Schedule already exist, deleting it", extra={"schedule_name": revoke_event.schedule_name})
@@ -76,7 +76,7 @@ def schedule_revoke_event(
     approver: entities.slack.User,
     requester: entities.slack.User,
     user_account_assignment: sso.UserAccountAssignment,
-):
+) -> type_defs.CreateScheduleOutputTypeDef:
     logger.info("Scheduling revoke event")
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     get_and_delete_schedule_if_already_exist(schedule_client, user_account_assignment)
@@ -88,7 +88,7 @@ def schedule_revoke_event(
         permission_duration=permission_duration,
     )
     logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
-    schedule_client.create_schedule(
+    return schedule_client.create_schedule(
         FlexibleTimeWindow={"Mode": "OFF"},
         Name=schedule_name,
         GroupName=cfg.schedule_group_name,

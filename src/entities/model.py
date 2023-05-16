@@ -9,7 +9,7 @@ class BaseModel(PydanticBaseModel):
     class Config:
         frozen = True
 
-    def dict(self, *args, **kwargs):
+    def dict(self, *args, **kwargs) -> dict:  # noqa: ANN101, ANN003, ANN002
         """Converts instance to dict representation of it. Workaround for https://github.com/pydantic/pydantic/issues/1090"""
         cp = super().copy()
         cp.Config.frozen = False
@@ -23,7 +23,7 @@ class BaseModel(PydanticBaseModel):
         return PydanticBaseModel.dict(cp, *args, **kwargs)
 
 
-def json_default(o: object):
+def json_default(o: object) -> str | dict:
     if isinstance(o, PydanticBaseModel):
         return o.dict()
     elif dataclasses.is_dataclass(o):

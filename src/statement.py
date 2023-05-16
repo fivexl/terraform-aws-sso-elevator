@@ -39,7 +39,7 @@ class Statement(BaseStatement):
     resource_type: ResourceType = Field(ResourceType.Account, const=True)
     resource: FrozenSet[Union[AWSAccountId, WildCard]]
 
-    def affects(self, account_id: str, permission_set_name: str) -> bool:
+    def affects(self, account_id: str, permission_set_name: str) -> bool:  # noqa: ANN101
         return (account_id in self.resource or "*" in self.resource) and (
             permission_set_name in self.permission_set or "*" in self.permission_set
         )
