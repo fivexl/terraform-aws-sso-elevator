@@ -102,7 +102,7 @@ variable "build_in_docker" {
 }
 
 variable "s3_bucket_name_for_audit_entry" {
-  description = "Name of the S3 bucket"
+  description = "Unique name of the S3 bucket"
   type        = string
   default     = "sso-elevator-audit-entry"
 }
@@ -115,12 +115,6 @@ variable "s3_bucket_partition_prefix" {
 
 variable "s3_name_of_the_existing_bucket" {
   description = "Specify the name of an existing S3 bucket to use. If not provided, a new bucket will be created."
-  type        = string
-  default     = ""
-}
-
-variable "s3_bucket_name_postfix" {
-  description = "If left empty, a random string will be generated as the postfix."
   type        = string
   default     = ""
 }

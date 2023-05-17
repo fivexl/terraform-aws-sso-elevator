@@ -11,13 +11,16 @@ locals {
   sso_instance_arn      = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].arns[0] : var.sso_instance_arn
   schedule_group_name   = "sso-elevator-scheduled-revocation${var.schedule_group_name_postfix}"
 
-  s3_bucket_name_postfix = var.s3_bucket_name_postfix != "" ? var.s3_bucket_name_postfix : random_string.random.result
-  s3_bucket_name         = var.s3_name_of_the_existing_bucket != "" ? var.s3_name_of_the_existing_bucket : "${var.s3_bucket_name_for_audit_entry}-${local.s3_bucket_name_postfix}"
-  s3_bucket_arn          = "arn:aws:s3:::${local.s3_bucket_name}"
+  # In case of default value for var.s3_bucket_name_for_audit_entry, we append a random string to the bucket name to make it unique.
+  # In case of non-default value for var.s3_bucket_name_for_audit_entry, we use the value as is and expect the name is unique.
+  # In case of var.s3_name_of_the_existing_bucket, we skip creating a new bucket and use the existing one.
+  s3_bucket_name_for_audit_entry = var.s3_bucket_name_for_audit_entry != "sso-elevator-audit-entry" ? var.s3_bucket_name_for_audit_entry : "sso-elevator-audit-entry-${random_string.random.result}"
+  s3_bucket_name                 = var.s3_name_of_the_existing_bucket != "" ? var.s3_name_of_the_existing_bucket : local.s3_bucket_name_for_audit_entry
+  s3_bucket_arn                  = "arn:aws:s3:::${local.s3_bucket_name}"
 }
 
 resource "random_string" "random" {
-  length  = 10
+  length  = 16
   special = false
   upper   = false
   numeric = false
