@@ -89,12 +89,6 @@ variable "schedule_role_name_postfix" {
   default     = ""
 }
 
-variable "s3_bucket_name_postfix" {
-  description = "For dev purposes"
-  type        = string
-  default     = ""
-}
-
 variable "revoker_post_update_to_slack" {
   description = "Should revoker send a confirmation of the revocation to Slack?"
   type        = bool
@@ -107,39 +101,57 @@ variable "build_in_docker" {
   default     = true
 }
 
-variable "s3_bucket_for_audit_entry_name" {
+variable "s3_bucket_name_for_audit_entry" {
   description = "Name of the S3 bucket"
   type        = string
-  default     = "sso-elevator-logs"
+  default     = "sso-elevator-audit-entry"
 }
 
-variable "s3_bucket_prefix_for_partitions" {
+variable "s3_bucket_partition_prefix" {
   description = "The prefix for the S3 bucket partitions"
   type        = string
   default     = "logs"
 }
 
-variable "name_of_existing_s3_bucket" {
-  description = "Pass it if you want to use an existing bucket"
+variable "s3_name_of_the_existing_bucket" {
+  description = "Specify the name of an existing S3 bucket to use. If not provided, a new bucket will be created."
   type        = string
   default     = ""
 }
 
-variable "object_lock_for_s3_bucket" {
+variable "s3_bucket_name_postfix" {
+  description = "If left empty, a random string will be generated as the postfix."
+  type        = string
+  default     = ""
+}
+
+variable "s3_mfa_delete" {
+  description = "Whether to enable MFA delete for the S3 bucket"
+  type        = bool
+  default     = false
+}
+
+variable "s3_object_lock" {
   description = "Enable object lock"
   type        = bool
   default     = false
 }
 
-variable "name_of_logging_bucket_for_s3" {
-  description = "Bucket for storing s3 logs"
-  type        = string
-  default     = ""
+variable "s3_object_lock_configuration" {
+  description = "Object lock configuration"
+  type        = any
+  default = { rule = {
+    default_retention = {
+      mode  = "GOVERNANCE"
+      years = 2
+    }
+  } }
 }
 
-variable "mfa_delete" {
-  description = "Whether to enable MFA delete for the S3 bucket"
-  type        = bool
-  default     = false
+variable "s3_logging" {
+  description = "Map containing access bucket logging configuration."
+  type        = map(string)
+  default     = {}
 }
+
 

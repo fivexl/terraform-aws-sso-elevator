@@ -39,11 +39,29 @@ module "aws_sso_elevator" {
 
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
-  s3_bucket_for_audit_entry_name  = "sso-elevator-logs"
-  s3_bucket_prefix_for_partitions = "logs"
-  object_lock_for_s3_bucket       = true
-  mfa_delete                      = true
-  name_of_logging_bucket_for_s3   = "s3_acces_logs"
+
+
+  s3_bucket_partition_prefix     = "logs/"
+  s3_bucket_name_for_audit_entry = "fivexl-sso-elevator"
+
+  s3_bucket_name_postfix         = "prod"
+
+  s3_mfa_delete                  = false
+  s3_object_lock                 = true
+
+  s3_object_lock_configuration = {
+    rule = {
+      default_retention = {
+        mode  = "GOVERNANCE"
+        years = 1
+      }
+    }
+  }
+
+  s3_logging = {
+    target_bucket = "access_logs"
+    target_prefix = "sso_elevator-logs/"
+  }
 
   # "Resource", "PermissionSet", "Approvers" can be a string or a list of strings
   # "Resource" & "PermissionSet" can be set to "*" to match all

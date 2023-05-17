@@ -144,20 +144,53 @@ module "aws_sso_elevator" {
   build_in_docker = true
   revoker_post_update_to_slack = true
 
-  # If you want to use your own S3 bucket for audit_entry logs,
-  # then you can specify it name there:
-  name_of_existing_s3_bucket = "your-s3-bucket-name"
-
-  # If you dont pass name_of_existing_s3_bucket then module will create new bucket
-  s3_bucket_for_audit_entry_name   = "sso-elevator-logs"
-  s3_bucket_prefix_for_partitions  = "logs"
-  object_lock_for_s3_bucket        = true
-  mfa_delete = true
-  name_of_logging_bucket_for_s3    = "name_of_bucket_for_logs"
-  # If name_of_logging_bucket_for_s3 was not specified,
-  # then s3_access_logs will be save in s3_bucket_for_audit_entry_name/s3_access_logs/
-
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
+
+  # If you wish to use your own S3 bucket for audit_entry logs, 
+  # specify its name here:
+  s3_name_of_the_existing_bucket = "your-s3-bucket-name"
+
+  # If you do not provide a value for s3_name_of_the_existing_bucket, 
+  # the module will create a new bucket with the default name 'sso-elevator-audit-entry':
+  s3_bucket_name_for_audit_entry = "fivexl-sso-elevator"
+
+  # The default partition prefix is "logs/":
+  s3_bucket_partition_prefix     = "some_prefix/"
+
+  # If a postfix is not specified, a random string will be generated:
+  s3_bucket_name_postfix         = "-dev"
+
+  # MFA delete setting for the S3 bucket:
+  s3_mfa_delete                  = false
+
+  # Object lock setting for the S3 bucket:
+  s3_object_lock                 = true
+
+  # The default object lock configuration is as follows:
+  # {
+  #  rule = {
+  #   default_retention = {
+  #      mode  = "GOVERNANCE"
+  #      years = 2
+  #    }
+  #  }
+  #}
+  # You can specify a different configuration here:
+  s3_object_lock_configuration = {
+    rule = {
+      default_retention = {
+        mode  = "GOVERNANCE"
+        years = 1
+      }
+    }
+  }
+
+  # Here, you can specify the target_bucket and prefix for access logs of the sso_elevator bucket.
+  # If s3_logging is not specified, logs will not be written:
+  s3_logging = {
+    target_bucket = "some_access_logging_bucket"
+    target_prefix = "some_prefix_for_access_logs"
+  }
 
   config = [
     # This could be a config for dev/stage account where developers can self-serve
