@@ -322,6 +322,8 @@ settings:
 | Name | Version |
 |------|---------|
 | <a name="provider_aws"></a> [aws](#provider\_aws) | 4.66.1 |
+| <a name="provider_null"></a> [null](#provider\_null) | 3.2.1 |
+| <a name="provider_random"></a> [random](#provider\_random) | n/a |
 
 ## Modules
 
@@ -329,7 +331,7 @@ settings:
 |------|--------|---------|
 | <a name="module_access_requester_slack_handler"></a> [access\_requester\_slack\_handler](#module\_access\_requester\_slack\_handler) | terraform-aws-modules/lambda/aws | 4.16.0 |
 | <a name="module_access_revoker"></a> [access\_revoker](#module\_access\_revoker) | terraform-aws-modules/lambda/aws | 4.16.0 |
-| <a name="module_sso_elevator_bucket"></a> [sso\_elevator\_bucket](#module\_sso\_elevator\_bucket) | terraform-aws-modules/s3-bucket/aws | 3.6.0 |
+| <a name="module_sso_elevator_bucket"></a> [sso\_elevator\_bucket](#module\_sso\_elevator\_bucket) | terraform-aws-modules/s3-bucket/aws | 3.10.1 |
 | <a name="module_sso_elevator_dependencies"></a> [sso\_elevator\_dependencies](#module\_sso\_elevator\_dependencies) | terraform-aws-modules/lambda/aws | 4.16.0 |
 
 ## Resources
@@ -346,6 +348,8 @@ settings:
 | [aws_scheduler_schedule_group.one_time_schedule_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule_group) | resource |
 | [aws_sns_topic.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
 | [aws_sns_topic_subscription.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
+| [null_resource.version_check](https://registry.terraform.io/providers/hashicorp/null/latest/docs/resources/resource) | resource |
+| [random_string.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 | [aws_iam_policy_document.revoker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.slack_handler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
@@ -360,15 +364,19 @@ settings:
 | <a name="input_build_in_docker"></a> [build\_in\_docker](#input\_build\_in\_docker) | Whether to build the lambda in a docker container or using local python (poetry) | `bool` | `true` | no |
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | n/a | yes |
 | <a name="input_log_level"></a> [log\_level](#input\_log\_level) | value for the log level | `string` | `"INFO"` | no |
-| <a name="input_name_of_existing_s3_bucket"></a> [name\_of\_existing\_s3\_bucket](#input\_name\_of\_existing\_s3\_bucket) | Pass it if you want to use an existing bucket | `string` | `""` | no |
 | <a name="input_requester_lambda_name"></a> [requester\_lambda\_name](#input\_requester\_lambda\_name) | value for the requester lambda name | `string` | `"access-requester"` | no |
 | <a name="input_requester_lambda_name_postfix"></a> [requester\_lambda\_name\_postfix](#input\_requester\_lambda\_name\_postfix) | For dev purposes | `string` | `""` | no |
 | <a name="input_revoker_lambda_name"></a> [revoker\_lambda\_name](#input\_revoker\_lambda\_name) | value for the revoker lambda name | `string` | `"access-revoker"` | no |
 | <a name="input_revoker_lambda_name_postfix"></a> [revoker\_lambda\_name\_postfix](#input\_revoker\_lambda\_name\_postfix) | For dev purposes | `string` | `""` | no |
 | <a name="input_revoker_post_update_to_slack"></a> [revoker\_post\_update\_to\_slack](#input\_revoker\_post\_update\_to\_slack) | Should revoker send a confirmation of the revocation to Slack? | `bool` | `true` | no |
-| <a name="input_s3_bucket_for_audit_entry_name"></a> [s3\_bucket\_for\_audit\_entry\_name](#input\_s3\_bucket\_for\_audit\_entry\_name) | Name of the S3 bucket | `string` | `"sso-elevator-logs"` | no |
-| <a name="input_s3_bucket_name_postfix"></a> [s3\_bucket\_name\_postfix](#input\_s3\_bucket\_name\_postfix) | For dev purposes | `string` | `""` | no |
-| <a name="input_s3_bucket_prefix_for_partitions"></a> [s3\_bucket\_prefix\_for\_partitions](#input\_s3\_bucket\_prefix\_for\_partitions) | The prefix for the S3 bucket partitions | `string` | `"logs"` | no |
+| <a name="input_s3_bucket_name_for_audit_entry"></a> [s3\_bucket\_name\_for\_audit\_entry](#input\_s3\_bucket\_name\_for\_audit\_entry) | Name of the S3 bucket | `string` | `"sso-elevator-audit-entry"` | no |
+| <a name="input_s3_bucket_name_postfix"></a> [s3\_bucket\_name\_postfix](#input\_s3\_bucket\_name\_postfix) | If left empty, a random string will be generated as the postfix. | `string` | `""` | no |
+| <a name="input_s3_bucket_partition_prefix"></a> [s3\_bucket\_partition\_prefix](#input\_s3\_bucket\_partition\_prefix) | The prefix for the S3 bucket partitions | `string` | `"logs"` | no |
+| <a name="input_s3_logging"></a> [s3\_logging](#input\_s3\_logging) | Map containing access bucket logging configuration. | `map(string)` | `{}` | no |
+| <a name="input_s3_mfa_delete"></a> [s3\_mfa\_delete](#input\_s3\_mfa\_delete) | Whether to enable MFA delete for the S3 bucket | `bool` | `false` | no |
+| <a name="input_s3_name_of_the_existing_bucket"></a> [s3\_name\_of\_the\_existing\_bucket](#input\_s3\_name\_of\_the\_existing\_bucket) | Specify the name of an existing S3 bucket to use. If not provided, a new bucket will be created. | `string` | `""` | no |
+| <a name="input_s3_object_lock"></a> [s3\_object\_lock](#input\_s3\_object\_lock) | Enable object lock | `bool` | `false` | no |
+| <a name="input_s3_object_lock_configuration"></a> [s3\_object\_lock\_configuration](#input\_s3\_object\_lock\_configuration) | Object lock configuration | `any` | <pre>{<br>  "rule": {<br>    "default_retention": {<br>      "mode": "GOVERNANCE",<br>      "years": 2<br>    }<br>  }<br>}</pre> | no |
 | <a name="input_schedule_expression"></a> [schedule\_expression](#input\_schedule\_expression) | recovation schedule expression (will revoke all user-level assignments unknown to the Elevator) | `string` | `"cron(0 23 * * ? *)"` | no |
 | <a name="input_schedule_expression_for_check_on_inconsistency"></a> [schedule\_expression\_for\_check\_on\_inconsistency](#input\_schedule\_expression\_for\_check\_on\_inconsistency) | how often revoker should check for inconsistency (warn if found unknown user-level assignments) | `string` | `"rate(2 hours)"` | no |
 | <a name="input_schedule_group_name_postfix"></a> [schedule\_group\_name\_postfix](#input\_schedule\_group\_name\_postfix) | For dev purposes | `string` | `""` | no |
