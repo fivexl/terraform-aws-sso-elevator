@@ -270,8 +270,8 @@ output "aws_sso_elevator_lambda_function_url" {
 6. Update lambda url (from output `aws_sso_elevator_lambda_function_url`) to `request_url` field and paste the following into the text box: 
 ```yaml
 display_information:
-  name: WS SSO Access Elevator
-  description: AWS SSO access elevator
+  name: AWS SSO Access Elevator
+  description: Slack bot to temporary assign AWS SSO Permission set to a user
 features:
   bot_user:
     display_name: AWS SSO Access Elevator
