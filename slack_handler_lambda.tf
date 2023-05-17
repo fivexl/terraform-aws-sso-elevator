@@ -47,7 +47,7 @@ module "access_requester_slack_handler" {
     REVOKER_FUNCTION_ARN            = local.revoker_lambda_arn
     REVOKER_FUNCTION_NAME           = local.revoker_lambda_name
     S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
-    S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_prefix_for_partitions
+    S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix
   }
 
   create_lambda_function_url = true
@@ -109,7 +109,7 @@ data "aws_iam_policy_document" "slack_handler" {
     actions = [
       "s3:PutObject",
     ]
-    resources = ["${local.s3_bucket_arn}/${var.s3_bucket_prefix_for_partitions}/*"]
+    resources = ["${local.s3_bucket_arn}/${var.s3_bucket_partition_prefix}/*"]
   }
   statement {
     sid    = "AllowListSSOInstances"

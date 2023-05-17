@@ -1,5 +1,5 @@
 module "sso_elevator_bucket" {
-  count   = var.name_of_existing_s3_bucket == "" ? 1 : 0
+  count   = var.s3_name_of_the_existing_bucket == "" ? 1 : 0
   source  = "terraform-aws-modules/s3-bucket/aws"
   version = "3.10.1"
 
@@ -15,19 +15,14 @@ module "sso_elevator_bucket" {
 
   versioning = {
     enabled    = true
-    mfa_delete = var.mfa_delete
+    mfa_delete = var.s3_mfa_delete
   }
 
-  object_lock_enabled = var.object_lock_for_s3_bucket
+  object_lock_enabled = var.s3_object_lock
 
-  object_lock_configuration = var.object_lock_for_s3_bucket ? {
-    rule = {
-      default_retention = {
-        mode  = "GOVERNANCE"
-        years = 2
-      }
-    }
-  } : null
+  object_lock_configuration = var.s3_object_lock ? var.s3_object_lock_configuration : null
+
+  logging = var.s3_logging
 
   block_public_acls       = true
   block_public_policy     = true
@@ -35,10 +30,3 @@ module "sso_elevator_bucket" {
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_logging" "bucket_logging" {
-  count = var.name_of_logging_bucket_for_s3 != "" ? 1 : 0
-
-  bucket        = local.s3_bucket_name
-  target_bucket = var.name_of_logging_bucket_for_s3
-  target_prefix = ""
-}

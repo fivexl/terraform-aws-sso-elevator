@@ -48,7 +48,7 @@ module "access_revoker" {
     REVOKER_FUNCTION_ARN            = local.revoker_lambda_arn
     REVOKER_FUNCTION_NAME           = local.revoker_lambda_name
     S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
-    S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_prefix_for_partitions
+    S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix
   }
 
   allowed_triggers = {
@@ -129,7 +129,7 @@ data "aws_iam_policy_document" "revoker" {
     actions = [
       "s3:PutObject",
     ]
-    resources = ["${local.s3_bucket_arn}/${var.s3_bucket_prefix_for_partitions}/*"]
+    resources = ["${local.s3_bucket_arn}/${var.s3_bucket_partition_prefix}/*"]
   }
 }
 
