@@ -44,8 +44,6 @@ module "aws_sso_elevator" {
   s3_bucket_partition_prefix     = "logs/"
   s3_bucket_name_for_audit_entry = "fivexl-sso-elevator"
 
-  s3_bucket_name_postfix = "prod"
-
   s3_mfa_delete  = false
   s3_object_lock = true
 
