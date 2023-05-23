@@ -9,23 +9,45 @@ from pydantic import ValidationError
 import config
 import entities
 import sso
-from entities import BaseModel
+from events import RevokeEvent, ScheduledRevokeEvent, Event
 
 logger = config.get_logger(service="schedule")
 cfg = config.get_config()
 
 
-class RevokeEvent(BaseModel):
-    schedule_name: str
-    approver: entities.slack.User
-    requester: entities.slack.User
-    user_account_assignment: sso.UserAccountAssignment
-    permission_duration: timedelta
+def get_schedules(client: EventBridgeSchedulerClient) -> list[type_defs.GetScheduleOutputTypeDef]:
+    paginator = client.get_paginator("list_schedules")
+    scheduled_events = []
+    for page in paginator.paginate(GroupName=cfg.schedule_group_name):
+        schedules_names = jp.search("Schedules[*].Name", page)
+        for schedule_name in schedules_names:
+            if not schedule_name:
+                continue
+            full_schedule = client.get_schedule(GroupName=cfg.schedule_group_name, Name=schedule_name)
+            scheduled_events.append(full_schedule)
+    return scheduled_events
 
 
-def event_bridge_schedule_after(td: timedelta) -> str:
-    now = datetime.now(timezone.utc)
-    return f"at({(now + td).replace(microsecond=0).isoformat().replace('+00:00', '')})"
+def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRevokeEvent]:
+    scheduled_events = get_schedules(client)
+    scheduled_revoke_events: list[ScheduledRevokeEvent] = []
+    for full_schedule in scheduled_events:
+        if full_schedule["Name"].startswith("discard-buttons"):
+            continue
+
+        event = json.loads(jp.search("Target.Input", full_schedule))
+
+        try:
+            event = Event.parse_obj(event)
+        except ValidationError as e:
+            logger.warning("Got unexpected event", extra={"event": event, "error": e})
+            continue
+
+        if isinstance(event.__root__, ScheduledRevokeEvent):
+            scheduled_revoke_events.append(event.__root__)
+            print("case: ScheduledRevokeEvent")
+
+    return scheduled_revoke_events
 
 
 def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str) -> None:
@@ -39,35 +61,19 @@ def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str) -> N
             raise e
 
 
-def get_scheduled_revoke_events(client: EventBridgeSchedulerClient) -> list[RevokeEvent]:
-    paginator = client.get_paginator("list_schedules")
-    scheduled_revoke_events = []
-    for page in paginator.paginate(GroupName=cfg.schedule_group_name):
-        schedules_names = jp.search("Schedules[*].Name", page)
-        for schedule_name in schedules_names:
-            if not schedule_name:
-                continue
-            full_schedule = client.get_schedule(GroupName=cfg.schedule_group_name, Name=schedule_name)
-            if event := json.loads(jp.search("Target.Input", full_schedule))["revoke_event"]:
-                try:
-                    revoke_event = RevokeEvent.parse_raw(event)
-                except ValidationError as e:
-                    logger.error(
-                        "Failed to parse schedule for revoke event", extra={"schedule_name": schedule_name, "event": event, "error": e}
-                    )
-                    continue
-                scheduled_revoke_events.append(revoke_event)
-    return scheduled_revoke_events
-
-
-def get_and_delete_schedule_if_already_exist(
+def get_and_delete_scheduled_revoke_event_if_already_exist(
     client: EventBridgeSchedulerClient,
     user_account_assignment: sso.UserAccountAssignment,
 ) -> None:
-    for revoke_event in get_scheduled_revoke_events(client):
-        if revoke_event.user_account_assignment == user_account_assignment:
-            logger.info("Schedule already exist, deleting it", extra={"schedule_name": revoke_event.schedule_name})
-            delete_schedule(client, revoke_event.schedule_name)
+    for scheduled_event in get_scheduled_events(client):
+        if scheduled_event.revoke_event.user_account_assignment == user_account_assignment:
+            logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
+            delete_schedule(client, scheduled_event.revoke_event.schedule_name)
+
+
+def event_bridge_schedule_after(td: timedelta) -> str:
+    now = datetime.now(timezone.utc)
+    return f"at({(now + td).replace(microsecond=0).isoformat().replace('+00:00', '')})"
 
 
 def schedule_revoke_event(
@@ -79,7 +85,7 @@ def schedule_revoke_event(
 ) -> type_defs.CreateScheduleOutputTypeDef:
     logger.info("Scheduling revoke event")
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    get_and_delete_schedule_if_already_exist(schedule_client, user_account_assignment)
+    get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, user_account_assignment)
     revoke_event = RevokeEvent(
         schedule_name=schedule_name,
         approver=approver,

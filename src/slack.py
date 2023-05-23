@@ -5,6 +5,8 @@ from typing import Optional, TypeVar, Union
 
 import jmespath as jp
 import slack_sdk.errors
+from mypy_boto3_identitystore import IdentityStoreClient
+from mypy_boto3_sso_admin import SSOAdminClient
 from pydantic import root_validator
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import (
@@ -22,12 +24,12 @@ from slack_sdk.models.blocks import (
     TimePickerElement,
 )
 from slack_sdk.models.views import View
+from slack_sdk.web.slack_response import SlackResponse
 
 import config
 import entities
+import sso
 from entities import BaseModel
-from slack_sdk.web.slack_response import SlackResponse
-
 
 # ruff: noqa: ANN102, PGH003
 
@@ -335,3 +337,28 @@ def remove_buttons(payload: ButtonClickedPayload, client: WebClient, approver: e
         ts=payload.thread_ts,
         blocks=blocks,
     )
+
+
+def create_slack_mention_by_principal_id(
+    account_assignment: sso.AccountAssignment | sso.UserAccountAssignment,
+    sso_client: SSOAdminClient,
+    cfg: config.Config,
+    identitystore_client: IdentityStoreClient,
+    slack_client: WebClient,
+) -> str:
+    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    aws_user_emails = sso.get_user_emails(
+        identitystore_client,
+        sso_instance.identity_store_id,
+        account_assignment.principal_id if isinstance(account_assignment, sso.AccountAssignment) else account_assignment.user_principal_id,
+    )
+    user_name = None
+
+    for email in aws_user_emails:
+        try:
+            slack_user = get_user_by_email(slack_client, email)
+            user_name = slack_user.real_name
+        except Exception:
+            continue
+
+    return f"{user_name}" if user_name is not None else aws_user_emails[0]
