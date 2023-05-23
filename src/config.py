@@ -79,5 +79,5 @@ _config: Optional[Config] = None
 def get_config() -> Config:
     global _config  # noqa: PLW0603
     if _config is None:
-        _config = Config()
+        _config = Config()  # type: ignore # noqa: PGH003
     return _config

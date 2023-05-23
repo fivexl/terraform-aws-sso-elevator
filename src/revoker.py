@@ -1,8 +1,14 @@
 import boto3
 import slack_sdk
-from mypy_boto3_sso_admin import SSOAdminClient
 from pydantic import ValidationError
 from slack_sdk.web.slack_response import SlackResponse
+
+
+from mypy_boto3_organizations import OrganizationsClient
+from mypy_boto3_sso_admin import SSOAdminClient
+from mypy_boto3_identitystore import IdentityStoreClient
+from mypy_boto3_scheduler import EventBridgeSchedulerClient
+
 
 import config
 import entities
@@ -11,10 +17,17 @@ import s3
 import schedule
 import slack
 import sso
+from events import (
+    CheckOnInconsistency,
+    DiscardButtonsEvent,
+    Event,
+    ScheduledRevokeEvent,
+    SSOElevatorScheduledRevocation,
+)
 
-cfg = config.get_config()
 logger = config.get_logger(service="revoker")
 
+cfg = config.get_config()
 org_client = boto3.client("organizations")
 sso_client = boto3.client("sso-admin")
 identitystore_client = boto3.client("identitystore")
@@ -23,83 +36,63 @@ slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
-    logger.info("Got event", extra={"event": event})
+    try:
+        parsed_event = Event.parse_obj(event).__root__
+    except ValidationError as e:
+        logger.warning("Got unexpected event:", extra={"event": event, "exception": e})
+        raise e
 
-    if event["action"] == "event_bridge_revoke":
-        try:
-            revoke_event = schedule.RevokeEvent.parse_raw(event["revoke_event"])
-            return handle_scheduled_account_assignment_deletion(revoke_event, sso_client, cfg)
-        except ValidationError as e:
-            logger.exception(e, extra={"event": event})
-            raise e
+    match parsed_event:
+        case ScheduledRevokeEvent():
+            logger.info("Handling ScheduledRevokeEvent", extra={"event": parsed_event})
 
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-
-    accounts = organizations.get_accounts_from_config(org_client, cfg)
-    permission_sets = sso.get_permission_sets_from_config(sso_client, cfg)
-
-    account_assignments = sso.list_user_account_assignments(
-        sso_client,
-        cfg.sso_instance_arn,
-        [a.id for a in accounts],
-        [ps.arn for ps in permission_sets],
-    )
-    scheduled_revoke_events = schedule.get_scheduled_revoke_events(scheduler_client)
-
-    if event["action"] == "check_on_inconsistency":
-        account_assignments_from_events = [
-            sso.AccountAssignment(
-                permission_set_arn=revoke_event.user_account_assignment.permission_set_arn,
-                account_id=revoke_event.user_account_assignment.account_id,
-                principal_id=revoke_event.user_account_assignment.user_principal_id,
-                principal_type="USER",
+            return handle_scheduled_account_assignment_deletion(
+                revoke_event=parsed_event.revoke_event,
+                sso_client=sso_client,
+                cfg=cfg,
+                scheduler_client=scheduler_client,
+                org_client=org_client,
+                slack_client=slack_client,
+                identitystore_client=identitystore_client,
             )
-            for revoke_event in scheduled_revoke_events
-        ]
 
-        for account_assignment in account_assignments:
-            if account_assignment not in account_assignments_from_events:
-                account = organizations.describe_account(org_client, account_assignment.account_id)
-                logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
-                mention = create_slack_mention_by_principal_id(account_assignment)
-                slack_client.chat_postMessage(
-                    channel=cfg.slack_channel_id,
-                    text=(
-                        f"Found an inconsistent account assignment in {account.name}-{account.id} for {mention}. "
-                        "There is no schedule for its revocation. Please check the revoker logs for more details."
-                    ),
-                )
+        case DiscardButtonsEvent():
+            logger.info("Handling DiscardButtonsEvent", extra={"event": parsed_event})
 
-    if event["action"] == "sso_elevator_scheduled_revocation":
-        account_assignments_from_events = [
-            sso.AccountAssignment(
-                permission_set_arn=revoke_event.user_account_assignment.permission_set_arn,
-                account_id=revoke_event.user_account_assignment.account_id,
-                principal_id=revoke_event.user_account_assignment.user_principal_id,
-                principal_type="USER",
+            return
+
+        case CheckOnInconsistency():
+            logger.info("Handling CheckOnInconsistency event", extra={"event": parsed_event})
+
+            return handle_check_on_inconsistency(
+                sso_client=sso_client,
+                cfg=cfg,
+                scheduler_client=scheduler_client,
+                org_client=org_client,
+                slack_client=slack_client,
+                identitystore_client=identitystore_client,
             )
-            for revoke_event in scheduled_revoke_events
-        ]
-        for account_assignment in account_assignments:
-            if account_assignment in account_assignments_from_events:
-                logger.info(
-                    "Account assignment already scheduled for revocation. Skipping.",
-                    extra={"account_assignment": account_assignment},
-                )
-                continue
-            else:
-                handle_account_assignment_deletion(
-                    account_assignment=sso.UserAccountAssignment(
-                        account_id=account_assignment.account_id,
-                        permission_set_arn=account_assignment.permission_set_arn,
-                        user_principal_id=account_assignment.principal_id,
-                        instance_arn=sso_instance.arn,
-                    ),
-                    cfg=cfg,
-                )
+
+        case SSOElevatorScheduledRevocation():
+            logger.info("Handling SSOElevatorScheduledRevocation event", extra={"event": parsed_event})
+            return handle_sso_elevator_scheduled_revocation(
+                sso_client=sso_client,
+                cfg=cfg,
+                scheduler_client=scheduler_client,
+                org_client=org_client,
+                slack_client=slack_client,
+                identitystore_client=identitystore_client,
+            )
 
 
-def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssignment, cfg: config.Config) -> SlackResponse | None:
+def handle_account_assignment_deletion(
+    account_assignment: sso.UserAccountAssignment,
+    cfg: config.Config,
+    sso_client: SSOAdminClient,
+    org_client: OrganizationsClient,
+    slack_client: slack_sdk.WebClient,
+    identitystore_client: IdentityStoreClient,
+) -> SlackResponse | None:
     logger.info("Handling account assignment deletion", extra={"account_assignment": account_assignment})
 
     assignment_status = sso.delete_account_assignment_and_wait_for_result(
@@ -130,7 +123,15 @@ def handle_account_assignment_deletion(account_assignment: sso.UserAccountAssign
 
     if cfg.post_update_to_slack:
         account = organizations.describe_account(org_client, account_assignment.account_id)
-        return slack_notify_user_on_revoke(cfg, account_assignment, permission_set, account)
+        return slack_notify_user_on_revoke(
+            cfg=cfg,
+            account_assignment=account_assignment,
+            permission_set=permission_set,
+            account=account,
+            sso_client=sso_client,
+            identitystore_client=identitystore_client,
+            slack_client=slack_client,
+        )
 
 
 def slack_notify_user_on_revoke(
@@ -138,8 +139,17 @@ def slack_notify_user_on_revoke(
     account_assignment: sso.AccountAssignment | sso.UserAccountAssignment,
     permission_set: entities.aws.PermissionSet,
     account: entities.aws.Account,
+    sso_client: SSOAdminClient,
+    identitystore_client: IdentityStoreClient,
+    slack_client: slack_sdk.WebClient,
 ) -> SlackResponse:
-    mention = create_slack_mention_by_principal_id(account_assignment)
+    mention = slack.create_slack_mention_by_principal_id(
+        account_assignment=account_assignment,
+        sso_client=sso_client,
+        cfg=cfg,
+        identitystore_client=identitystore_client,
+        slack_client=slack_client,
+    )
     return slack_client.chat_postMessage(
         channel=cfg.slack_channel_id,
         text=f"Revoked role {permission_set.name} for user {mention} in account {account.name}",
@@ -147,9 +157,16 @@ def slack_notify_user_on_revoke(
 
 
 def handle_scheduled_account_assignment_deletion(
-    revoke_event: schedule.RevokeEvent, sso_client: SSOAdminClient, cfg: config.Config
+    revoke_event: schedule.RevokeEvent,
+    sso_client: SSOAdminClient,
+    cfg: config.Config,
+    scheduler_client: EventBridgeSchedulerClient,
+    org_client: OrganizationsClient,
+    slack_client: slack_sdk.WebClient,
+    identitystore_client: IdentityStoreClient,
 ) -> SlackResponse | None:
     logger.info("Handling scheduled account assignment deletion", extra={"revoke_event": revoke_event})
+
     user_account_assignment = revoke_event.user_account_assignment
     assignment_status = sso.delete_account_assignment_and_wait_for_result(
         sso_client,
@@ -179,23 +196,95 @@ def handle_scheduled_account_assignment_deletion(
 
     if cfg.post_update_to_slack:
         account = organizations.describe_account(org_client, user_account_assignment.account_id)
-        slack_notify_user_on_revoke(cfg, user_account_assignment, permission_set, account)
+        slack_notify_user_on_revoke(
+            cfg=cfg,
+            account_assignment=user_account_assignment,
+            permission_set=permission_set,
+            account=account,
+            sso_client=sso_client,
+            identitystore_client=identitystore_client,
+            slack_client=slack_client,
+        )
 
 
-def create_slack_mention_by_principal_id(account_assignment: sso.AccountAssignment | sso.UserAccountAssignment) -> str:
+def handle_check_on_inconsistency(
+    sso_client: SSOAdminClient,
+    cfg: config.Config,
+    scheduler_client: EventBridgeSchedulerClient,
+    org_client: OrganizationsClient,
+    slack_client: slack_sdk.WebClient,
+    identitystore_client: IdentityStoreClient,
+) -> None:
+    account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
+    scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
+    account_assignments_from_events = [
+        sso.AccountAssignment(
+            permission_set_arn=scheduled_event.revoke_event.user_account_assignment.permission_set_arn,
+            account_id=scheduled_event.revoke_event.user_account_assignment.account_id,
+            principal_id=scheduled_event.revoke_event.user_account_assignment.user_principal_id,
+            principal_type="USER",
+        )
+        for scheduled_event in scheduled_revoke_events
+    ]
+
+    for account_assignment in account_assignments:
+        if account_assignment not in account_assignments_from_events:
+            account = organizations.describe_account(org_client, account_assignment.account_id)
+            logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
+            mention = slack.create_slack_mention_by_principal_id(
+                account_assignment=account_assignment,
+                sso_client=sso_client,
+                cfg=cfg,
+                identitystore_client=identitystore_client,
+                slack_client=slack_client,
+            )
+            slack_client.chat_postMessage(
+                channel=cfg.slack_channel_id,
+                text=(
+                    f"Found an inconsistent account assignment in {account.name}-{account.id} for {mention}. "
+                    "There is no schedule for its revocation. Please check the revoker logs for more details."
+                ),
+            )
+
+
+def handle_sso_elevator_scheduled_revocation(
+    sso_client: SSOAdminClient,
+    cfg: config.Config,
+    scheduler_client: EventBridgeSchedulerClient,
+    org_client: OrganizationsClient,
+    slack_client: slack_sdk.WebClient,
+    identitystore_client: IdentityStoreClient,
+) -> None:
+    account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
+    scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    aws_user_emails = sso.get_user_emails(
-        identitystore_client,
-        sso_instance.identity_store_id,
-        account_assignment.principal_id if isinstance(account_assignment, sso.AccountAssignment) else account_assignment.user_principal_id,
-    )
-    user_name = None
-
-    for email in aws_user_emails:
-        try:
-            slack_user = slack.get_user_by_email(slack_client, email)
-            user_name = slack_user.real_name
-        except Exception:
+    account_assignments_from_events = [
+        sso.AccountAssignment(
+            permission_set_arn=scheduled_event.revoke_event.user_account_assignment.permission_set_arn,
+            account_id=scheduled_event.revoke_event.user_account_assignment.account_id,
+            principal_id=scheduled_event.revoke_event.user_account_assignment.user_principal_id,
+            principal_type="USER",
+        )
+        for scheduled_event in scheduled_revoke_events
+    ]
+    for account_assignment in account_assignments:
+        if account_assignment in account_assignments_from_events:
+            logger.info(
+                "Account assignment already scheduled for revocation. Skipping.",
+                extra={"account_assignment": account_assignment},
+            )
             continue
-
-    return f"{user_name}" if user_name is not None else aws_user_emails[0]
+        else:
+            handle_account_assignment_deletion(
+                account_assignment=sso.UserAccountAssignment(
+                    account_id=account_assignment.account_id,
+                    permission_set_arn=account_assignment.permission_set_arn,
+                    user_principal_id=account_assignment.principal_id,
+                    instance_arn=sso_instance.arn,
+                ),
+                sso_client=sso_client,
+                org_client=org_client,
+                slack_client=slack_client,
+                identitystore_client=identitystore_client,
+                cfg=cfg,
+            )

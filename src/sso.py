@@ -8,9 +8,11 @@ from typing import TYPE_CHECKING, Callable, Generator, Optional, TypeVar
 import config
 import entities
 import errors
+import organizations
 
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_organizations import OrganizationsClient
     from mypy_boto3_sso_admin import SSOAdminClient, type_defs
 
     from entities.aws import PermissionSet
@@ -318,3 +320,18 @@ def get_permission_sets_from_config(client: SSOAdminClient, cfg: config.Config) 
     else:
         permission_sets = [ps for ps in list_permission_sets(client, cfg.sso_instance_arn) if ps.name in cfg.permission_sets]
     return permission_sets
+
+
+def get_account_assignment_information(
+    sso_client: SSOAdminClient, cfg: config.Config, org_client: OrganizationsClient
+) -> list[AccountAssignment]:
+    describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    accounts = organizations.get_accounts_from_config(org_client, cfg)
+    permission_sets = get_permission_sets_from_config(sso_client, cfg)
+    account_assignments = list_user_account_assignments(
+        sso_client,
+        cfg.sso_instance_arn,
+        [a.id for a in accounts],
+        [ps.arn for ps in permission_sets],
+    )
+    return account_assignments
