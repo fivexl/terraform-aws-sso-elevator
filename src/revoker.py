@@ -18,6 +18,7 @@ import schedule
 import slack
 import sso
 from events import (
+    RevokeEvent,
     CheckOnInconsistency,
     DiscardButtonsEvent,
     Event,
@@ -58,7 +59,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
 
         case DiscardButtonsEvent():
             logger.info("Handling DiscardButtonsEvent", extra={"event": parsed_event})
-
+            handle_discard_buttons_event(event=parsed_event, slack_client=slack_client)
             return
 
         case CheckOnInconsistency():
@@ -85,7 +86,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
             )
 
 
-def handle_account_assignment_deletion(
+def handle_account_assignment_deletion(  # noqa: PLR0913
     account_assignment: sso.UserAccountAssignment,
     cfg: config.Config,
     sso_client: SSOAdminClient,
@@ -134,7 +135,7 @@ def handle_account_assignment_deletion(
         )
 
 
-def slack_notify_user_on_revoke(
+def slack_notify_user_on_revoke(  # noqa: PLR0913
     cfg: config.Config,
     account_assignment: sso.AccountAssignment | sso.UserAccountAssignment,
     permission_set: entities.aws.PermissionSet,
@@ -156,8 +157,8 @@ def slack_notify_user_on_revoke(
     )
 
 
-def handle_scheduled_account_assignment_deletion(
-    revoke_event: schedule.RevokeEvent,
+def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
+    revoke_event: RevokeEvent,
     sso_client: SSOAdminClient,
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
@@ -207,7 +208,7 @@ def handle_scheduled_account_assignment_deletion(
         )
 
 
-def handle_check_on_inconsistency(
+def handle_check_on_inconsistency(  # noqa: PLR0913
     sso_client: SSOAdminClient,
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
@@ -247,7 +248,7 @@ def handle_check_on_inconsistency(
             )
 
 
-def handle_sso_elevator_scheduled_revocation(
+def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
     sso_client: SSOAdminClient,
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
@@ -288,3 +289,28 @@ def handle_sso_elevator_scheduled_revocation(
                 identitystore_client=identitystore_client,
                 cfg=cfg,
             )
+
+
+def handle_discard_buttons_event(event: DiscardButtonsEvent, slack_client: slack_sdk.WebClient) -> None:
+    message = slack.get_message_from_timestamp(
+        channel_id=event.channel_id,
+        message_ts=event.time_stamp,
+        slack_client=slack_client,
+    )
+    if message is None:
+        logger.warning("Message was not found", extra={"event": event})
+        return
+
+    for block in message["blocks"]:
+        if slack.get_block_id(block) == "buttons":
+            blocks = slack.remove_blocks(message["blocks"], block_ids=["buttons"])
+
+            slack_client.chat_update(
+                channel=event.channel_id,
+                ts=message["ts"],
+                blocks=blocks,
+            )
+            logger.info("Buttons were removed", extra={"event": event})
+            return
+
+    logger.info("Buttons were not found", extra={"event": event})
