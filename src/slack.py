@@ -362,3 +362,16 @@ def create_slack_mention_by_principal_id(
             continue
 
     return f"{user_name}" if user_name is not None else aws_user_emails[0]
+
+
+def get_message_from_timestamp(channel_id: str, message_ts: str, slack_client: slack_sdk.WebClient) -> dict | None:
+    response = slack_client.conversations_history(channel=channel_id)
+
+    if response["ok"]:
+        messages = response.get("messages")
+        if messages is not None:
+            for message in messages:
+                if "ts" in message and message["ts"] == message_ts:
+                    return message
+
+    return None

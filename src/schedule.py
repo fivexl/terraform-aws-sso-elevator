@@ -9,7 +9,7 @@ from pydantic import ValidationError
 import config
 import entities
 import sso
-from events import RevokeEvent, ScheduledRevokeEvent, Event
+from events import DiscardButtonsEvent, Event, RevokeEvent, ScheduledRevokeEvent
 
 logger = config.get_logger(service="schedule")
 cfg = config.get_config()
@@ -108,6 +108,46 @@ def schedule_revoke_event(
                     "action": "event_bridge_revoke",
                     "revoke_event": revoke_event.json(),
                 },
+            ),
+        ),
+    )
+
+
+def schedule_discard_buttons_event(
+    permission_duration: timedelta,
+    schedule_client: EventBridgeSchedulerClient,
+    time_stamp: str,
+    channel_id: str,
+) -> type_defs.CreateScheduleOutputTypeDef:
+    permission_duration = timedelta(minutes=2)
+
+    logger.info("Scheduling discard buttons event")
+    schedule_name = "discard-buttons" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    logger.debug(
+        "Creating schedule",
+        extra={
+            "schedule_name": schedule_name,
+            "permission_duration": permission_duration,
+            "time_stamp": time_stamp,
+            "channel_id": channel_id,
+        },
+    )
+    return schedule_client.create_schedule(
+        FlexibleTimeWindow={"Mode": "OFF"},
+        Name=schedule_name,
+        GroupName=cfg.schedule_group_name,
+        ScheduleExpression=event_bridge_schedule_after(permission_duration),
+        State="ENABLED",
+        Target=type_defs.TargetTypeDef(
+            Arn=cfg.revoker_function_arn,
+            RoleArn=cfg.schedule_policy_arn,
+            Input=json.dumps(
+                DiscardButtonsEvent(
+                    action="discard_buttons_event",
+                    schedule_name=schedule_name,
+                    time_stamp=time_stamp,
+                    channel_id=channel_id,
+                ).dict()
             ),
         ),
     )

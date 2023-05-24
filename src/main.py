@@ -14,10 +14,12 @@ import errors
 import organizations
 import slack
 import sso
+import schedule
 
 logger = config.get_logger(service="main")
 
 session = boto3.Session()
+schedule_client = session.client("scheduler")
 org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
 
@@ -176,6 +178,8 @@ def handle_request_for_access_submittion(
     logger.info("Decision on request was made", extra={"decision": decision})
 
     account = organizations.describe_account(org_client, request.account_id)
+
+    show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
         blocks=slack.build_approval_request_message_blocks(
             requester_slack_id=request.requester_slack_id,
@@ -183,11 +187,22 @@ def handle_request_for_access_submittion(
             role_name=request.permission_set_name,
             reason=request.reason,
             permission_duration=request.permission_duration,
-            show_buttons=bool(decision.approvers),
+            show_buttons=show_buttons,
         ),
         channel=cfg.slack_channel_id,
         text=f"Request for access to {account.name} account from {requester.real_name}",
     )
+
+    if show_buttons:
+        ts = slack_response["ts"]
+        if ts is not None:
+            schedule.schedule_discard_buttons_event(
+                schedule_client=schedule_client,
+                permission_duration=request.permission_duration,
+                time_stamp=ts,
+                channel_id=cfg.slack_channel_id,
+            )
+
     match decision.reason:
         case access_control.DecisionReason.ApprovalNotRequired:
             text = "Approval for this Permission Set & Account is not required. Request will be approved automatically."

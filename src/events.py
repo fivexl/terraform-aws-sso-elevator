@@ -30,7 +30,7 @@ class DiscardButtonsEvent(BaseModel):
     action: Literal["discard_buttons_event"]
     schedule_name: str
     time_stamp: str
-    chanel_id: str
+    channel_id: str
 
 
 class CheckOnInconsistency(BaseModel):
