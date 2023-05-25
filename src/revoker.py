@@ -13,7 +13,7 @@ import entities
 import organizations
 import s3
 import schedule
-import slack
+import slack_helpers
 import sso
 from events import (
     CheckOnInconsistency,
@@ -144,7 +144,7 @@ def slack_notify_user_on_revoke(  # noqa: PLR0913
     identitystore_client: IdentityStoreClient,
     slack_client: slack_sdk.WebClient,
 ) -> SlackResponse:
-    mention = slack.create_slack_mention_by_principal_id(
+    mention = slack_helpers.create_slack_mention_by_principal_id(
         account_assignment=account_assignment,
         sso_client=sso_client,
         cfg=cfg,
@@ -233,7 +233,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
         if account_assignment not in account_assignments_from_events:
             account = organizations.describe_account(org_client, account_assignment.account_id)
             logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
-            mention = slack.create_slack_mention_by_principal_id(
+            mention = slack_helpers.create_slack_mention_by_principal_id(
                 account_assignment=account_assignment,
                 sso_client=sso_client,
                 cfg=cfg,
@@ -305,7 +305,7 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
 
 
 def handle_discard_buttons_event(event: DiscardButtonsEvent, slack_client: slack_sdk.WebClient) -> None:
-    message = slack.get_message_from_timestamp(
+    message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,
         message_ts=event.time_stamp,
         slack_client=slack_client,
@@ -315,13 +315,14 @@ def handle_discard_buttons_event(event: DiscardButtonsEvent, slack_client: slack
         return
 
     for block in message["blocks"]:
-        if slack.get_block_id(block) == "buttons":
-            blocks = slack.remove_blocks(message["blocks"], block_ids=["buttons"])
+        if slack_helpers.get_block_id(block) == "buttons":
+            blocks = slack_helpers.remove_blocks(message["blocks"], block_ids=["buttons"])
 
             slack_client.chat_update(
                 channel=event.channel_id,
                 ts=message["ts"],
                 blocks=blocks,
+                text="Buttons were removed",
             )
             logger.info("Buttons were removed", extra={"event": event})
             return

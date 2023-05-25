@@ -17,6 +17,7 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "slack_app_log_level": "INFO",
         "s3_bucket_for_audit_entry_name": "x",
         "s3_bucket_prefix_for_partitions": "x",
+        "sso_elevator_scheduled_revocation_rule_name": "x",
     }
     os.environ |= mock_env
 
