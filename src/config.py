@@ -48,6 +48,8 @@ class Config(BaseSettings):
     s3_bucket_for_audit_entry_name: str
     s3_bucket_prefix_for_partitions: str
 
+    sso_elevator_scheduled_revocation_rule_name: str
+
     class Config:
         frozen = True
 

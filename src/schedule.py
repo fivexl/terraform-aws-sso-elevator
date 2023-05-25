@@ -3,7 +3,11 @@ from datetime import datetime, timedelta, timezone
 
 import botocore.exceptions
 import jmespath as jp
-from mypy_boto3_scheduler import EventBridgeSchedulerClient, type_defs
+from croniter import croniter
+from mypy_boto3_events import EventBridgeClient
+from mypy_boto3_events import type_defs as events_type_defs
+from mypy_boto3_scheduler import EventBridgeSchedulerClient
+from mypy_boto3_scheduler import type_defs as scheduler_type_defs
 from pydantic import ValidationError
 
 import config
@@ -15,7 +19,63 @@ logger = config.get_logger(service="schedule")
 cfg = config.get_config()
 
 
-def get_schedules(client: EventBridgeSchedulerClient) -> list[type_defs.GetScheduleOutputTypeDef]:
+def get_event_brige_rule(event_brige_client: EventBridgeClient, rule_name: str) -> events_type_defs.DescribeRuleResponseTypeDef :
+    return event_brige_client.describe_rule(Name=rule_name)
+
+
+def get_next_cron_run_time(cron_expression: str, base_time: datetime) -> datetime:
+    # Replace ? with * to comply with croniter
+    cron_expression = cron_expression.replace("?", "*")
+    cron_iter = croniter(cron_expression, base_time)
+    next_run_time = cron_iter.get_next(datetime)
+    logger.debug(f"Next run time: {next_run_time}")
+    return next_run_time
+
+
+def check_rule_expression_and_get_next_run(rule: events_type_defs.DescribeRuleResponseTypeDef) -> datetime or str:
+    schedule_expression = rule["ScheduleExpression"]
+    current_time = datetime.utcnow()
+    logger.debug(f"Current time: {current_time}")
+    logger.debug(f"Schedule expression: {schedule_expression}")
+
+    if schedule_expression.startswith("rate"):
+        return get_next_rate_run_time(rule, current_time)
+    elif schedule_expression.startswith("cron"):
+        clean_expression = schedule_expression.replace("cron(", "").replace(")", "")
+        return get_next_cron_run_time(clean_expression, current_time)
+    else:
+        raise ValueError("Unknown schedule expression format!")
+
+
+def get_next_rate_run_time(rule: events_type_defs.DescribeRuleResponseTypeDef, current_time: datetime) -> datetime:
+    # Extract creation timestamp from description
+    creation_time_str = rule["Description"].split(": ")[-1]
+    creation_time = datetime.strptime(creation_time_str, "%Y-%m-%dT%H:%M:%SZ")
+
+    # Extract rate from schedule expression
+    rate_expression = rule["ScheduleExpression"].split("(")[1].split(")")[0]
+    rate_value, rate_unit = int(rate_expression.split()[0]), rate_expression.split()[1]
+
+    # Initialize rate as timedelta
+    rate = timedelta()
+
+    if rate_unit.startswith("minute"):
+        rate = timedelta(minutes=rate_value)
+    elif rate_unit.startswith("hour"):
+        rate = timedelta(hours=rate_value)
+    elif rate_unit.startswith("day"):
+        rate = timedelta(days=rate_value)
+
+    # Calculate next run time
+    time_since_last_run = current_time - creation_time
+    runs_since_creation = time_since_last_run // rate
+    next_run_time = creation_time + rate * (runs_since_creation + 1)
+
+    logger.debug(f"Next run time: {next_run_time}")
+    return next_run_time
+
+
+def get_schedules(client: EventBridgeSchedulerClient) -> list[scheduler_type_defs.GetScheduleOutputTypeDef]:
     paginator = client.get_paginator("list_schedules")
     scheduled_events = []
     for page in paginator.paginate(GroupName=cfg.schedule_group_name):
@@ -82,7 +142,7 @@ def schedule_revoke_event(
     approver: entities.slack.User,
     requester: entities.slack.User,
     user_account_assignment: sso.UserAccountAssignment,
-) -> type_defs.CreateScheduleOutputTypeDef:
+) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
     logger.info("Scheduling revoke event")
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, user_account_assignment)
@@ -100,7 +160,7 @@ def schedule_revoke_event(
         GroupName=cfg.schedule_group_name,
         ScheduleExpression=event_bridge_schedule_after(permission_duration),
         State="ENABLED",
-        Target=type_defs.TargetTypeDef(
+        Target=scheduler_type_defs.TargetTypeDef(
             Arn=cfg.revoker_function_arn,
             RoleArn=cfg.schedule_policy_arn,
             Input=json.dumps(
@@ -118,8 +178,8 @@ def schedule_discard_buttons_event(
     schedule_client: EventBridgeSchedulerClient,
     time_stamp: str,
     channel_id: str,
-) -> type_defs.CreateScheduleOutputTypeDef:
-    permission_duration = timedelta(minutes=2)
+) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
+    permission_duration = timedelta(hours=2)
 
     logger.info("Scheduling discard buttons event")
     schedule_name = "discard-buttons" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -138,7 +198,7 @@ def schedule_discard_buttons_event(
         GroupName=cfg.schedule_group_name,
         ScheduleExpression=event_bridge_schedule_after(permission_duration),
         State="ENABLED",
-        Target=type_defs.TargetTypeDef(
+        Target=scheduler_type_defs.TargetTypeDef(
             Arn=cfg.revoker_function_arn,
             RoleArn=cfg.schedule_policy_arn,
             Input=json.dumps(
