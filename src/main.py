@@ -12,7 +12,7 @@ import config
 import entities
 import errors
 import organizations
-import slack
+import slack_helpers
 import sso
 import schedule
 
@@ -39,6 +39,9 @@ def error_handler(client: WebClient, e: Exception, logger: Logger, context: Bolt
     logger.exception(e)
     if isinstance(e, errors.ConfigurationError):
         text = f"<@{context['user_id']}> Your request for AWS permissions failed with error: {e}. Check logs for more details."
+        client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
+    else:
+        text = f"<@{context['user_id']}> Your request for AWS permissions failed with error. Check access-requester logs for more details."
         client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
 
 
@@ -69,7 +72,7 @@ def show_initial_form(client: WebClient, body: dict, ack: Ack) -> SlackResponse:
     logger.info("Showing initial form")
     logger.debug("Request body", extra={"body": body})
     trigger_id = body["trigger_id"]
-    response = client.views_open(trigger_id=trigger_id, view=slack.RequestForAccessView.build())
+    response = client.views_open(trigger_id=trigger_id, view=slack_helpers.RequestForAccessView.build())
     trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
     return response
 
@@ -82,7 +85,7 @@ def load_select_options(client: WebClient, body: dict) -> SlackResponse:
     permission_sets = sso.get_permission_sets_from_config(client=sso_client, cfg=cfg)
     trigger_id = body["trigger_id"]
 
-    view = slack.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
+    view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
     return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
 
 
@@ -95,13 +98,13 @@ app.shortcut("request_for_access")(
 @handle_errors
 def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # noqa: ARG001
     logger.info("Handling button click")
-    payload = slack.ButtonClickedPayload.parse_obj(body)
+    payload = slack_helpers.ButtonClickedPayload.parse_obj(body)
     logger.info("Button click payload", extra={"payload": payload})
-    approver = slack.get_user(client, id=payload.approver_slack_id)
-    requester = slack.get_user(client, id=payload.request.requester_slack_id)
+    approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
+    requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
 
     if payload.action == entities.ApproverAction.Discard:
-        slack.remove_buttons(payload, client, approver)
+        slack_helpers.remove_buttons(payload, client, approver)
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"Request was discarded by<@{approver.id}> ",
@@ -124,7 +127,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             text=f"<@{approver.id}> you can not approve this request",
             thread_ts=payload.thread_ts,
         )
-    slack.remove_buttons(payload, client, approver)
+    slack_helpers.remove_buttons(payload, client, approver)
 
     access_control.execute_decision(
         decision=decision,
@@ -166,9 +169,9 @@ def handle_request_for_access_submittion(
     context: BoltContext,  # noqa: ARG001
 ) -> SlackResponse | None:
     logger.info("Handling request for access submittion")
-    request = slack.RequestForAccessView.parse(body)
+    request = slack_helpers.RequestForAccessView.parse(body)
     logger.info("View submitted", extra={"view": request})
-    requester = slack.get_user(client, id=request.requester_slack_id)
+    requester = slack_helpers.get_user(client, id=request.requester_slack_id)
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
         account_id=request.account_id,
@@ -181,7 +184,7 @@ def handle_request_for_access_submittion(
 
     show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
-        blocks=slack.build_approval_request_message_blocks(
+        blocks=slack_helpers.build_approval_request_message_blocks(
             requester_slack_id=request.requester_slack_id,
             account=account,
             role_name=request.permission_set_name,
@@ -209,7 +212,7 @@ def handle_request_for_access_submittion(
         case access_control.DecisionReason.SelfApproval:
             text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
         case access_control.DecisionReason.RequiresApproval:
-            approvers = [slack.get_user_by_email(client, email) for email in decision.approvers]
+            approvers = [slack_helpers.get_user_by_email(client, email) for email in decision.approvers]
             mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
             text = f"{mention_approvers} there is a request waiting for the approval."
         case access_control.DecisionReason.NoApprovers:
@@ -237,7 +240,7 @@ def handle_request_for_access_submittion(
         )
 
 
-app.view(slack.RequestForAccessView.CALLBACK_ID)(
+app.view(slack_helpers.RequestForAccessView.CALLBACK_ID)(
     ack=acknowledge_request,
     lazy=[handle_request_for_access_submittion],
 )
