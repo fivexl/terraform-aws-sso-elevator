@@ -242,8 +242,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             )
             try:
                 rule = schedule.get_event_brige_rule(
-                    event_brige_client=events_client,
-                    rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
+                    event_brige_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
                 )
                 next_run_time = schedule.check_rule_expression_and_get_next_run(rule)
             except Exception as e:
@@ -304,9 +303,7 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
 
 
 def handle_discard_buttons_event(
-        event: DiscardButtonsEvent,
-        slack_client: slack_sdk.WebClient,
-        scheduler_client: EventBridgeSchedulerClient
+    event: DiscardButtonsEvent, slack_client: slack_sdk.WebClient, scheduler_client: EventBridgeSchedulerClient
 ) -> None:
     message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,

@@ -4,9 +4,9 @@ locals {
   # Python version is used for building the docker image in slack_handler_lambda.tf/perm_revoker_lambda.tf/layers.tf
   python_version = join(".", slice(split(".", local.full_python_version), 0, 2))
 
-  revoker_lambda_arn    = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.revoker_lambda_name}"
-  requester_lambda_arn  = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
-  sso_instance_arn      = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].arns[0] : var.sso_instance_arn
+  revoker_lambda_arn   = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.revoker_lambda_name}"
+  requester_lambda_arn = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+  sso_instance_arn     = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].arns[0] : var.sso_instance_arn
 
   # In case of default value for var.s3_bucket_name_for_audit_entry, we append a random string to the bucket name to make it unique.
   # In case of non-default value for var.s3_bucket_name_for_audit_entry, we use the value as is and expect the name is unique.

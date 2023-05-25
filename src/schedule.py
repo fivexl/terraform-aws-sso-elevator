@@ -19,7 +19,7 @@ logger = config.get_logger(service="schedule")
 cfg = config.get_config()
 
 
-def get_event_brige_rule(event_brige_client: EventBridgeClient, rule_name: str) -> events_type_defs.DescribeRuleResponseTypeDef :
+def get_event_brige_rule(event_brige_client: EventBridgeClient, rule_name: str) -> events_type_defs.DescribeRuleResponseTypeDef:
     return event_brige_client.describe_rule(Name=rule_name)
 
 
