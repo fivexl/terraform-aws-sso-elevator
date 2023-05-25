@@ -2,7 +2,7 @@ module "access_requester_slack_handler" {
   source  = "terraform-aws-modules/lambda/aws"
   version = "4.16.0"
 
-  function_name = local.requester_lambda_name
+  function_name = var.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"
   handler       = "main.lambda_handler"
   publish       = true
@@ -16,7 +16,7 @@ module "access_requester_slack_handler" {
   runtime         = "python${local.python_version}"
   docker_image    = "lambda/python:${local.python_version}"
   docker_file     = "${path.module}/src/docker/Dockerfile"
-  hash_extra      = local.requester_lambda_name
+  hash_extra      = var.requester_lambda_name
   source_path = [
     {
       path           = "${path.module}/src/"
@@ -37,7 +37,7 @@ module "access_requester_slack_handler" {
     SLACK_SIGNING_SECRET = var.slack_signing_secret
     SLACK_BOT_TOKEN      = var.slack_bot_token
     SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = local.schedule_group_name
+    SCHEDULE_GROUP_NAME  = var.schedule_group_name
 
 
     SSO_INSTANCE_ARN                = local.sso_instance_arn
@@ -45,7 +45,7 @@ module "access_requester_slack_handler" {
     POWERTOOLS_LOGGER_LOG_EVENT     = true
     SCHEDULE_POLICY_ARN             = aws_iam_role.eventbridge_role.arn
     REVOKER_FUNCTION_ARN            = local.revoker_lambda_arn
-    REVOKER_FUNCTION_NAME           = local.revoker_lambda_name
+    REVOKER_FUNCTION_NAME           = var.revoker_lambda_name
     S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
     S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix
     SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name

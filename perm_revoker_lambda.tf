@@ -2,7 +2,7 @@ module "access_revoker" {
   source  = "terraform-aws-modules/lambda/aws"
   version = "4.16.0"
 
-  function_name = local.revoker_lambda_name
+  function_name = var.revoker_lambda_name
   description   = "Revokes temporary permissions"
   handler       = "revoker.lambda_handler"
   publish       = true
@@ -11,7 +11,7 @@ module "access_revoker" {
   depends_on = [
     null_resource.version_check,
   ]
-  hash_extra = local.revoker_lambda_name
+  hash_extra = var.revoker_lambda_name
 
   build_in_docker = var.build_in_docker
   runtime         = "python${local.python_version}"
@@ -37,7 +37,7 @@ module "access_revoker" {
     SLACK_SIGNING_SECRET = var.slack_signing_secret
     SLACK_BOT_TOKEN      = var.slack_bot_token
     SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = local.schedule_group_name
+    SCHEDULE_GROUP_NAME  = var.schedule_group_name
 
     SSO_INSTANCE_ARN            = local.sso_instance_arn
     STATEMENTS                  = jsonencode(var.config)
@@ -46,7 +46,7 @@ module "access_revoker" {
     POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
     SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
     REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
-    REVOKER_FUNCTION_NAME                       = local.revoker_lambda_name
+    REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
     S3_BUCKET_FOR_AUDIT_ENTRY_NAME              = local.s3_bucket_name
     S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
     SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
@@ -145,8 +145,8 @@ data "aws_iam_policy_document" "revoker" {
 }
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_scheduled_revocation" {
-  name                = "sso_elevator_scheduled_revocation"
-  description         = "Triggers on schedule to revoke temporary permissions"
+  name                = var.event_brige_scheduled_revocation_rule_name
+  description         = "Triggers on schedule to revoke temporary permissions, date and time of creation : ${timestamp()}"
   schedule_expression = var.schedule_expression
   tags                = var.tags
 }
@@ -160,8 +160,8 @@ resource "aws_cloudwatch_event_target" "sso_elevator_scheduled_revocation" {
 }
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_check_on_inconsistency" {
-  name                = "sso_elevator_check_on_inconsistency"
-  description         = "Triggers on schedule to check on inconsistency"
+  name                = var.event_brige_check_on_inconsistency_rule_name
+  description         = "Triggers on schedule to check on inconsistency."
   schedule_expression = var.schedule_expression_for_check_on_inconsistency
   tags                = var.tags
 }
@@ -175,7 +175,7 @@ resource "aws_cloudwatch_event_target" "check_inconsistency" {
 }
 
 resource "aws_iam_role" "eventbridge_role" {
-  name = "event-bridge-role-for-sso-elevator${var.schedule_role_name_postfix}"
+  name = var.schedule_role_name
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [

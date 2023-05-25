@@ -65,28 +65,28 @@ variable "requester_lambda_name" {
   default     = "access-requester"
 }
 
-variable "revoker_lambda_name_postfix" {
-  description = "For dev purposes"
+variable "event_brige_check_on_inconsistency_rule_name" {
+  description = "value for the event bridge check on inconsistency rule name"
   type        = string
-  default     = ""
+  default     = "sso_elevator_check_on_inconsistency"
 }
 
-variable "requester_lambda_name_postfix" {
-  description = "For dev purposes"
+variable "event_brige_scheduled_revocation_rule_name" {
+  description = "value for the event bridge scheduled revocation rule name"
   type        = string
-  default     = ""
+  default     = "sso_elevator_scheduled_revocation"
 }
 
-variable "schedule_group_name_postfix" {
-  description = "For dev purposes"
+variable "schedule_group_name" {
+  description = "value for the schedule group name"
   type        = string
-  default     = ""
+  default     = "sso-elevator-scheduled-revocation"
 }
 
-variable "schedule_role_name_postfix" {
-  description = "For dev purposes"
+variable "schedule_role_name" {
+  description = "value for the schedule role name"
   type        = string
-  default     = ""
+  default     = "event-bridge-role-for-sso-elevator"
 }
 
 variable "revoker_post_update_to_slack" {
