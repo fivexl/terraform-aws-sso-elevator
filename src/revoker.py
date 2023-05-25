@@ -1,14 +1,12 @@
 import boto3
 import slack_sdk
+from mypy_boto3_events import EventBridgeClient
+from mypy_boto3_identitystore import IdentityStoreClient
+from mypy_boto3_organizations import OrganizationsClient
+from mypy_boto3_scheduler import EventBridgeSchedulerClient
+from mypy_boto3_sso_admin import SSOAdminClient
 from pydantic import ValidationError
 from slack_sdk.web.slack_response import SlackResponse
-
-
-from mypy_boto3_organizations import OrganizationsClient
-from mypy_boto3_sso_admin import SSOAdminClient
-from mypy_boto3_identitystore import IdentityStoreClient
-from mypy_boto3_scheduler import EventBridgeSchedulerClient
-
 
 import config
 import entities
@@ -18,10 +16,10 @@ import schedule
 import slack
 import sso
 from events import (
-    RevokeEvent,
     CheckOnInconsistency,
     DiscardButtonsEvent,
     Event,
+    RevokeEvent,
     ScheduledRevokeEvent,
     SSOElevatorScheduledRevocation,
 )
@@ -33,6 +31,7 @@ org_client = boto3.client("organizations")
 sso_client = boto3.client("sso-admin")
 identitystore_client = boto3.client("identitystore")
 scheduler_client = boto3.client("scheduler")
+events_client = boto3.client("events")
 slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
 
 
@@ -72,6 +71,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 org_client=org_client,
                 slack_client=slack_client,
                 identitystore_client=identitystore_client,
+                events_client=events_client,
             )
 
         case SSOElevatorScheduledRevocation():
@@ -215,6 +215,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
     org_client: OrganizationsClient,
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
+    events_client: EventBridgeClient,
 ) -> None:
     account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
@@ -239,11 +240,23 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
                 identitystore_client=identitystore_client,
                 slack_client=slack_client,
             )
+            try:
+                rule = schedule.get_event_brige_rule(
+                    event_brige_client=events_client,
+                    rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
+                )
+                next_run_time = schedule.check_rule_expression_and_get_next_run(rule)
+            except Exception as e:
+                logger.warning("Failed to retrieve the next run time for the rule", extra={"error": e})
+                next_run_time = None
+
+            time_notice = f" The next scheduled revocation is at {next_run_time}." if next_run_time else ""
+
             slack_client.chat_postMessage(
                 channel=cfg.slack_channel_id,
                 text=(
-                    f"Found an inconsistent account assignment in {account.name}-{account.id} for {mention}. "
-                    "There is no schedule for its revocation. Please check the revoker logs for more details."
+                    f"Inconsistent account assignment detected in {account.name}-{account.id} for {mention}. "
+                    f"The unidentified assignment will be automatically revoked.{time_notice}"
                 ),
             )
 
