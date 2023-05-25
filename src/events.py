@@ -42,9 +42,6 @@ class SSOElevatorScheduledRevocation(BaseModel):
 
 
 class Event(BaseModel):
-    __root__: (
-        ScheduledRevokeEvent
-        | DiscardButtonsEvent
-        | CheckOnInconsistency
-        | SSOElevatorScheduledRevocation
-        ) = Field(..., discriminator="action")
+    __root__: (ScheduledRevokeEvent | DiscardButtonsEvent | CheckOnInconsistency | SSOElevatorScheduledRevocation) = Field(
+        ..., discriminator="action"
+    )

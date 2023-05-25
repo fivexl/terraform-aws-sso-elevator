@@ -40,14 +40,14 @@ module "access_requester_slack_handler" {
     SCHEDULE_GROUP_NAME  = var.schedule_group_name
 
 
-    SSO_INSTANCE_ARN                = local.sso_instance_arn
-    STATEMENTS                      = jsonencode(var.config)
-    POWERTOOLS_LOGGER_LOG_EVENT     = true
-    SCHEDULE_POLICY_ARN             = aws_iam_role.eventbridge_role.arn
-    REVOKER_FUNCTION_ARN            = local.revoker_lambda_arn
-    REVOKER_FUNCTION_NAME           = var.revoker_lambda_name
-    S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
-    S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix
+    SSO_INSTANCE_ARN                            = local.sso_instance_arn
+    STATEMENTS                                  = jsonencode(var.config)
+    POWERTOOLS_LOGGER_LOG_EVENT                 = true
+    SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
+    REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
+    REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
+    S3_BUCKET_FOR_AUDIT_ENTRY_NAME              = local.s3_bucket_name
+    S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
     SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
   }
 
