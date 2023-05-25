@@ -58,7 +58,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
 
         case DiscardButtonsEvent():
             logger.info("Handling DiscardButtonsEvent", extra={"event": parsed_event})
-            handle_discard_buttons_event(event=parsed_event, slack_client=slack_client)
+            handle_discard_buttons_event(event=parsed_event, slack_client=slack_client, scheduler_client=scheduler_client)
             return
 
         case CheckOnInconsistency():
@@ -250,8 +250,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
                 logger.warning("Failed to retrieve the next run time for the rule", extra={"error": e})
                 next_run_time = None
 
-            time_notice = f" The next scheduled revocation is at {next_run_time}." if next_run_time else ""
-
+            time_notice = f" The next scheduled revocation is set for {next_run_time}." if next_run_time else ""
             slack_client.chat_postMessage(
                 channel=cfg.slack_channel_id,
                 text=(
@@ -304,12 +303,17 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
             )
 
 
-def handle_discard_buttons_event(event: DiscardButtonsEvent, slack_client: slack_sdk.WebClient) -> None:
+def handle_discard_buttons_event(
+        event: DiscardButtonsEvent,
+        slack_client: slack_sdk.WebClient,
+        scheduler_client: EventBridgeSchedulerClient
+) -> None:
     message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,
         message_ts=event.time_stamp,
         slack_client=slack_client,
     )
+    schedule.delete_schedule(scheduler_client, event.schedule_name)
     if message is None:
         logger.warning("Message was not found", extra={"event": event})
         return
