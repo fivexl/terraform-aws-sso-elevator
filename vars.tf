@@ -77,16 +77,16 @@ variable "event_brige_scheduled_revocation_rule_name" {
   default     = "sso_elevator_scheduled_revocation"
 }
 
-variable "schedule_group_name" {
+variable "schedule_group_name" { 
   description = "value for the schedule group name"
   type        = string
-  default     = "sso-elevator-scheduled-revocation"
+  default     = "sso-elevator-scheduled-revocation" # TODO fix format to snake case
 }
 
 variable "schedule_role_name" {
   description = "value for the schedule role name"
   type        = string
-  default     = "event-bridge-role-for-sso-elevator"
+  default     = "event-bridge-role-for-sso-elevator" # TODO fix format to snake case
 }
 
 variable "revoker_post_update_to_slack" {
