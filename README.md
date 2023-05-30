@@ -283,11 +283,17 @@ features:
       description: Request access to Permission Set in AWS Account
 oauth_config:
   scopes:
+    user:
+      - channels:history
     bot:
-      - commands
       - chat:write
       - users:read.email
       - users:read
+      - commands
+      - channels:history
+      - groups:history
+      - mpim:history
+      - im:history
 settings:
   interactivity:
     is_enabled: true
