@@ -283,17 +283,16 @@ features:
       description: Request access to Permission Set in AWS Account
 oauth_config:
   scopes:
-    user:
-      - channels:history
     bot:
+      # 'commands': This permission adds shortcuts and/or slash commands that people can use.
+      - commands
+      # 'chat:write': This permission is required for the app to post messages to Slack.
       - chat:write
+      # 'users:read' and 'users:read.email': These permissions are required for the app to find the user's email address, which is necessary for  creating AWS account assignments and including user mentions in requests.
       - users:read.email
       - users:read
-      - commands
+      # 'channels:history': This permission is needed for the app to find old messages in order to handle "discard button" events.
       - channels:history
-      - groups:history
-      - mpim:history
-      - im:history
 settings:
   interactivity:
     is_enabled: true
