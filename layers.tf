@@ -1,7 +1,5 @@
 module "sso_elevator_dependencies" {
-  depends_on = [
-    null_resource.version_check,
-  ]
+  depends_on = [null_resource.python_version_check]
   source          = "terraform-aws-modules/lambda/aws"
   version         = "4.16.0"
   create_layer    = true

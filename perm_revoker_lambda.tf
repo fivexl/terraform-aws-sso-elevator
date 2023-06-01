@@ -8,9 +8,7 @@ module "access_revoker" {
   publish       = true
   timeout       = 300
 
-  depends_on = [
-    null_resource.version_check,
-  ]
+  depends_on = [null_resource.python_version_check]
   hash_extra = var.revoker_lambda_name
 
   build_in_docker = var.build_in_docker
@@ -89,7 +87,7 @@ data "aws_iam_policy_document" "revoker" {
       "events:DescribeRule"
     ]
     resources = [
-      aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.arn
+      "arn:aws:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/${var.event_brige_scheduled_revocation_rule_name}"
     ]
   }
   statement {
