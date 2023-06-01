@@ -35,6 +35,9 @@ For more information on temporary elevated access for AWS and the AWS-provided s
 
 The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a Slack form. We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
 
+Watch demo
+[![Demo](https://img.youtube.com/vi/iR3Rdjd7QMU/maxresdefault.jpg)](https://youtu.be/iR3Rdjd7QMU)
+
 # Functionality
 
 ```mermaid
