@@ -77,7 +77,7 @@ variable "event_brige_scheduled_revocation_rule_name" {
   default     = "sso_elevator_scheduled_revocation"
 }
 
-variable "schedule_group_name" { 
+variable "schedule_group_name" {
   description = "value for the schedule group name"
   type        = string
   default     = "sso-elevator-scheduled-revocation" # TODO fix format to snake case
