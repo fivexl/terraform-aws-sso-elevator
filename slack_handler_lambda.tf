@@ -8,9 +8,7 @@ module "access_requester_slack_handler" {
   publish       = true
   timeout       = 30
 
-  depends_on = [
-    null_resource.version_check,
-  ]
+  depends_on = [null_resource.python_version_check]
 
   build_in_docker = var.build_in_docker
   runtime         = "python${local.python_version}"
