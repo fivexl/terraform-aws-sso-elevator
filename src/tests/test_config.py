@@ -46,6 +46,7 @@ def config_dict(statements: SearchStrategy = strategies.jsonstr(st.lists(strateg
             "log_level": st.one_of(st.just("INFO"), st.just("DEBUG"), st.just("WARNING"), st.just("ERROR"), st.just("CRITICAL")),
             "post_update_to_slack": strategies.str_bool,
             "statements": statements,
+            "request_expiration_hours": st.integers(min_value=0, max_value=24),
         }
     )
 
@@ -69,6 +70,7 @@ def valid_config_dict(statements_as_json: bool = True):
         "s3_bucket_for_audit_entry_name": "x",
         "s3_bucket_prefix_for_partitions": "x",
         "sso_elevator_scheduled_revocation_rule_name": "x",
+        "request_expiration_hours": "8",
     }
 
 

@@ -174,12 +174,14 @@ def schedule_revoke_event(
 
 
 def schedule_discard_buttons_event(
-    permission_duration: timedelta,
     schedule_client: EventBridgeSchedulerClient,
     time_stamp: str,
     channel_id: str,
-) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
-    permission_duration = timedelta(hours=2)
+) -> scheduler_type_defs.CreateScheduleOutputTypeDef | None:
+    if cfg.request_expiration_hours == 0:
+        logger.info("Request expiration is disabled, not scheduling discard buttons event")
+        return
+    permission_duration = timedelta(hours=cfg.request_expiration_hours)
 
     logger.info("Scheduling discard buttons event")
     schedule_name = "discard-buttons" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
