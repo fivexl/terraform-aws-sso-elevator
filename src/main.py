@@ -12,9 +12,9 @@ import config
 import entities
 import errors
 import organizations
+import schedule
 import slack_helpers
 import sso
-import schedule
 
 logger = config.get_logger(service="main")
 
@@ -201,7 +201,6 @@ def handle_request_for_access_submittion(
         if ts is not None:
             schedule.schedule_discard_buttons_event(
                 schedule_client=schedule_client,
-                permission_duration=request.permission_duration,
                 time_stamp=ts,
                 channel_id=cfg.slack_channel_id,
             )

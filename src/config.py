@@ -49,6 +49,7 @@ class Config(BaseSettings):
     s3_bucket_prefix_for_partitions: str
 
     sso_elevator_scheduled_revocation_rule_name: str
+    request_expiration_hours: int = 8
 
     class Config:
         frozen = True

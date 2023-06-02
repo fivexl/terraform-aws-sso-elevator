@@ -1,8 +1,9 @@
-import sys
 import json
+import sys
 
 # Read the JSON data passed from Terraform
-data = json.loads(sys.stdin.read())
+raw_data = sys.stdin.read()
+data = json.loads(raw_data)
 
 required_version = data["required_version"]
 
@@ -16,3 +17,5 @@ if current_version != required_version:
     )
     # Exit with a status code of 1, indicating failure
     sys.exit(1)
+
+print(json.dumps({"current_version": current_version}))

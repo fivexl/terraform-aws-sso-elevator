@@ -148,4 +148,8 @@ variable "s3_logging" {
   default     = {}
 }
 
-
+variable "request_expiration_hours" {
+  description = "After how many hours should the request expire? If set to 0, the request will never expire."
+  type        = number
+  default     = 8
+}
