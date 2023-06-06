@@ -36,7 +36,7 @@ repos:
     hooks:
     -   id: poetry-export
         name: Export dependencies with Poetry
-        entry: bash -c 'cd src && poetry export -f requirements.txt --output requirements.txt && git diff --exit-code requirements.txt || git add requirements.txt'
+        entry: bash -c 'cd src && poetry export --dev -f requirements.txt --output requirements.txt && git diff --exit-code requirements.txt || git add requirements.txt'
         language: system
         files: src/pyproject.toml$
         pass_filenames: false
