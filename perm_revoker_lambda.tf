@@ -145,7 +145,7 @@ data "aws_iam_policy_document" "revoker" {
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_scheduled_revocation" {
   name                = var.event_brige_scheduled_revocation_rule_name
-  description         = "Triggers on schedule to revoke temporary permissions, date and time of creation : ${timestamp()}"
+  description         = "Triggers on schedule to revoke temporary permissions."
   schedule_expression = var.schedule_expression
   tags                = var.tags
 }
