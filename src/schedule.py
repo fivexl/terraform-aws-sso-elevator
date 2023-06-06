@@ -39,40 +39,16 @@ def check_rule_expression_and_get_next_run(rule: events_type_defs.DescribeRuleRe
     logger.debug(f"Schedule expression: {schedule_expression}")
 
     if schedule_expression.startswith("rate"):
-        return get_next_rate_run_time(rule, current_time)
+        return schedule_expression
     elif schedule_expression.startswith("cron"):
         clean_expression = schedule_expression.replace("cron(", "").replace(")", "")
-        return get_next_cron_run_time(clean_expression, current_time)
+        try:
+            return get_next_cron_run_time(clean_expression, current_time)
+        except Exception as e:
+            logger.warning(f"Unable to parse cron expression: {clean_expression}", extra={"error": e})
+            return schedule_expression
     else:
         raise ValueError("Unknown schedule expression format!")
-
-
-def get_next_rate_run_time(rule: events_type_defs.DescribeRuleResponseTypeDef, current_time: datetime) -> datetime:
-    # Extract creation timestamp from description
-    creation_time_str = rule["Description"].split(": ")[-1]
-    creation_time = datetime.strptime(creation_time_str, "%Y-%m-%dT%H:%M:%SZ")
-
-    # Extract rate from schedule expression
-    rate_expression = rule["ScheduleExpression"].split("(")[1].split(")")[0]
-    rate_value, rate_unit = int(rate_expression.split()[0]), rate_expression.split()[1]
-
-    # Initialize rate as timedelta
-    rate = timedelta()
-
-    if rate_unit.startswith("minute"):
-        rate = timedelta(minutes=rate_value)
-    elif rate_unit.startswith("hour"):
-        rate = timedelta(hours=rate_value)
-    elif rate_unit.startswith("day"):
-        rate = timedelta(days=rate_value)
-
-    # Calculate next run time
-    time_since_last_run = current_time - creation_time
-    runs_since_creation = time_since_last_run // rate
-    next_run_time = creation_time + rate * (runs_since_creation + 1)
-
-    logger.debug(f"Next run time: {next_run_time}")
-    return next_run_time
 
 
 def get_schedules(client: EventBridgeSchedulerClient) -> list[scheduler_type_defs.GetScheduleOutputTypeDef]:
