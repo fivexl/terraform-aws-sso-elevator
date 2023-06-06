@@ -32,3 +32,13 @@ repos:
     -   id: codespell
         types_or: [python, rst, markdown, cython, c]
         additional_dependencies: [tomli]
+-   repo: local
+    hooks:
+    -   id: poetry-export
+        name: Export dependencies with Poetry
+        entry: bash -c 'cd src && poetry export -f requirements.txt --output requirements.txt && git diff --exit-code requirements.txt || git add requirements.txt'
+        language: system
+        files: src/pyproject.toml$
+        pass_filenames: false
+        # This pre-commit hook is used to automatically generate a requirements.txt file from the current Poetry dependencies.
+        # The purpose of this is to ensure compatibility with our reusable github actions.
