@@ -3,7 +3,7 @@
 data "external" "check_python_version" {
   count = var.build_in_docker == true ? 0 : 1
 
-  program = ["python", "${path.module}/src/check_python_version.py"]
+  program = ["python3", "${path.module}/src/check_python_version.py"]
 
   query = {
     required_version = local.full_python_version
