@@ -250,14 +250,14 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             if isinstance(next_run_time_or_expression, datetime):
                 time_notice = f" The next scheduled revocation is set for {next_run_time_or_expression}."
             elif isinstance(next_run_time_or_expression, str):
-                time_notice = f' The revocation schedule is set as: {next_run_time_or_expression}.' # noqa: Q000
+                time_notice = f" The revocation schedule is set as: {next_run_time_or_expression}."  # noqa: Q000
 
             slack_client.chat_postMessage(
                 channel=cfg.slack_channel_id,
                 text=(
                     f"Inconsistent account assignment detected in {account.name}-{account.id} for {mention}. "
                     f"The unidentified assignment will be automatically revoked.{time_notice}"
-                )
+                ),
             )
 
 
