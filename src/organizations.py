@@ -9,7 +9,10 @@ def parse_account(td: type_defs.AccountTypeDef) -> Account:
 
 
 def list_accounts(client: OrganizationsClient) -> list[Account]:
-    accounts = client.list_accounts()["Accounts"]
+    paginator = client.get_paginator("list_accounts")
+    accounts = []
+    for page in paginator.paginate():
+        accounts.extend(page["Accounts"])
     return [parse_account(account) for account in accounts]
 
 
