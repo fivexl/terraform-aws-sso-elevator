@@ -341,6 +341,7 @@ def remove_buttons(payload: ButtonClickedPayload, client: WebClient, approver: e
         channel=payload.channel_id,
         ts=payload.thread_ts,
         blocks=blocks,
+        text="Buttons were removed.",
     )
 
 
