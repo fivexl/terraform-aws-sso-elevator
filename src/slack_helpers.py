@@ -106,6 +106,11 @@ class RequestForAccessView:
 
     @classmethod
     def build_select_account_input_block(cls, accounts: list[entities.aws.Account]) -> InputBlock:
+        # TODO: handle case when there are more than 100 accounts
+        # 99 is the limit for StaticSelectElement
+        # https://slack.dev/python-slack-sdk/api-docs/slack_sdk/models/blocks/block_elements.html#:~:text=StaticSelectElement(InputInteractiveElement)%3A%0A%20%20%20%20type%20%3D%20%22static_select%22-,options_max_length%20%3D%20100,-option_groups_max_length%20%3D%20100%0A%0A%20%20%20%20%40property%0A%20%20%20%20def%20attributes(
+        if len(accounts) >99: # noqa: PLR2004
+            accounts = accounts[:99]
         sorted_accounts = sorted(accounts, key=lambda account: account.name)
         return InputBlock(
             block_id=cls.ACCOUNT_BLOCK_ID,
