@@ -17,7 +17,7 @@ jobs:
   terraform-job:
     uses: fivexl/github-reusable-workflows/.github/workflows/terraform-job.yml@main
     with:
-      terraform-version: "1.4.4"
+      terraform-version: "1.5.0"
       aws-default-region: "eu-central-1"
 
   localstack:
@@ -55,7 +55,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v1
         with:
-          terraform_version: 1.4.4
+          terraform_version: 1.5.0
 
       - uses: actions/setup-python@v4
         with:
