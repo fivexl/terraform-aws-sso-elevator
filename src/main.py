@@ -141,7 +141,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
 
     return client.chat_postMessage(
         channel=payload.channel_id,
-        text=f"Permissions granted to <@{requester.id}>.",
+        text=f"Permissions granted to <@{requester.id}> by <@{approver.id}>.",
         thread_ts=payload.thread_ts,
     )
 
