@@ -95,6 +95,9 @@ app.shortcut("request_for_access")(
 )
 
 
+cache_for_dublicate_requests = {}
+
+
 @handle_errors
 def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # noqa: ARG001
     logger.info("Handling button click")
@@ -102,6 +105,19 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
+
+
+    if (cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
+    and cache_for_dublicate_requests.get("account_id") == payload.request.account_id
+    and cache_for_dublicate_requests.get("permission_set_name") == payload.request.permission_set_name):
+        return client.chat_postMessage(
+            channel=payload.channel_id,
+            text=f"<@{approver.id}> request is already in progress, please wait for the result.",
+            thread_ts=payload.thread_ts,
+        )
+    cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
+    cache_for_dublicate_requests["account_id"] = payload.request.account_id
+    cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
 
     if payload.action == entities.ApproverAction.Discard:
         slack_helpers.remove_buttons(payload, client, approver)
