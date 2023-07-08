@@ -121,6 +121,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
 
     if payload.action == entities.ApproverAction.Discard:
         slack_helpers.remove_buttons(payload, client, approver)
+        cache_for_dublicate_requests.clear()
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"Request was discarded by<@{approver.id}> ",
@@ -138,6 +139,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     logger.info("Decision on request was made", extra={"decision": decision})
 
     if not decision.permit:
+        cache_for_dublicate_requests.clear()
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> you can not approve this request",
@@ -154,7 +156,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         requester=requester,
         reason=payload.request.reason,
     )
-
+    cache_for_dublicate_requests.clear()
     return client.chat_postMessage(
         channel=payload.channel_id,
         text=f"Permissions granted to <@{requester.id}> by <@{approver.id}>.",
