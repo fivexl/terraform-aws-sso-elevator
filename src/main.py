@@ -1,4 +1,5 @@
 import functools
+from datetime import timedelta
 
 import boto3
 from aws_lambda_powertools import Logger
@@ -221,6 +222,12 @@ def handle_request_for_access_submittion(
                 schedule_client=schedule_client,
                 time_stamp=ts,
                 channel_id=cfg.slack_channel_id,
+            )
+            schedule.schedule_approver_notification_event(
+                schedule_client=schedule_client,
+                message_ts=ts,
+                channel_id=cfg.slack_channel_id,
+                time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time,)
             )
 
     match decision.reason:

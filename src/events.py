@@ -41,7 +41,21 @@ class SSOElevatorScheduledRevocation(BaseModel):
     action: Literal["sso_elevator_scheduled_revocation"]
 
 
+class ApproverNotificationEvent(BaseModel):
+    action: Literal["approvers_renotification"]
+    schedule_name: str
+    time_stamp: str
+    channel_id: str
+    time_to_wait_in_seconds: float
+
+
 class Event(BaseModel):
-    __root__: (ScheduledRevokeEvent | DiscardButtonsEvent | CheckOnInconsistency | SSOElevatorScheduledRevocation) = Field(
+    __root__: (
+        ScheduledRevokeEvent |
+        DiscardButtonsEvent |
+        CheckOnInconsistency |
+        SSOElevatorScheduledRevocation |
+        ApproverNotificationEvent
+    ) = Field(
         ..., discriminator="action"
     )

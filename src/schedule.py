@@ -13,7 +13,7 @@ from pydantic import ValidationError
 import config
 import entities
 import sso
-from events import DiscardButtonsEvent, Event, RevokeEvent, ScheduledRevokeEvent
+from events import DiscardButtonsEvent, Event, RevokeEvent, ScheduledRevokeEvent, ApproverNotificationEvent
 
 logger = config.get_logger(service="schedule")
 cfg = config.get_config()
@@ -31,8 +31,7 @@ def get_next_cron_run_time(cron_expression: str, base_time: datetime) -> datetim
     logger.debug(f"Next run time: {next_run_time}")
     return next_run_time
 
-
-def check_rule_expression_and_get_next_run(rule: events_type_defs.DescribeRuleResponseTypeDef) -> datetime or str:
+def check_rule_expression_and_get_next_run(rule: events_type_defs.DescribeRuleResponseTypeDef) -> datetime | str:
     schedule_expression = rule["ScheduleExpression"]
     current_time = datetime.utcnow()
     logger.debug(f"Current time: {current_time}")
@@ -185,6 +184,49 @@ def schedule_discard_buttons_event(
                     schedule_name=schedule_name,
                     time_stamp=time_stamp,
                     channel_id=channel_id,
+                ).dict()
+            ),
+        ),
+    )
+
+def schedule_approver_notification_event(
+    schedule_client: EventBridgeSchedulerClient,
+    message_ts: str,
+    channel_id: str,
+    time_to_wait: timedelta,
+) ->scheduler_type_defs.CreateScheduleOutputTypeDef | None:
+    # If the initial wait time is 0, we don't schedule the event
+    if cfg.approver_renotification_initial_wait_time == 0:
+        logger.info("Approver renotification is disabled, not scheduling approver notification event")
+        return
+
+    logger.info("Scheduling approver notification event")
+    schedule_name = "approvers-renotification" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    logger.debug(
+        "Creating schedule",
+        extra={
+            "schedule_name": schedule_name,
+            "time_to_wait": time_to_wait,
+            "time_stamp": message_ts,
+            "channel_id": channel_id,
+        },
+    )
+    return schedule_client.create_schedule(
+        FlexibleTimeWindow={"Mode": "OFF"},
+        Name=schedule_name,
+        GroupName=cfg.schedule_group_name,
+        ScheduleExpression=event_bridge_schedule_after(time_to_wait),
+        State="ENABLED",
+        Target=scheduler_type_defs.TargetTypeDef(
+            Arn=cfg.revoker_function_arn,
+            RoleArn=cfg.schedule_policy_arn,
+            Input=json.dumps(
+                ApproverNotificationEvent(
+                    action="approvers_renotification",
+                    schedule_name=schedule_name,
+                    time_stamp=message_ts,
+                    channel_id=channel_id,
+                    time_to_wait_in_seconds=time_to_wait.total_seconds()
                 ).dict()
             ),
         ),

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import boto3
 import slack_sdk
@@ -18,6 +18,7 @@ import schedule
 import slack_helpers
 import sso
 from events import (
+    ApproverNotificationEvent,
     CheckOnInconsistency,
     DiscardButtonsEvent,
     Event,
@@ -85,6 +86,13 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 org_client=org_client,
                 slack_client=slack_client,
                 identitystore_client=identitystore_client,
+            )
+        case ApproverNotificationEvent():
+            logger.info("Handling ApproverNotificationEvent event", extra={"event": parsed_event})
+            return handle_approvers_renotification_event(
+                event = parsed_event,
+                slack_client=slack_client,
+                scheduler_client=scheduler_client,
             )
 
 
@@ -246,7 +254,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
                 event_brige_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
             )
             next_run_time_or_expression = schedule.check_rule_expression_and_get_next_run(rule)
-
+            time_notice = ""
             if isinstance(next_run_time_or_expression, datetime):
                 time_notice = f" The next scheduled revocation is set for {next_run_time_or_expression}."
             elif isinstance(next_run_time_or_expression, str):
@@ -338,3 +346,45 @@ def handle_discard_buttons_event(
             return
 
     logger.info("Buttons were not found", extra={"event": event})
+
+
+
+def handle_approvers_renotification_event(
+    event: ApproverNotificationEvent, slack_client: slack_sdk.WebClient, scheduler_client: EventBridgeSchedulerClient
+) -> None:
+
+    message = slack_helpers.get_message_from_timestamp(
+        channel_id=event.channel_id,
+        message_ts=event.time_stamp,
+        slack_client=slack_client,
+    )
+    schedule.delete_schedule(scheduler_client, event.schedule_name)
+    if message is None:
+        logger.warning("Message not found", extra={"event": event})
+        return
+
+    for block in message["blocks"]:
+        if slack_helpers.get_block_id(block) == "buttons":
+            time_to_wait = timedelta(seconds=event.time_to_wait_in_seconds)
+            if cfg.approver_renotification_backoff_multiplier != 0:
+                time_to_wait = time_to_wait * cfg.approver_renotification_backoff_multiplier
+            slack_response = slack_client.chat_postMessage(
+                channel=event.channel_id,
+                thread_ts=message["ts"],
+                text="The request is still awaiting approval. The next reminder will be "
+                    f"sent in {time_to_wait}, unless the request is approved or "
+                    "discarded beforehand.",
+            )
+            logger.info("Notifications to approvers were sent.")
+            logger.debug("Slack response:", extra={"slack_response": slack_response})
+
+            schedule.schedule_approver_notification_event(
+                schedule_client=scheduler_client,
+                channel_id=event.channel_id,
+                message_ts=message["ts"],
+                time_to_wait=time_to_wait
+            )
+            return
+
+    logger.info("The request has already been approved or discarded.", extra={"event": event})
+    return

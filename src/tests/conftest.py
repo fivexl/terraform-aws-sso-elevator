@@ -19,6 +19,8 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "s3_bucket_prefix_for_partitions": "x",
         "sso_elevator_scheduled_revocation_rule_name": "x",
         "request_expiration_hours": "8",
+        "approver_renotification_initial_wait_time": "15",
+        "approver_renotification_backoff_multiplier": "2"
     }
     os.environ |= mock_env
 

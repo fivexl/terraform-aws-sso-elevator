@@ -47,6 +47,8 @@ def config_dict(statements: SearchStrategy = strategies.jsonstr(st.lists(strateg
             "post_update_to_slack": strategies.str_bool,
             "statements": statements,
             "request_expiration_hours": st.integers(min_value=0, max_value=24),
+            "approver_renotification_initial_wait_time": st.integers(min_value=0, max_value=60),
+            "approver_renotification_backoff_multiplier": st.integers(min_value=0, max_value=10),
         }
     )
 
@@ -71,6 +73,8 @@ def valid_config_dict(statements_as_json: bool = True):
         "s3_bucket_prefix_for_partitions": "x",
         "sso_elevator_scheduled_revocation_rule_name": "x",
         "request_expiration_hours": "8",
+        "approver_renotification_initial_wait_time": "15",
+        "approver_renotification_backoff_multiplier": "2"
     }
 
 
