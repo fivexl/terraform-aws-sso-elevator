@@ -153,3 +153,15 @@ variable "request_expiration_hours" {
   type        = number
   default     = 8
 }
+
+variable "approver_renotification_initial_wait_time" {
+  description = "The initial wait time before the first re-notification to the approver is sent. This is measured in minutes. If set to 0, no re-notifications will be sent."
+  type        = number
+  default     = 15
+}
+
+variable "approver_renotification_backoff_multiplier" {
+  description = "The multiplier applied to the wait time for each subsequent notification sent to the approver. Default is 2, which means the wait time will double for each attempt."
+  type        = number
+  default     = 2
+}

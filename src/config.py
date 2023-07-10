@@ -36,6 +36,9 @@ class Config(BaseSettings):
     slack_channel_id: str
     slack_bot_token: str
 
+    approver_renotification_initial_wait_time: int
+    approver_renotification_backoff_multiplier: int
+
     sso_instance_arn: str
 
     log_level: str = "INFO"

@@ -48,6 +48,8 @@ module "access_requester_slack_handler" {
     S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
     SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
     REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
+    APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME   = var.approver_renotification_initial_wait_time
+    APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER  = var.approver_renotification_backoff_multiplier
   }
 
   create_lambda_function_url = true
