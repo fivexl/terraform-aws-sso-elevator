@@ -139,6 +139,12 @@ module "aws_sso_elevator" {
   build_in_docker = true
   revoker_post_update_to_slack = true
 
+  # The initial wait time before the first re-notification to the approver is sent.
+  approver_renotification_initial_wait_time = 15
+  # The multiplier applied to the wait time for each subsequent notification sent to the approver.
+  # Default is 2, which means the wait time will double for each attempt.
+  approver_renotification_backoff_multiplier = 2
+
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
   # If you wish to use your own S3 bucket for audit_entry logs, 

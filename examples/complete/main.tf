@@ -39,7 +39,8 @@ module "aws_sso_elevator" {
 
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
-
+  approver_renotification_initial_wait_time = 15
+  approver_renotification_backoff_multiplier = 2
 
   s3_bucket_partition_prefix     = "logs/"
   s3_bucket_name_for_audit_entry = "fivexl-sso-elevator"
