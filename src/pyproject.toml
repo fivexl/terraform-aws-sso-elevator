@@ -11,17 +11,40 @@ boto3-stubs = {extras = ["dynamodb", "identitystore", "organizations", "s3", "sc
 pydantic = {extras = ["email"], version = "^1.10.7"}
 croniter = "^1.3.14"
 
+# Full list of dependencies, for development.
+# Can be installed with `poetry install --with dev`.
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.2.2"
 black = "^23.1.0"
-
-# from lambda layers
+python = "^3.10.10"
+boto3-stubs = {extras = ["dynamodb", "identitystore", "organizations", "s3", "scheduler", "sso-admin", "events"], version = "^1.26.134"}
 pydantic = {extras = ["email"], version = "^1.10.7"}
-aws-lambda-powertools = "^2.11.0"
+croniter = "^1.3.14"
+aws-lambda-powertools = {extras = ["parser"], version = "^2.14.1"}
+
+# Dependencies listed below are used by the lambda function, but passed to it via the Lambda Layer.
 boto3 = "^1.26.97"
 slack-bolt = "^1.17.0"
 hypothesis = {extras = ["ghostwriter"], version = "^6.71.0"}
 ruff = "^0.0.267"
+
+# # Dependencies listed below are used for testing in github actions.
+[tool.poetry.group.ci_test.dependencies]
+python = "^3.10.10"
+pytest = "^7.2.2"
+black = "^23.1.0"
+hypothesis = {extras = ["ghostwriter"], version = "^6.71.0"}
+boto3 = "^1.26.97"
+ruff = "^0.0.267"
+aws-lambda-powertools = {extras = ["parser"], version = "^2.14.1"}
+pydantic = {extras = ["email"], version = "^1.10.7"}
+boto3-stubs = {extras = ["dynamodb", "identitystore", "organizations", "s3", "scheduler", "sso-admin", "events"], version = "^1.26.134"}
+slack-bolt = "^1.17.0"
+croniter = "^1.3.14"
+
+
+
+
 
 [build-system]
 requires = ["poetry-core"]
