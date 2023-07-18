@@ -13,9 +13,9 @@ module "sso_elevator_dependencies" {
   docker_image        = "lambda/python:${local.python_version}"
   docker_file         = "${path.module}/src/docker/Dockerfile"
   source_path = [{
-    poetry_install = true
-    path           = "${path.module}/layer"
-    patterns       = ["!python/.venv/.*"]
-    prefix_in_zip  = "python"
+    pip_requirements = "${path.module}/layer/deploy_requirements.txt"
+    path             = "${path.module}/layer"
+    patterns         = ["!python/.venv/.*"]
+    prefix_in_zip    = "python"
   }]
 }

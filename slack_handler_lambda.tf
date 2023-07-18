@@ -17,14 +17,17 @@ module "access_requester_slack_handler" {
   hash_extra      = var.requester_lambda_name
   source_path = [
     {
-      path           = "${path.module}/src/"
-      poetry_install = true
-      artifacts_dir  = "${path.root}/builds/"
+      path             = "${path.module}/src/"
+      pip_requirements = "${path.module}/src/deploy_requirements.txt"
+      artifacts_dir    = "${path.root}/builds/"
       patterns = [
         "!.venv/.*",
         "!.vscode/.*",
         "!__pycache__/.*",
         "!tests/.*",
+        "!tools/.*",
+        "!.hypothesis/.*",
+        "!.pytest_cache/.*",
       ]
     }
   ]

@@ -8,7 +8,6 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10.10"
 slack-bolt = "^1.18.0"
-boto3 = "^1.26.120"
 aws-lambda-powertools = {extras = ["parser"], version = "^2.14.1"}
 
 [build-system]
