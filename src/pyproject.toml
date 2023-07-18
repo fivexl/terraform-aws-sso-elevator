@@ -29,7 +29,7 @@ hypothesis = {extras = ["ghostwriter"], version = "^6.71.0"}
 ruff = "^0.0.267"
 
 # # Dependencies listed below are used for testing in github actions.
-[tool.poetry.group.ci_test.dependencies]
+[tool.poetry.group.git_ci.dependencies]
 python = "^3.10.10"
 pytest = "^7.2.2"
 black = "^23.1.0"
