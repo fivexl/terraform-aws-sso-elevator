@@ -54,6 +54,8 @@ class Config(BaseSettings):
     sso_elevator_scheduled_revocation_rule_name: str
     request_expiration_hours: int = 8
 
+    max_permissions_duration_time: int
+
     class Config:
         frozen = True
 

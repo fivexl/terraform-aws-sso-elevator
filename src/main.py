@@ -270,6 +270,6 @@ app.view(slack_helpers.RequestForAccessView.CALLBACK_ID)(
 )
 
 
-@app.action("timepickeraction")
-def handle_timepickeraction(ack):  # noqa: ANN201, ANN001
+@app.action("duration_picker_action")
+def handle_duration_picker_action(ack):  # noqa: ANN201, ANN001
     ack()

@@ -53,6 +53,7 @@ module "access_requester_slack_handler" {
     REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
     APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME   = var.approver_renotification_initial_wait_time
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER  = var.approver_renotification_backoff_multiplier
+    MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
   }
 
   create_lambda_function_url = true

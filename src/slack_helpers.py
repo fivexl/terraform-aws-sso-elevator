@@ -21,7 +21,6 @@ from slack_sdk.models.blocks import (
     PlainTextObject,
     SectionBlock,
     StaticSelectElement,
-    TimePickerElement,
 )
 from slack_sdk.models.views import View
 from slack_sdk.web.slack_response import SlackResponse
@@ -34,6 +33,7 @@ from entities import BaseModel
 # ruff: noqa: ANN102, PGH003
 
 logger = config.get_logger(service="slack")
+cfg = config.get_config()
 
 
 class RequestForAccess(BaseModel):
@@ -56,8 +56,8 @@ class RequestForAccessView:
     PERMISSION_SET_BLOCK_ID = "select_permission_set"
     PERMISSION_SET_ACTION_ID = "selected_permission_set"
 
-    TIMEPICKER_BLOCK_ID = "timepicker"
-    TIMEPICKER_ACTION_ID = "timepickeraction"
+    DURATION_BLOCK_ID = "duration_picker"
+    DURATION_ACTION_ID = "duration_picker_action"
 
     LOADING_BLOCK_ID = "loading"
 
@@ -73,11 +73,12 @@ class RequestForAccessView:
                 SectionBlock(text=MarkdownTextObject(text=":wave: Hey! Please fill form below to request AWS access.")),
                 DividerBlock(),
                 SectionBlock(
-                    block_id=cls.TIMEPICKER_BLOCK_ID,
+                    block_id=cls.DURATION_BLOCK_ID,
                     text=MarkdownTextObject(text="Select the duration for which the authorization will be provided"),
-                    accessory=TimePickerElement(
-                        action_id=cls.TIMEPICKER_ACTION_ID,
-                        initial_time="01:00",
+                    accessory=StaticSelectElement(
+                        action_id=cls.DURATION_ACTION_ID,
+                        initial_option=get_max_duration_block(cfg)[0],
+                        options=get_max_duration_block(cfg),
                         placeholder=PlainTextObject(text="Select duration"),
                     ),
                 ),
@@ -159,10 +160,12 @@ class RequestForAccessView:
     @classmethod
     def parse(cls, obj: dict) -> RequestForAccess:
         values = jp.search("view.state.values", obj)
-        hhmm = jp.search(f"{cls.TIMEPICKER_BLOCK_ID}.{cls.TIMEPICKER_ACTION_ID}.selected_time", values)
+        hhmm = jp.search(f"{cls.DURATION_BLOCK_ID}.{cls.DURATION_ACTION_ID}.selected_option.value", values)
+        hours, minutes = map(int, hhmm.split(":"))
+        duration = timedelta(hours=hours, minutes=minutes)
         return RequestForAccess.parse_obj(
             {
-                "permission_duration": timepicker_str_to_timedelta(hhmm),
+                "permission_duration": duration,
                 "permission_set_name": jp.search(
                     f"{cls.PERMISSION_SET_BLOCK_ID}.{cls.PERMISSION_SET_ACTION_ID}.selected_option.value", values
                 ),
@@ -187,11 +190,6 @@ def remove_blocks(blocks: list[T], block_ids: list[str]) -> list[T]:
 def insert_blocks(blocks: list[T], blocks_to_insert: list[Block], after_block_id: str) -> list[T]:
     index = next(i for i, block in enumerate(blocks) if get_block_id(block) == after_block_id)
     return blocks[: index + 1] + blocks_to_insert + blocks[index + 1 :]  # type: ignore
-
-
-def timepicker_str_to_timedelta(time_str: str) -> timedelta:
-    hours, minutes = time_str.split(":")
-    return timedelta(hours=int(hours), minutes=int(minutes))
 
 
 def humanize_timedelta(td: timedelta) -> str:
@@ -381,3 +379,10 @@ def get_message_from_timestamp(channel_id: str, message_ts: str, slack_client: s
                     return message
 
     return None
+
+
+def get_max_duration_block(cfg: config.Config) -> list[Option]:
+    return [
+        Option(text=PlainTextObject(text=f"{i:02d}:00"), value=f"{i:02d}:00")
+        for i in range(1, cfg.max_permissions_duration_time + 1)
+    ]
