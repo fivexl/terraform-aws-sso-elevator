@@ -165,3 +165,9 @@ variable "approver_renotification_backoff_multiplier" {
   type        = number
   default     = 2
 }
+
+variable "max_permissions_duration_time" {
+  description = "Maximum duration of the permissions granted by the Elevator in hours."
+  type        = number
+  default     = 24
+}

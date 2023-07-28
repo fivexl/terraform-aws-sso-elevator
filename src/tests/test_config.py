@@ -49,6 +49,7 @@ def config_dict(statements: SearchStrategy = strategies.jsonstr(st.lists(strateg
             "request_expiration_hours": st.integers(min_value=0, max_value=24),
             "approver_renotification_initial_wait_time": st.integers(min_value=0, max_value=60),
             "approver_renotification_backoff_multiplier": st.integers(min_value=0, max_value=10),
+            "max_permissions_duration_time": st.integers(min_value=0, max_value=24),
         }
     )
 
@@ -74,7 +75,9 @@ def valid_config_dict(statements_as_json: bool = True):
         "sso_elevator_scheduled_revocation_rule_name": "x",
         "request_expiration_hours": "8",
         "approver_renotification_initial_wait_time": "15",
-        "approver_renotification_backoff_multiplier": "2"
+        "approver_renotification_backoff_multiplier": "2",
+        "max_permissions_duration_time": "24",
+
     }
 
 
