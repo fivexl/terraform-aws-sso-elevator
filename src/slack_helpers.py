@@ -383,6 +383,7 @@ def get_message_from_timestamp(channel_id: str, message_ts: str, slack_client: s
 
 def get_max_duration_block(cfg: config.Config) -> list[Option]:
     return [
-        Option(text=PlainTextObject(text=f"{i:02d}:00"), value=f"{i:02d}:00")
-        for i in range(1, cfg.max_permissions_duration_time + 1)
+        Option(text=PlainTextObject(text=f"{i // 2:02d}:{(i % 2) * 30:02d}"), value=f"{i // 2:02d}:{(i % 2) * 30:02d}")
+        for i in range(1, cfg.max_permissions_duration_time * 2 + 1)
     ]
+
