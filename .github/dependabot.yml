@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: "poetry"
+    directory: "/src"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "src"
+    labels:
+      - "dependencies"
+      - "python"
+      - "src"
+
+  - package-ecosystem: "poetry"
+    directory: "/layer"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "layer"
+    labels:
+      - "dependencies"
+      - "python"
+      - "layer"
