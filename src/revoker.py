@@ -372,8 +372,8 @@ def handle_approvers_renotification_event(
                 channel=event.channel_id,
                 thread_ts=message["ts"],
                 text="The request is still awaiting approval. The next reminder will be "
-                    f"sent in {time_to_wait}, unless the request is approved or "
-                    "discarded beforehand.",
+                    f"sent in {time_to_wait.seconds//60} minutes, "
+                    "unless the request is approved or discarded beforehand.",
             )
             logger.info("Notifications to approvers were sent.")
             logger.debug("Slack response:", extra={"slack_response": slack_response})
