@@ -23,13 +23,400 @@ def execute_decision_info():
         "account_id": "1233321",
         "permission_duration": datetime.timedelta(days=1),
         "approver": entities.slack.User(email="email@email", id="123", real_name="123"),
-        "requester": entities.slack.User(email="email@email", id="123", real_name="123"),
+        "requester": entities.slack.User(
+            email="email@email", id="123", real_name="123"
+        ),
         "reason": "",
     }
 
 
 @pytest.fixture(
     params=[
+        {
+            "description": """If we have two statements, and one of them explicitly denies (with self_approval = False)
+            while the other allows (with self_approval = True), then we should deny self_approval.""",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": [
+                                    "CTO@test.com",
+                                ],
+                                "allow_self_approval": True,
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": [
+                                    "Approver2@test.com",
+                                    "CTO@test.com",
+                                ],
+                                "allow_self_approval": False,
+                            }
+                        ),
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "CTO@test.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.RequiresApproval,
+                approvers=frozenset(["Approver2@test.com"]),
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": [
+                                    "CTO@test.com",
+                                ],
+                                "allow_self_approval": True,
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["Approver2@test.com", "CTO@test.com"],
+                                "allow_self_approval": False,
+                            }
+                        ),
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "Test where allow_self_approval is set to None",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": None,
+                            }
+                        )
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "CTO@test.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.NoApprovers,
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": None,
+                            }
+                        )
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "Test where allow_self_approval has mixed values of None and False",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": None,
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": False,
+                            }
+                        ),
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "CTO@test.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.NoApprovers,
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": False,
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": None,
+                            }
+                        ),
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "Test where allow_self_approval has mixed values of None and True",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": None,
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": True,
+                            }
+                        ),
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "CTO@test.com",
+            },
+            "out": AccessRequestDecision(
+                grant=True,
+                reason=DecisionReason.SelfApproval,
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approvers": ["CTO@test.com"],
+                                "allow_self_approval": True,
+                            }
+                        )
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "Test where approval_is_not_required is set to None",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": [
+                                    "Approver2@test.com",
+                                    "CTO@test.com",
+                                ],
+                                "approval_is_not_required": None,
+                            }
+                        )
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "Approver2@test.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.RequiresApproval,
+                approvers=frozenset(["CTO@test.com"]),
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": [
+                                    "Approver2@test.com",
+                                    "CTO@test.com",
+                                ],
+                                "approval_is_not_required": None,
+                            }
+                        )
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "Test where approval_is_not_required has mixed values of None and False",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approval_is_not_required": None,
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approval_is_not_required": False,
+                            }
+                        ),
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "anybody@example.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.NoApprovers,
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approval_is_not_required": False,
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approval_is_not_required": None,
+                            }
+                        ),
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "Test where approval_is_not_required has mixed values of None and True",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approval_is_not_required": None,
+                            }
+                        ),
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approval_is_not_required": True,
+                            }
+                        ),
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "anybody@example.com",
+            },
+            "out": AccessRequestDecision(
+                grant=True,
+                reason=DecisionReason.ApprovalNotRequired,
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["111111111111"],
+                                "permission_set": ["AdministratorAccess"],
+                                "approval_is_not_required": True,
+                            }
+                        )
+                    ]
+                ),
+            ),
+        },
+        {
+            "description": "test allow_self_approval and approval_is_not_required None values",
+            "in": {
+                "statements": frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": ["anybody@example.com"],
+                            }
+                        )
+                    ]
+                ),
+                "account_id": "111111111111",
+                "permission_set_name": "AdministratorAccess",
+                "requester_email": "anybody@example.com",
+            },
+            "out": AccessRequestDecision(
+                grant=False,
+                reason=DecisionReason.NoApprovers,
+                based_on_statements=frozenset(
+                    [
+                        Statement.parse_obj(
+                            {
+                                "resource_type": "Account",
+                                "resource": ["*"],
+                                "permission_set": ["*"],
+                                "approvers": ["anybody@example.com"],
+                                "approval_is_not_required": None,
+                                "allow_self_approval": None,
+                            }
+                        )
+                    ]
+                ),
+            ),
+        },
         {
             "description": "Grant access if approval is not required",
             "in": {
@@ -152,7 +539,10 @@ def execute_decision_info():
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
                                 "permission_set": ["AdministratorAccess"],
-                                "approvers": ["approver@example.com", "approver2@example.com"],
+                                "approvers": [
+                                    "approver@example.com",
+                                    "approver2@example.com",
+                                ],
                             }
                         )
                     ]
@@ -171,7 +561,10 @@ def execute_decision_info():
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
                                 "permission_set": ["AdministratorAccess"],
-                                "approvers": ["approver@example.com", "approver2@example.com"],
+                                "approvers": [
+                                    "approver@example.com",
+                                    "approver2@example.com",
+                                ],
                             }
                         )
                     ]
