@@ -30,8 +30,8 @@ class WildCard(ConstrainedStr):
 class BaseStatement(BaseModel):
     permission_set: FrozenSet[Union[PermissionSetName, WildCard]]
 
-    allow_self_approval: bool = False
-    approval_is_not_required: bool = False
+    allow_self_approval: bool | None = None
+    approval_is_not_required: bool | None = None
     approvers: FrozenSet[EmailStr] = Field(default_factory=frozenset)
 
 
