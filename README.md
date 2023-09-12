@@ -2,28 +2,31 @@
 
 # Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack
 
+- [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack)
 - [Introduction](#introduction)
 - [Functionality](#functionality)
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
 - [Deployment and Usage](#deployment-and-usage)
-  * [Note on dependencies](#note-on-dependencies)
-  * [Module configuration options and automatic approval](#module-configuration-options-and-automatic-approval)
-    + [Configuration structure](#configuration-structure)
-    + [Automatic Approval](#automatic-approval)
-    + [Aggregation of Rules](#aggregation-of-rules)
-    + [Single Approver](#single-approver)
-  * [Terraform deployment example](#terraform-deployment-example)
-  * [Slack App creation](#slack-app-creation)
+  - [Note on dependencies](#note-on-dependencies)
+  - [Module configuration options and automatic approval](#module-configuration-options-and-automatic-approval)
+    - [Configuration structure](#configuration-structure)
+    - [Explicit Deny](#explicit-deny)
+    - [Automatic Approval](#automatic-approval)
+    - [Aggregation of Rules](#aggregation-of-rules)
+    - [Single Approver](#single-approver)
+    - [Diagram of processing a request:](#diagram-of-processing-a-request)
+  - [Terraform deployment example](#terraform-deployment-example)
+  - [Slack App creation](#slack-app-creation)
 - [Terraform docs](#terraform-docs)
-  * [Requirements](#requirements)
-  * [Providers](#providers)
-  * [Modules](#modules)
-  * [Resources](#resources)
-  * [Inputs](#inputs)
-  * [Outputs](#outputs)
-  * [More info](#more-info)
+  - [Requirements](#requirements)
+  - [Providers](#providers)
+  - [Modules](#modules)
+  - [Resources](#resources)
+  - [Inputs](#inputs)
+  - [Outputs](#outputs)
+  - [More info](#more-info)
 - [Development](#development)
-  * [Post review](#post-review)
+  - [Post review](#post-review)
 
 
 # Introduction
@@ -88,12 +91,15 @@ Each configuration rule specifies which resource(s) the rule applies to, which p
 
 The fields in the configuration dictionary are:
 
-- `ResourceType`: The type of resource being requested, e.g. "Account". Currently only "Account" is supported.
-- `Resource`: The resource(s) being requested. This can be a string or a list of strings. If set to "*", the rule matches all resources of the specified ResourceType.
-- `PermissionSet`: The permission set(s) being requested. This can be a string or a list of strings. If set to "*", the rule matches all permission sets for the specified Resource and ResourceType.
-- `Approvers`: The list of approvers for the request. This can be a string or a list of strings.
-- `AllowSelfApproval`: A boolean indicating whether the requester can approve their own request if they are in the Approvers list. Defaults to false.
-- `ApprovalIsNotRequired`: A boolean indicating whether the request can be approved automatically without any approvers. Defaults to false.
+- **ResourceType**: This field specifies the type of resource being requested, such as "Account." As of now, the only supported value is "Account."
+- **Resource**: This field defines the specific resource(s) being requested. It accepts either a single string or a list of strings. Setting this field to "*" allows the rule to match all resources associated with the specified `ResourceType`.
+- **PermissionSet**: Here, you indicate the permission set(s) being requested. This can be either a single string or a list of strings. If set to "*", the rule matches all permission sets available for the defined `Resource` and `ResourceType`.
+- **Approvers**: This field lists the potential approvers for the request. It accepts either a single string or a list of strings representing different approvers.
+- **AllowSelfApproval**: This field can be a boolean, indicating whether the requester, if present in the `Approvers` list, is permitted to approve their own request. It defaults to `None`.
+- **ApprovalIsNotRequired**: This field can also be a boolean, signifying whether the approval can be granted automatically, bypassing the approvers entirely. The default value is `None`.
+- 
+### Explicit Deny
+In the system, an explicit denial in any statement overrides any approvals. For instance, if one statement designates an individual as an approver for all accounts, but another statement specifies that the same individual is not allowed to self-approve or to bypass the approval process for a particular account and permission set (by setting "allow_self_approval" and "approval_is_not_required" to `False`), then that individual will not be able to approve requests for that specific account, thereby enforcing a stricter control.
 
 ### Automatic Approval
 Requests will be approved automatically if either of the following conditions are met:
@@ -106,6 +112,9 @@ The approval decision and final list of reviewers will be calculated dynamically
 
 ### Single Approver
 If there is only one approver and AllowSelfApproval is not set to true, nobody will be able to approve the request.
+
+### Diagram of processing a request:
+![Diagram of processing a request](docs/Diagram_of_processing_a_request.png)
 
 ## Terraform deployment example
 
