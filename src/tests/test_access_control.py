@@ -964,7 +964,9 @@ def test_cases_for_approve_request_decision(request):
 
 
 def test_make_decision_on_access_request(test_cases_for_access_request_decision):
-    actual = make_decision_on_access_request(**test_cases_for_access_request_decision["in"])
+    actual = make_decision_on_access_request(
+        **test_cases_for_access_request_decision["in"]
+    )
     expected = test_cases_for_access_request_decision["out"]
 
     # Compare grant and reason attributes directly
