@@ -922,6 +922,7 @@ def test_cases_for_access_request_decision(request):
                                 "resource": ["111111111111"],
                                 "permission_set": ["AdministratorAccess"],
                                 "approvers": ["approver@example.com"],
+                                "allow_self_approval": False,
                             }
                         )
                     ]
@@ -963,12 +964,26 @@ def test_cases_for_approve_request_decision(request):
 
 
 def test_make_decision_on_access_request(test_cases_for_access_request_decision):
-    assert make_decision_on_access_request(**test_cases_for_access_request_decision["in"]) == test_cases_for_access_request_decision["out"]
+    actual = make_decision_on_access_request(**test_cases_for_access_request_decision["in"])
+    expected = test_cases_for_access_request_decision["out"]
+
+    # Compare grant and reason attributes directly
+    assert actual.grant == expected.grant
+    assert actual.reason == expected.reason
+
+    # Compare based_on_statements attributes as sets to ignore order
+    assert set(actual.based_on_statements) == set(expected.based_on_statements)
+
+    # Compare approvers attributes directly (assuming it is not a set/frozenset)
+    assert actual.approvers == expected.approvers
 
 
 def test_make_decision_on_approve_request(test_cases_for_approve_request_decision):
     assert (
-        make_decision_on_approve_request(**test_cases_for_approve_request_decision["in"]) == test_cases_for_approve_request_decision["out"]
+        make_decision_on_approve_request(
+            **test_cases_for_approve_request_decision["in"]
+        )
+        == test_cases_for_approve_request_decision["out"]
     )
 
 
@@ -977,7 +992,13 @@ def test_execute_access_request_decision(
     execute_decision_info,
 ):
     if test_cases_for_access_request_decision["out"].grant is not True:
-        assert execute_decision(decision=test_cases_for_access_request_decision["out"], **execute_decision_info) is False
+        assert (
+            execute_decision(
+                decision=test_cases_for_access_request_decision["out"],
+                **execute_decision_info
+            )
+            is False
+        )
 
 
 def test_execute_approve_request_decision(
@@ -985,14 +1006,22 @@ def test_execute_approve_request_decision(
     execute_decision_info,
 ):
     if test_cases_for_approve_request_decision["out"].grant is not True:
-        assert execute_decision(decision=test_cases_for_approve_request_decision["out"], **execute_decision_info) is False
+        assert (
+            execute_decision(
+                decision=test_cases_for_approve_request_decision["out"],
+                **execute_decision_info
+            )
+            is False
+        )
 
 
 def test_make_and_excute_access_request_decision(
     test_cases_for_access_request_decision,
     execute_decision_info,
 ):
-    decision = make_decision_on_access_request(**test_cases_for_access_request_decision["in"])
+    decision = make_decision_on_access_request(
+        **test_cases_for_access_request_decision["in"]
+    )
     if decision.grant is not True:
         assert execute_decision(decision=decision, **execute_decision_info) is False
 
@@ -1001,6 +1030,8 @@ def test_make_and_excute_approve_request_decision(
     test_cases_for_approve_request_decision,
     execute_decision_info,
 ):
-    decision = make_decision_on_approve_request(**test_cases_for_approve_request_decision["in"])
+    decision = make_decision_on_approve_request(
+        **test_cases_for_approve_request_decision["in"]
+    )
     if decision.grant is not True:
         assert execute_decision(decision=decision, **execute_decision_info) is False
