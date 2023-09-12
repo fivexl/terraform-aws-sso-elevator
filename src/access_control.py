@@ -37,7 +37,7 @@ class AccessRequestDecision(BaseModel):
     approvers: FrozenSet[str] = frozenset()
 
 
-def make_decision_on_access_request(
+def make_decision_on_access_request( # noqa: PLR0911
     statements: FrozenSet[Statement],
     permission_set_name: str,
     account_id: str,
@@ -47,14 +47,23 @@ def make_decision_on_access_request(
     decision_based_on_statements: set[Statement] = set()
     potential_approvers = set()
 
+    explicit_deny_self_approval = any(
+        statement.allow_self_approval is False and requester_email in statement.approvers 
+        for statement in affected_statements
+    )
+    explicit_deny_approval_not_required = any(
+        statement.approval_is_not_required is False
+        for statement in affected_statements
+    )
+
     for statement in affected_statements:
-        if statement.approval_is_not_required:
+        if statement.approval_is_not_required and not explicit_deny_approval_not_required:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset([statement]),
             )
-        if requester_email in statement.approvers and statement.allow_self_approval:
+        if requester_email in statement.approvers and statement.allow_self_approval and not explicit_deny_self_approval:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.SelfApproval,
@@ -64,7 +73,7 @@ def make_decision_on_access_request(
         decision_based_on_statements.add(statement)
         potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
 
-    if len(decision_based_on_statements) == 0:  # sourcery skip
+    if len(decision_based_on_statements) == 0: # sourcery skip
         return AccessRequestDecision(
             grant=False,
             reason=DecisionReason.NoStatements,
