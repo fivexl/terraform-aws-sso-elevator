@@ -68,8 +68,8 @@ module "access_requester_slack_handler" {
   attach_policy_json = true
   policy_json        = data.aws_iam_policy_document.slack_handler.json
 
-  dead_letter_target_arn    = aws_sns_topic.dlq.arn
-  attach_dead_letter_policy = true
+  dead_letter_target_arn    = var.aws_sns_topic_subscription_email != "" ? aws_sns_topic.dlq[0].arn : null
+  attach_dead_letter_policy = var.aws_sns_topic_subscription_email != "" ? true : false
 
   # do not retry automatically
   maximum_retry_attempts = 0
