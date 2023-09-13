@@ -7,6 +7,7 @@ variable "tags" {
 variable "aws_sns_topic_subscription_email" {
   description = "value for the email address to subscribe to the SNS topic"
   type        = string
+  default     = ""
 }
 
 variable "slack_signing_secret" {
