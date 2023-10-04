@@ -69,7 +69,7 @@ Additionally, the Access-Revoker continuously reconciles the revocation schedule
 
 # Important Considerations and Assumptions
 
-SSO elevator assumes that your Slack user email will match SSO user id otherwise it won't be able to match Slack user sendign request to an AWS SSO user.
+SSO elevator assumes that your Slack user email will match SSO user id otherwise it won't be able to match Slack user sending request to an AWS SSO user.
 
 When onboarding your organization, be aware that the access-revoker will revoke all user-level Permission Set assignments in the AWS accounts you specified in the module configuration. If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
 
