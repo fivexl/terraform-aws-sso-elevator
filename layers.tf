@@ -18,4 +18,6 @@ module "sso_elevator_dependencies" {
     patterns         = ["!python/.venv/.*"]
     prefix_in_zip    = "python"
   }]
+
+  ignore_source_code_hash = true
 }
