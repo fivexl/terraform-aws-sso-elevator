@@ -27,7 +27,7 @@ sso_client = session.client("sso-admin")
 cfg = config.get_config()
 app = App(
     process_before_response=True,
-    logger=config.get_logger(service="slack", level=cfg.slack_app_log_level),
+    logger=config.get_logger(service="slack", level=cfg.slack_app_log_level), # type: ignore # noqa: PGH003
 )
 
 
