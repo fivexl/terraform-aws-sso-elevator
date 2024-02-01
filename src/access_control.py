@@ -174,12 +174,13 @@ def execute_decision(  # noqa: PLR0913
 
     # We set max session duration to 12 hours to avoid the need to re-authenticate
     # If request duration is shorter than 12 hours, deletion of permission set will invalidate the session.
-    permission_set.session_duration = "PT12H"
+    session_duration = "PT12H"
     new_ps = sso.copy_permission_set(
         sso_admin_client=sso_client,
         sso_instance_arn=cfg.sso_instance_arn,
         original_permission_set=permission_set,
         new_permission_set_name=utils.gen_temporary_permission_set_name(permission_set.name),
+        session_duration = session_duration
     )
 
     user_principal_id = sso.get_user_principal_id_by_email(
