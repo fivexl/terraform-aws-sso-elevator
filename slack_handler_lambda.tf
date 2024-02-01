@@ -179,13 +179,21 @@ data "aws_iam_policy_document" "slack_handler" {
   statement {
     effect = "Allow"
     actions = [
-      "sso:ListTagsForResource",
       "sso:CreatePermissionSet",
+      "sso:ListTagsForResource",
+      "sso:TagResource",
+      
       "sso:AttachManagedPolicyToPermissionSet",
+      "sso:ListManagedPoliciesInPermissionSet",
+
+      "sso:ListCustomerManagedPolicyReferencesInPermissionSet",
+      "sso:AttachCustomerManagedPolicyReferenceToPermissionSet",
+
       "sso:PutPermissionsBoundaryToPermissionSet",
+      "sso:GetPermissionsBoundaryForPermissionSet",
+
       "sso:PutInlinePolicyToPermissionSet",
       "sso:GetInlinePolicyForPermissionSet",
-      "sso:GetPermissionsBoundaryForPermissionSet",
     ]
     resources = ["*"]
   }
