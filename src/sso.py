@@ -427,6 +427,7 @@ def copy_permission_set(
     sso_instance_arn: str,
     original_permission_set: PermissionSet,
     new_permission_set_name: str,
+    session_duration: str,
 ) -> PermissionSet:
     existing_tags = sso_admin_client.list_tags_for_resource(InstanceArn=sso_instance_arn, ResourceArn=original_permission_set.arn)["Tags"]
 
@@ -439,7 +440,7 @@ def copy_permission_set(
         "Name": new_permission_set_name,
         "InstanceArn": sso_instance_arn,
         "Description": "This is a unique permission set used by SSO-Elevator to grant access to AWS accounts, please do not delete it.",
-        "SessionDuration": original_permission_set.session_duration,
+        "SessionDuration": session_duration,
         "Tags": existing_tags,
     }
 
