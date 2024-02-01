@@ -432,7 +432,7 @@ def copy_permission_set(
 
     sso_elevator_tag = {"Key": "ManagedBy", "Value": "SSO_Elevator"}
     if sso_elevator_tag not in existing_tags:
-        existing_tags.append(sso_elevator_tag) # type: ignore
+        existing_tags.append(sso_elevator_tag)  # type: ignore
 
     logger.info("Creating new permission set", extra={"name": new_permission_set_name, "name_length": len(new_permission_set_name)})
     req = {
