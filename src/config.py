@@ -56,6 +56,8 @@ class Config(BaseSettings):
 
     max_permissions_duration_time: int
 
+    max_number_of_symbols_in_permission_set_name: int = 26
+
     class Config:
         frozen = True
 
