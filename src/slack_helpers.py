@@ -110,7 +110,7 @@ class RequestForAccessView:
         # TODO: handle case when there are more than 100 accounts
         # 99 is the limit for StaticSelectElement
         # https://slack.dev/python-slack-sdk/api-docs/slack_sdk/models/blocks/block_elements.html#:~:text=StaticSelectElement(InputInteractiveElement)%3A%0A%20%20%20%20type%20%3D%20%22static_select%22-,options_max_length%20%3D%20100,-option_groups_max_length%20%3D%20100%0A%0A%20%20%20%20%40property%0A%20%20%20%20def%20attributes(
-        if len(accounts) >99: # noqa: PLR2004
+        if len(accounts) > 99:  # noqa: PLR2004
             accounts = accounts[:99]
         sorted_accounts = sorted(accounts, key=lambda account: account.name)
         return InputBlock(
@@ -128,7 +128,8 @@ class RequestForAccessView:
     @classmethod
     def build_select_permission_set_input_block(cls, permission_sets: list[entities.aws.PermissionSet]) -> InputBlock:
         filtered_permission_sets = [
-            permission_set for permission_set in permission_sets
+            permission_set
+            for permission_set in permission_sets
             if len(permission_set.name) < cfg.max_number_of_symbols_in_permission_set_name
         ]
         sorted_permission_sets = sorted(filtered_permission_sets, key=lambda permission_set: permission_set.name)
@@ -390,4 +391,3 @@ def get_max_duration_block(cfg: config.Config) -> list[Option]:
         Option(text=PlainTextObject(text=f"{i // 2:02d}:{(i % 2) * 30:02d}"), value=f"{i // 2:02d}:{(i % 2) * 30:02d}")
         for i in range(1, cfg.max_permissions_duration_time * 2 + 1)
     ]
-

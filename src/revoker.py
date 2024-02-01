@@ -30,11 +30,11 @@ from events import (
 logger = config.get_logger(service="revoker")
 
 cfg = config.get_config()
-org_client = boto3.client("organizations") # type: ignore  # noqa: PGH003
-sso_client = boto3.client("sso-admin") # type: ignore # noqa: PGH003
-identitystore_client = boto3.client("identitystore") # type: ignore # noqa: PGH003
-scheduler_client = boto3.client("scheduler") # type: ignore # noqa: PGH003
-events_client = boto3.client("events") # type: ignore # noqa: PGH003
+org_client = boto3.client("organizations")  # type: ignore  # noqa: PGH003
+sso_client = boto3.client("sso-admin")  # type: ignore # noqa: PGH003
+identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH003
+scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
+events_client = boto3.client("events")  # type: ignore # noqa: PGH003
 slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
 
 
@@ -90,7 +90,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
         case ApproverNotificationEvent():
             logger.info("Handling ApproverNotificationEvent event", extra={"event": parsed_event})
             return handle_approvers_renotification_event(
-                event = parsed_event,
+                event=parsed_event,
                 slack_client=slack_client,
                 scheduler_client=scheduler_client,
             )
@@ -118,15 +118,14 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
     )
 
     existing_tags = sso_client.list_tags_for_resource(
-        InstanceArn=account_assignment.instance_arn,
-        ResourceArn=account_assignment.permission_set_arn
+        InstanceArn=account_assignment.instance_arn, ResourceArn=account_assignment.permission_set_arn
     )["Tags"]
 
     for tag in existing_tags:
         if tag["Key"] == "ManagedBy" and tag["Value"] == "SSO_Elevator":
             sso_client.delete_permission_set(
-                InstanceArn = account_assignment.instance_arn,
-                PermissionSetArn = account_assignment.permission_set_arn,
+                InstanceArn=account_assignment.instance_arn,
+                PermissionSetArn=account_assignment.permission_set_arn,
             )
 
     s3.log_operation(
@@ -202,15 +201,14 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     )
 
     existing_tags = sso_client.list_tags_for_resource(
-        InstanceArn=user_account_assignment.instance_arn,
-        ResourceArn=user_account_assignment.permission_set_arn
+        InstanceArn=user_account_assignment.instance_arn, ResourceArn=user_account_assignment.permission_set_arn
     )["Tags"]
 
     for tag in existing_tags:
         if tag["Key"] == "ManagedBy" and tag["Value"] == "SSO_Elevator":
             sso_client.delete_permission_set(
-                InstanceArn = user_account_assignment.instance_arn,
-                PermissionSetArn = user_account_assignment.permission_set_arn,
+                InstanceArn=user_account_assignment.instance_arn,
+                PermissionSetArn=user_account_assignment.permission_set_arn,
             )
 
     s3.log_operation(
@@ -372,11 +370,9 @@ def handle_discard_buttons_event(
     logger.info("Buttons were not found", extra={"event": event})
 
 
-
 def handle_approvers_renotification_event(
     event: ApproverNotificationEvent, slack_client: slack_sdk.WebClient, scheduler_client: EventBridgeSchedulerClient
 ) -> None:
-
     message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,
         message_ts=event.time_stamp,
@@ -396,17 +392,14 @@ def handle_approvers_renotification_event(
                 channel=event.channel_id,
                 thread_ts=message["ts"],
                 text="The request is still awaiting approval. The next reminder will be "
-                    f"sent in {time_to_wait.seconds//60} minutes, "
-                    "unless the request is approved or discarded beforehand.",
+                f"sent in {time_to_wait.seconds//60} minutes, "
+                "unless the request is approved or discarded beforehand.",
             )
             logger.info("Notifications to approvers were sent.")
             logger.debug("Slack response:", extra={"slack_response": slack_response})
 
             schedule.schedule_approver_notification_event(
-                schedule_client=scheduler_client,
-                channel_id=event.channel_id,
-                message_ts=message["ts"],
-                time_to_wait=time_to_wait
+                schedule_client=scheduler_client, channel_id=event.channel_id, message_ts=message["ts"], time_to_wait=time_to_wait
             )
             return
 
