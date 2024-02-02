@@ -80,7 +80,6 @@ def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRe
 
         if isinstance(event.__root__, ScheduledRevokeEvent):
             scheduled_revoke_events.append(event.__root__)
-            print("case: ScheduledRevokeEvent")
 
     return scheduled_revoke_events
 
