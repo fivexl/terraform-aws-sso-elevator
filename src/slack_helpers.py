@@ -84,7 +84,7 @@ class RequestForAccessView:
                 ),
                 InputBlock(
                     block_id=cls.REASON_BLOCK_ID,
-                    label=PlainTextObject(text="What is it you are going to do"),
+                    label=PlainTextObject(text="Why do you need access?"),
                     element=PlainTextInputElement(
                         action_id=cls.REASON_ACTION_ID,
                         multiline=True,
