@@ -166,8 +166,13 @@ class RequestForAccessView:
     def parse(cls, obj: dict) -> RequestForAccess:
         values = jp.search("view.state.values", obj)
         hhmm = jp.search(f"{cls.DURATION_BLOCK_ID}.{cls.DURATION_ACTION_ID}.selected_option.value", values)
+        print(hhmm)
         hours, minutes = map(int, hhmm.split(":"))
+        print("hours", hours)
+        print("minutes", minutes)
         duration = timedelta(hours=hours, minutes=minutes)
+        print("duration", duration)
+        print(type(duration))
         return RequestForAccess.parse_obj(
             {
                 "permission_duration": duration,
@@ -198,17 +203,32 @@ def insert_blocks(blocks: list[T], blocks_to_insert: list[Block], after_block_id
 
 
 def humanize_timedelta(td: timedelta) -> str:
-    # example 12h 30m
-    hours, remainder = divmod(td.seconds, 3600)
-    minutes, _ = divmod(remainder, 60)
-    return f"{hours}h {minutes}m"
+    # 1d 12h 0m
+    total_hours = td.days * 24 + td.seconds // 3600
+    minutes = (td.seconds % 3600) // 60
+
+    if total_hours < 24:  # noqa: PLR2004
+        return f"{total_hours}h {minutes}m"
+    days = total_hours // 24
+    hours = total_hours % 24
+    if hours > 0 or minutes > 0:
+        return f"{days}d {hours}h {minutes}m"
+    else:
+        return f"{days}d"
 
 
 def unhumanize_timedelta(td_str: str) -> timedelta:
-    hours, minutes = td_str.split(" ")
-    hours = hours.removesuffix("h")
-    minutes = minutes.removesuffix("m")
-    return timedelta(hours=int(hours), minutes=int(minutes))
+    days, hours, minutes = 0, 0, 0
+    components = td_str.split()
+    for component in components:
+        if "d" in component:
+            days = int(component.removesuffix("d"))
+        elif "h" in component:
+            hours = int(component.removesuffix("h"))
+        elif "m" in component:
+            minutes = int(component.removesuffix("m"))
+    total_hours = days * 24 + hours
+    return timedelta(hours=total_hours, minutes=minutes)
 
 
 def build_approval_request_message_blocks(  # noqa: PLR0913
