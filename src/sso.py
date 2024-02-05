@@ -339,7 +339,7 @@ def get_account_assignment_information(
 ) -> list[AccountAssignment]:
     describe_sso_instance(sso_client, cfg.sso_instance_arn)
     accounts = organizations.get_accounts_from_config(org_client, cfg)
-    permission_sets = get_permission_sets_from_config(sso_client, cfg)
+    permission_sets = list(list_permission_sets(sso_client, cfg.sso_instance_arn))
     account_assignments = list_user_account_assignments(
         sso_client,
         cfg.sso_instance_arn,
