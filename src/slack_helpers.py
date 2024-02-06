@@ -166,13 +166,8 @@ class RequestForAccessView:
     def parse(cls, obj: dict) -> RequestForAccess:
         values = jp.search("view.state.values", obj)
         hhmm = jp.search(f"{cls.DURATION_BLOCK_ID}.{cls.DURATION_ACTION_ID}.selected_option.value", values)
-        print(hhmm)
         hours, minutes = map(int, hhmm.split(":"))
-        print("hours", hours)
-        print("minutes", minutes)
         duration = timedelta(hours=hours, minutes=minutes)
-        print("duration", duration)
-        print(type(duration))
         return RequestForAccess.parse_obj(
             {
                 "permission_duration": duration,
