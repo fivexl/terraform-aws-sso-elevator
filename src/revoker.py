@@ -117,16 +117,11 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
         account_assignment.permission_set_arn,
     )
 
-    existing_tags = sso_client.list_tags_for_resource(
-        InstanceArn=account_assignment.instance_arn, ResourceArn=account_assignment.permission_set_arn
-    )["Tags"]
-
-    for tag in existing_tags:
-        if tag["Key"] == "ManagedBy" and tag["Value"] == "SSO_Elevator":
-            sso_client.delete_permission_set(
-                InstanceArn=account_assignment.instance_arn,
-                PermissionSetArn=account_assignment.permission_set_arn,
-            )
+    sso.delete_temporary_permission_set(
+        sso_client=sso_client,
+        permission_set_arn=account_assignment.permission_set_arn,
+        sso_instance_arn=account_assignment.instance_arn,
+    )
 
     s3.log_operation(
         s3.AuditEntry(
@@ -200,16 +195,11 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
         permission_set_arn=user_account_assignment.permission_set_arn,
     )
 
-    existing_tags = sso_client.list_tags_for_resource(
-        InstanceArn=user_account_assignment.instance_arn, ResourceArn=user_account_assignment.permission_set_arn
-    )["Tags"]
-
-    for tag in existing_tags:
-        if tag["Key"] == "ManagedBy" and tag["Value"] == "SSO_Elevator":
-            sso_client.delete_permission_set(
-                InstanceArn=user_account_assignment.instance_arn,
-                PermissionSetArn=user_account_assignment.permission_set_arn,
-            )
+    sso.delete_temporary_permission_set(
+        sso_client=sso_client,
+        permission_set_arn=user_account_assignment.permission_set_arn,
+        sso_instance_arn=user_account_assignment.instance_arn,
+    )
 
     s3.log_operation(
         s3.AuditEntry(
