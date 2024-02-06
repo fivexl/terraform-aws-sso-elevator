@@ -435,7 +435,10 @@ def copy_permission_set(
     if sso_elevator_tag not in existing_tags:
         existing_tags.append(sso_elevator_tag)  # type: ignore
 
-    logger.info("Creating new permission set", extra={"new_permission_set_name": new_permission_set_name, "name_length": len(new_permission_set_name)})
+    logger.info(
+        "Creating new permission set",
+        extra={"new_permission_set_name": new_permission_set_name, "name_length": len(new_permission_set_name)},
+    )
     req = {
         "Name": new_permission_set_name,
         "InstanceArn": sso_instance_arn,
@@ -489,3 +492,18 @@ def copy_permission_set(
         )
     logger.info("New permission set created", extra={"arn": new_ps.arn})
     return new_ps
+
+
+def delete_temporary_permission_set(
+    sso_client: SSOAdminClient,
+    permission_set_arn: str,
+    sso_instance_arn: str,
+) -> None:
+    existing_tags = sso_client.list_tags_for_resource(InstanceArn=sso_instance_arn, ResourceArn=permission_set_arn)["Tags"]
+
+    for tag in existing_tags:
+        if tag["Key"] == "ManagedBy" and tag["Value"] == "SSO_Elevator":
+            sso_client.delete_permission_set(
+                InstanceArn=sso_instance_arn,
+                PermissionSetArn=permission_set_arn,
+            )
