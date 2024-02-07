@@ -27,7 +27,7 @@ sso_client = session.client("sso-admin")
 cfg = config.get_config()
 app = App(
     process_before_response=True,
-    logger=config.get_logger(service="slack", level=cfg.slack_app_log_level),  # type: ignore # noqa: PGH003
+    logger=config.get_logger(service="slack", level=cfg.slack_app_log_level), # type: ignore # noqa: PGH003
 )
 
 
@@ -107,11 +107,10 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
 
-    if (
-        cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
-        and cache_for_dublicate_requests.get("account_id") == payload.request.account_id
-        and cache_for_dublicate_requests.get("permission_set_name") == payload.request.permission_set_name
-    ):
+
+    if (cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
+    and cache_for_dublicate_requests.get("account_id") == payload.request.account_id
+    and cache_for_dublicate_requests.get("permission_set_name") == payload.request.permission_set_name):
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> request is already in progress, please wait for the result.",
@@ -258,9 +257,7 @@ def handle_request_for_access_submittion(
                 schedule_client=schedule_client,
                 message_ts=ts,
                 channel_id=cfg.slack_channel_id,
-                time_to_wait=timedelta(
-                    minutes=cfg.approver_renotification_initial_wait_time,
-                ),
+                time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time,)
             )
 
     match decision.reason:
