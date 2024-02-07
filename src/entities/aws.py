@@ -12,5 +12,3 @@ class PermissionSet(BaseModel):
     name: str
     arn: str
     description: Optional[str]
-    session_duration: str
-    relay_state: Optional[str]

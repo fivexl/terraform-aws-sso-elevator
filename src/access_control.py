@@ -9,7 +9,6 @@ import entities
 import s3
 import schedule
 import sso
-import utils
 from entities import BaseModel
 from statement import Statement, get_affected_statements
 
@@ -171,25 +170,13 @@ def execute_decision(  # noqa: PLR0913
     permission_set = sso.get_permission_set_by_name(
         sso_client, sso_instance.arn, permission_set_name
     )
-
-    # We set max session duration to 12 hours to avoid the need to re-authenticate
-    # If request duration is shorter than 12 hours, deletion of permission set will invalidate the session.
-    session_duration = "PT12H"
-    new_ps = sso.copy_permission_set(
-        sso_admin_client=sso_client,
-        sso_instance_arn=cfg.sso_instance_arn,
-        original_permission_set=permission_set,
-        new_permission_set_name=utils.gen_temporary_permission_set_name(permission_set.name),
-        session_duration = session_duration
-    )
-
     user_principal_id = sso.get_user_principal_id_by_email(
         identitystore_client, sso_instance.identity_store_id, requester.email
     )
     account_assignment = sso.UserAccountAssignment(
         instance_arn=sso_instance.arn,
         account_id=account_id,
-        permission_set_arn=new_ps.arn,
+        permission_set_arn=permission_set.arn,
         user_principal_id=user_principal_id,
     )
 
@@ -205,7 +192,7 @@ def execute_decision(  # noqa: PLR0913
     s3.log_operation(
         audit_entry=s3.AuditEntry(
             account_id=account_id,
-            role_name=new_ps.name,
+            role_name=permission_set.name,
             reason=reason,
             requester_slack_id=requester.id,
             requester_email=requester.email,
@@ -222,6 +209,11 @@ def execute_decision(  # noqa: PLR0913
         schedule_client=schedule_client,
         approver=approver,
         requester=requester,
-        user_account_assignment=account_assignment,
+        user_account_assignment=sso.UserAccountAssignment(
+            instance_arn=sso_instance.arn,
+            account_id=account_id,
+            permission_set_arn=permission_set.arn,
+            user_principal_id=user_principal_id,
+        ),
     )
     return True  # Temporary solution for testing

@@ -260,17 +260,13 @@ def list_user_account_assignments(
     return account_assignments
 
 
-def parse_permission_set(
-    td: type_defs.DescribePermissionSetResponseTypeDef | type_defs.CreatePermissionSetResponseTypeDef,
-) -> entities.aws.PermissionSet:
+def parse_permission_set(td: type_defs.DescribePermissionSetResponseTypeDef) -> entities.aws.PermissionSet:
     ps = td.get("PermissionSet", {})
     return entities.aws.PermissionSet.parse_obj(
         {
             "name": ps.get("Name"),
             "arn": ps.get("PermissionSetArn"),
             "description": ps.get("Description"),
-            "session_duration": ps.get("SessionDuration"),
-            "relay_state": ps.get("RelayState"),
         }
     )
 
@@ -299,14 +295,12 @@ def list_permission_sets(client: SSOAdminClient, sso_instance_arn: str) -> Gener
     for permission_set_arn in list_permission_sets_arns(client, sso_instance_arn):
         yield describe_permission_set(client, sso_instance_arn, permission_set_arn)
 
-
 def list_users(client: IdentityStoreClient, identity_store_id: str) -> dict:
     paginator = client.get_paginator("list_users")
     r = {"Users": []}
     for page in paginator.paginate(IdentityStoreId=identity_store_id):
         r["Users"].extend(page["Users"])
     return r
-
 
 def get_user_principal_id_by_email(client: IdentityStoreClient, identity_store_id: str, email: str) -> str:
     response = list_users(client, identity_store_id=identity_store_id)
@@ -339,7 +333,7 @@ def get_account_assignment_information(
 ) -> list[AccountAssignment]:
     describe_sso_instance(sso_client, cfg.sso_instance_arn)
     accounts = organizations.get_accounts_from_config(org_client, cfg)
-    permission_sets = list(list_permission_sets(sso_client, cfg.sso_instance_arn))
+    permission_sets = get_permission_sets_from_config(sso_client, cfg)
     account_assignments = list_user_account_assignments(
         sso_client,
         cfg.sso_instance_arn,
@@ -347,163 +341,3 @@ def get_account_assignment_information(
         [ps.arn for ps in permission_sets],
     )
     return account_assignments
-
-
-def get_permission_set_managed_policies_arns(
-    c: SSOAdminClient, sso_instance_arn: str, permission_set_arn: str
-) -> list[str]:  # sourcery skip: for-append-to-extend
-    paginator = c.get_paginator("list_managed_policies_in_permission_set")
-    managed_policies_arns = []
-    for page in paginator.paginate(
-        InstanceArn=sso_instance_arn,
-        PermissionSetArn=permission_set_arn,
-    ):
-        amps = page["AttachedManagedPolicies"]
-        for amp in amps:
-            if "Arn" in amp:
-                managed_policies_arns.append(amp["Arn"])
-    return managed_policies_arns
-
-
-def attach_permission_set_managed_policies_arns(
-    c: SSOAdminClient, managed_policies_arns: list[str], sso_instance_arn: str, permission_set_arn: str
-) -> None:
-    for arn in managed_policies_arns:
-        c.attach_managed_policy_to_permission_set(
-            InstanceArn=sso_instance_arn,
-            PermissionSetArn=permission_set_arn,
-            ManagedPolicyArn=arn,
-        )
-
-
-def attach_customer_managed_policy_references_to_permission_set(
-    c: SSOAdminClient,
-    sso_instance_arn: str,
-    permission_set_arn: str,
-    customer_managed_policy_references: list[type_defs.CustomerManagedPolicyReferenceTypeDef],
-) -> None:
-    for ref in customer_managed_policy_references:
-        c.attach_customer_managed_policy_reference_to_permission_set(
-            InstanceArn=sso_instance_arn,
-            PermissionSetArn=permission_set_arn,
-            CustomerManagedPolicyReference=ref,
-        )
-
-
-def get_customer_managed_policy_references_in_permission_set(
-    c: SSOAdminClient,
-    sso_instance_arn: str,
-    permission_set_arn: str,
-) -> list[type_defs.CustomerManagedPolicyReferenceTypeDef]:
-    refs: list[type_defs.CustomerManagedPolicyReferenceTypeDef] = []
-    paginator = c.get_paginator("list_customer_managed_policy_references_in_permission_set")
-    for p in paginator.paginate(
-        InstanceArn=sso_instance_arn,
-        PermissionSetArn=permission_set_arn,
-    ):
-        refs.extend(p["CustomerManagedPolicyReferences"])
-    return refs
-
-
-def get_permissions_boundary_for_permission_set(
-    c: SSOAdminClient,
-    sso_instance_arn: str,
-    permission_set_arn: str,
-) -> type_defs.PermissionsBoundaryTypeDef | None:
-    try:
-        r = c.get_permissions_boundary_for_permission_set(
-            InstanceArn=sso_instance_arn,
-            PermissionSetArn=permission_set_arn,
-        )
-        return r["PermissionsBoundary"]
-    except c.exceptions.ResourceNotFoundException:
-        return None
-    except Exception as e:
-        raise e
-
-
-def copy_permission_set(
-    sso_admin_client: SSOAdminClient,
-    sso_instance_arn: str,
-    original_permission_set: PermissionSet,
-    new_permission_set_name: str,
-    session_duration: str,
-) -> PermissionSet:
-    existing_tags = sso_admin_client.list_tags_for_resource(InstanceArn=sso_instance_arn, ResourceArn=original_permission_set.arn)["Tags"]
-
-    sso_elevator_tag = {"Key": "ManagedBy", "Value": "SSO_Elevator"}
-    if sso_elevator_tag not in existing_tags:
-        existing_tags.append(sso_elevator_tag)  # type: ignore
-
-    logger.info(
-        "Creating new permission set",
-        extra={"new_permission_set_name": new_permission_set_name, "name_length": len(new_permission_set_name)},
-    )
-    req = {
-        "Name": new_permission_set_name,
-        "InstanceArn": sso_instance_arn,
-        "Description": "This is a unique permission set used by SSO-Elevator to grant access to AWS accounts, please do not delete it.",
-        "SessionDuration": session_duration,
-        "Tags": existing_tags,
-    }
-
-    if original_permission_set.relay_state is not None:
-        req["RelayState"] = original_permission_set.relay_state
-
-    r = sso_admin_client.create_permission_set(**req)
-    new_ps = parse_permission_set(r)
-
-    attach_permission_set_managed_policies_arns(
-        c=sso_admin_client,
-        sso_instance_arn=sso_instance_arn,
-        permission_set_arn=new_ps.arn,
-        managed_policies_arns=get_permission_set_managed_policies_arns(sso_admin_client, sso_instance_arn, original_permission_set.arn),
-    )
-
-    attach_customer_managed_policy_references_to_permission_set(
-        c=sso_admin_client,
-        sso_instance_arn=sso_instance_arn,
-        permission_set_arn=new_ps.arn,
-        customer_managed_policy_references=get_customer_managed_policy_references_in_permission_set(
-            sso_admin_client, sso_instance_arn, original_permission_set.arn
-        ),
-    )
-
-    permissions_boundary = get_permissions_boundary_for_permission_set(sso_admin_client, sso_instance_arn, original_permission_set.arn)
-    if permissions_boundary is not None:
-        sso_admin_client.put_permissions_boundary_to_permission_set(
-            InstanceArn=sso_instance_arn,
-            PermissionSetArn=new_ps.arn,
-            PermissionsBoundary=permissions_boundary,
-        )
-
-    inline_policy: str | None = None
-    r = sso_admin_client.get_inline_policy_for_permission_set(
-        InstanceArn=sso_instance_arn,
-        PermissionSetArn=original_permission_set.arn,
-    )
-    inline_policy = r["InlinePolicy"]
-
-    if inline_policy is not None and len(inline_policy) > 1:  # valid min length: 1
-        sso_admin_client.put_inline_policy_to_permission_set(
-            InstanceArn=sso_instance_arn,
-            PermissionSetArn=new_ps.arn,
-            InlinePolicy=inline_policy,
-        )
-    logger.info("New permission set created", extra={"arn": new_ps.arn})
-    return new_ps
-
-
-def delete_temporary_permission_set(
-    sso_client: SSOAdminClient,
-    permission_set_arn: str,
-    sso_instance_arn: str,
-) -> None:
-    existing_tags = sso_client.list_tags_for_resource(InstanceArn=sso_instance_arn, ResourceArn=permission_set_arn)["Tags"]
-
-    for tag in existing_tags:
-        if tag["Key"] == "ManagedBy" and tag["Value"] == "SSO_Elevator":
-            sso_client.delete_permission_set(
-                InstanceArn=sso_instance_arn,
-                PermissionSetArn=permission_set_arn,
-            )
