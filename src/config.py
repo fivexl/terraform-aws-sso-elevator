@@ -56,7 +56,6 @@ class Config(BaseSettings):
 
     max_permissions_duration_time: int
 
-    max_number_of_symbols_in_permission_set_name: int = 26
 
     good_result_emoji: str = ":large_green_circle:"
     waiting_result_emoji: str = ":large_yellow_circle:"
