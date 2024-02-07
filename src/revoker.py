@@ -117,12 +117,6 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
         account_assignment.permission_set_arn,
     )
 
-    sso.delete_temporary_permission_set(
-        sso_client=sso_client,
-        permission_set_arn=account_assignment.permission_set_arn,
-        sso_instance_arn=account_assignment.instance_arn,
-    )
-
     s3.log_operation(
         s3.AuditEntry(
             role_name=permission_set.name,
@@ -193,12 +187,6 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
         sso_client,
         sso_instance_arn=user_account_assignment.instance_arn,
         permission_set_arn=user_account_assignment.permission_set_arn,
-    )
-
-    sso.delete_temporary_permission_set(
-        sso_client=sso_client,
-        permission_set_arn=user_account_assignment.permission_set_arn,
-        sso_instance_arn=user_account_assignment.instance_arn,
     )
 
     s3.log_operation(
