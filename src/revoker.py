@@ -340,19 +340,25 @@ def handle_discard_buttons_event(
     for block in message["blocks"]:
         if slack_helpers.get_block_id(block) == "buttons":
             blocks = slack_helpers.remove_blocks(message["blocks"], block_ids=["buttons"])
+            text = f"Request expired after {cfg.request_expiration_hours} hour(s)."
             blocks.append(
                 slack_helpers.SectionBlock(
                     block_id="footer",
                     text=slack_helpers.MarkdownTextObject(
-                        text=f"Request expired after {cfg.request_expiration_hours} hour(s).",
+                        text=text,
                     ),
                 )
             )
+            blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+            blocks=blocks,
+            color_coding_emoji=cfg.discarded_result_emoji,
+            )
+
             slack_client.chat_update(
                 channel=event.channel_id,
                 ts=message["ts"],
                 blocks=blocks,
-                text="Request expired",
+                text=text,
             )
             logger.info("Buttons were removed", extra={"event": event})
             return

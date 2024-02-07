@@ -58,6 +58,11 @@ class Config(BaseSettings):
 
     max_number_of_symbols_in_permission_set_name: int = 26
 
+    good_result_emoji: str = ":large_green_circle:"
+    waiting_result_emoji: str = ":large_yellow_circle:"
+    bad_result_emoji: str = ":red_circle:"
+    discarded_result_emoji: str = ":white_circle:"
+
     class Config:
         frozen = True
 

@@ -23,7 +23,6 @@ from slack_sdk.models.blocks import (
     StaticSelectElement,
 )
 from slack_sdk.models.views import View
-from slack_sdk.web.slack_response import SlackResponse
 
 import config
 import entities
@@ -231,11 +230,12 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
     account: entities.aws.Account,
     role_name: str,
     reason: str,
+    color_coding_emoji: str,
     permission_duration: timedelta,
     show_buttons: bool = True,
 ) -> list[Block]:
     blocks: list[Block] = [
-        SectionBlock(block_id="header", text=MarkdownTextObject(text="AWS account access request.")),
+        HeaderSectionBlock.new(color_coding_emoji),
         SectionBlock(
             block_id="content",
             fields=[
@@ -268,6 +268,23 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
             )
         )
     return blocks
+
+
+class HeaderSectionBlock:
+    block_id = "header"
+
+    @classmethod
+    def new(cls, color_coding_emoji: str) -> SectionBlock:
+        return SectionBlock(
+            block_id=cls.block_id, text=MarkdownTextObject(text=f"{color_coding_emoji} | AWS account access request | {color_coding_emoji}")
+        )
+
+    @staticmethod
+    def set_color_coding(blocks: list[dict], color_coding_emoji: str) -> list[dict]:
+        blocks = remove_blocks(blocks, block_ids=[HeaderSectionBlock.block_id])
+        b = HeaderSectionBlock.new(color_coding_emoji)
+        blocks.insert(0, b.to_dict())
+        return blocks
 
 
 def button_click_info_block(action: entities.ApproverAction, approver_slack_id: str) -> SectionBlock:
@@ -352,15 +369,14 @@ def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
         raise e
 
 
-def remove_buttons(payload: ButtonClickedPayload, client: WebClient, approver: entities.slack.User) -> SlackResponse:
-    blocks = remove_blocks(payload.message["blocks"], block_ids=["buttons"])
-    blocks.append(button_click_info_block(payload.action, approver.id))
-    return client.chat_update(
-        channel=payload.channel_id,
-        ts=payload.thread_ts,
-        blocks=blocks,
-        text="Buttons were removed.",
-    )
+def remove_buttons_from_message_blocks(
+    slack_message_blocks: list[Block],
+    action: entities.ApproverAction,
+    approver: entities.slack.User,
+) -> list[Block]:
+    blocks = remove_blocks(slack_message_blocks, block_ids=["buttons"])
+    blocks.append(button_click_info_block(action, approver.id))
+    return blocks
 
 
 def create_slack_mention_by_principal_id(

@@ -122,11 +122,26 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
 
     if payload.action == entities.ApproverAction.Discard:
-        slack_helpers.remove_buttons(payload, client, approver)
+        blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+            blocks=payload.message["blocks"],
+            color_coding_emoji=cfg.bad_result_emoji,
+        )
+
+        blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
+        blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
+
+        text = f"Request was discarded by<@{approver.id}> "
+        client.chat_update(
+            channel=payload.channel_id,
+            ts=payload.thread_ts,
+            blocks=blocks,
+            text=text,
+        )
+
         cache_for_dublicate_requests.clear()
         return client.chat_postMessage(
             channel=payload.channel_id,
-            text=f"Request was discarded by<@{approver.id}> ",
+            text=text,
             thread_ts=payload.thread_ts,
         )
 
@@ -147,7 +162,21 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             text=f"<@{approver.id}> you can not approve this request",
             thread_ts=payload.thread_ts,
         )
-    slack_helpers.remove_buttons(payload, client, approver)
+
+    text = f"Permissions granted to <@{requester.id}> by <@{approver.id}>."
+    blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+        blocks=payload.message["blocks"],
+        color_coding_emoji=cfg.good_result_emoji,
+    )
+
+    blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
+    blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
+    client.chat_update(
+        channel=payload.channel_id,
+        ts=payload.thread_ts,
+        blocks=blocks,
+        text=text,
+    )
 
     access_control.execute_decision(
         decision=decision,
@@ -161,7 +190,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     cache_for_dublicate_requests.clear()
     return client.chat_postMessage(
         channel=payload.channel_id,
-        text=f"Permissions granted to <@{requester.id}> by <@{approver.id}>.",
+        text=text,
         thread_ts=payload.thread_ts,
     )
 
@@ -211,6 +240,7 @@ def handle_request_for_access_submittion(
             reason=request.reason,
             permission_duration=request.permission_duration,
             show_buttons=show_buttons,
+            color_coding_emoji=cfg.waiting_result_emoji,
         ),
         channel=cfg.slack_channel_id,
         text=f"Request for access to {account.name} account from {requester.real_name}",
@@ -236,18 +266,34 @@ def handle_request_for_access_submittion(
     match decision.reason:
         case access_control.DecisionReason.ApprovalNotRequired:
             text = "Approval for this Permission Set & Account is not required. Request will be approved automatically."
+            color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.SelfApproval:
             text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
+            color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.RequiresApproval:
             approvers = [slack_helpers.get_user_by_email(client, email) for email in decision.approvers]
             mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
             text = f"{mention_approvers} there is a request waiting for the approval."
+            color_coding_emoji = cfg.waiting_result_emoji
         case access_control.DecisionReason.NoApprovers:
             text = "Nobody can approve this request."
+            color_coding_emoji = cfg.bad_result_emoji
         case access_control.DecisionReason.NoStatements:
             text = "There are no statements for this Permission Set & Account."
+            color_coding_emoji = cfg.bad_result_emoji
 
     client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
+
+    blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+        blocks=slack_response["message"]["blocks"],
+        color_coding_emoji=color_coding_emoji,
+    )
+    client.chat_update(
+        channel=cfg.slack_channel_id,
+        ts=slack_response["ts"],
+        blocks=blocks,
+        text=text,
+    )
 
     access_control.execute_decision(
         decision=decision,
