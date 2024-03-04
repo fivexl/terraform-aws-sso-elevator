@@ -34,7 +34,6 @@ jobs:
       - name: CodeGuru Reviewer
         uses: aws-actions/codeguru-reviewer@v1.1
         with:
-          build_path: target # build artifact(s) directory
           s3_bucket: codeguru-reviewer-mambo-jumbo
        
       # Step 3: Upload results into GitHub
