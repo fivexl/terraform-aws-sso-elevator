@@ -26,7 +26,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: eu-central-1 
-          role-to-assume: arn:aws:iam::058264276798:role/github-ci-review
+          role-to-assume: ${{ secrets.DEVELOPMENT_ACCOUNT_ROLE_ARN }}
           role-duration-seconds: 3600
           role-session-name: ${{ github.event.repository.name }}
       
