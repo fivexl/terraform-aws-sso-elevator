@@ -50,4 +50,5 @@ def log_operation(audit_entry: AuditEntry) -> type_defs.PutObjectOutputTypeDef:
         Key=f"{bucket_prefix}/{now.strftime('%Y/%m/%d')}/{uuid.uuid4()}.json",
         Body=json_data,
         ContentType="application/json",
+        ServerSideEncryption="AES256",
     )
