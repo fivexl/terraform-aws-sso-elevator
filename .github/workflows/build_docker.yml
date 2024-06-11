@@ -1,9 +1,12 @@
 name: Build and Push Docker Images
 
 on:
-    release:
-      types: [published]
-
+    push:
+      tags: [ v* ]
+      branches: [ main ]
+    pull_request:
+      branches: [ main ]
+  
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -28,7 +31,8 @@ jobs:
           context: .
           file: src/docker/Dockerfile.revoker
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/revoker:${{ github.ref_name }}
+        #   tags: ghcr.io/${{ github.repository_owner }}/revoker:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository_owner }}/revoker:${{ github.sha }}
 
       - name: Build and push requester image
         uses: docker/build-push-action@v5
@@ -36,4 +40,5 @@ jobs:
           context: .
           file: src/docker/Dockerfile.requester
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/requester:${{ github.ref_name }}
+        #   tags: ghcr.io/${{ github.repository_owner }}/requester:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository_owner }}/requester:${{ github.sha }}
