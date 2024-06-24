@@ -35,7 +35,7 @@ jobs:
           context: .
           file: src/docker/Dockerfile.revoker
           push: true
-          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:latest
+          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:revoker-latest
       
       - name: Build and push requester image
         uses: docker/build-push-action@v5
@@ -43,4 +43,4 @@ jobs:
           context: .
           file: src/docker/Dockerfile.requester
           push: true
-          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:latest
+          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:requester-latest
