@@ -1,8 +1,10 @@
 name: CodeGuru Review
 
+# on:
+#   push:
+#     branches: [ "*" ]
 on:
-  push:
-    branches: [ "*" ]
+  workflow_dispatch:
 
 permissions:
   contents: read
