@@ -1,5 +1,0 @@
-FROM public.ecr.aws/lambda/python:3.10
-
-COPY src/ /var/task/
-
-RUN pip install -r /var/task/deploy_requirements.txt -t /var/task/
