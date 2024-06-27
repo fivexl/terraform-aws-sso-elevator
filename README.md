@@ -316,7 +316,7 @@ settings:
 9. Copy `Signing Secret` # for `slack_signing_secret` module input
 10. Copy `Bot User OAuth Token` # for `slack_bot_token` module input
 
-# Terraform docs
+# Terraform docs 
 
 <!-- BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK -->
 ## Requirements
