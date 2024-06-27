@@ -40,6 +40,7 @@ jobs:
           file: src/docker/Dockerfile.requester
           push: true
           tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:requester-${{ env.GITHUB_SHA }}
+          labels: test2
 
       - name: Build and push image
         uses: docker/build-push-action@v5
@@ -48,4 +49,5 @@ jobs:
           file: src/docker/Dockerfile.revoker
           push: true
           tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:revoker-${{ env.GITHUB_SHA }}
+          labels: test
       
