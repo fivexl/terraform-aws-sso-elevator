@@ -37,6 +37,15 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: src/docker/Dockerfile
+          file: src/docker/Dockerfile.requester
           push: true
-          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:${{ env.GITHUB_SHA }}
+          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:requester-${{ env.GITHUB_SHA }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: src/docker/Dockerfile.revoker
+          push: true
+          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator-ecr:revoker-${{ env.GITHUB_SHA }}
+      
