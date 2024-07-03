@@ -4,18 +4,23 @@ module "access_requester_slack_handler" {
 
   function_name = var.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"
-  handler       = "main.lambda_handler"
-  publish       = true
-  timeout       = 30
 
-  depends_on = [null_resource.python_version_check]
+  publish = true
+  timeout = 30
 
-  build_in_docker = var.build_in_docker
-  runtime         = "python${local.python_version}"
-  docker_image    = "lambda/python:${local.python_version}"
-  docker_file     = "${path.module}/src/docker/Dockerfile"
-  hash_extra      = var.requester_lambda_name
-  source_path = [
+  # Pull image from ecr
+  package_type   = var.use_pre_created_image ? "Image" : "Zip"
+  create_package = var.use_pre_created_image ? false : true
+  image_uri      = var.use_pre_created_image ? "${var.ecr_owner_account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/aws-sso-elevator-ecr:requester-7b34f2e86ed8c7fb37036162b0cb0f03072e51e9" : null
+
+  # Build zip from source code using Docker
+  hash_extra      = var.use_pre_created_image ? "" : var.requester_lambda_name
+  handler         = var.use_pre_created_image ? "" : "main.lambda_handler"
+  runtime         = var.use_pre_created_image ? "" : "python${local.python_version}"
+  build_in_docker = var.use_pre_created_image ? false : true
+  docker_image    = var.use_pre_created_image ? null : "lambda/python:${local.python_version}"
+  docker_file     = var.use_pre_created_image ? null : "${path.module}/src/docker/Dockerfile"
+  source_path = var.use_pre_created_image ? [] : [
     {
       path             = "${path.module}/src/"
       pip_requirements = "${path.module}/src/deploy_requirements.txt"
@@ -30,6 +35,10 @@ module "access_requester_slack_handler" {
         "!.pytest_cache/.*",
       ]
     }
+  ]
+
+  layers = var.use_pre_created_image ? [] : [
+    module.sso_elevator_dependencies[0].lambda_layer_arn,
   ]
 
   environment_variables = {
@@ -75,10 +84,6 @@ module "access_requester_slack_handler" {
   maximum_retry_attempts = 0
 
   cloudwatch_logs_retention_in_days = 365
-
-  layers = [
-    module.sso_elevator_dependencies.lambda_layer_arn,
-  ]
 
   tags = var.tags
 }
