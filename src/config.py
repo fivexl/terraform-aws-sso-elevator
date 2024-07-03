@@ -56,7 +56,6 @@ class Config(BaseSettings):
 
     max_permissions_duration_time: int
 
-
     good_result_emoji: str = ":large_green_circle:"
     waiting_result_emoji: str = ":large_yellow_circle:"
     bad_result_emoji: str = ":red_circle:"
