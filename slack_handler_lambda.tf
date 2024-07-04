@@ -65,13 +65,11 @@ module "access_requester_slack_handler" {
     MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
   }
 
-  create_lambda_function_url = true
-
-  cors = {
-    allow_credentials = true
-    allow_origins     = ["https://slack.com"]
-    allow_methods     = ["POST"]
-    max_age           = 86400
+  allowed_triggers = {
+    AllowExecutionFromAPIGateway = {
+      service    = "apigateway"
+      source_arn = "${module.http_api.api_execution_arn}/*/*${local.api_resource_path}"
+    }
   }
 
   attach_policy_json = true
@@ -183,4 +181,28 @@ data "aws_iam_policy_document" "slack_handler" {
   }
 }
 
+module "http_api" {
+  source        = "terraform-aws-modules/apigateway-v2/aws"
+  version       = "5.0.0"
+  name          = "access-requester-API"
+  description   = "API Gateway for SSO Elevator's access-requester Lambda, to communicate with Slack"
+  protocol_type = "HTTP"
 
+  cors_configuration = {
+    allow_credentials = true
+    allow_origins     = ["https://slack.com"]
+    allow_methods     = ["POST"]
+    max_age           = 86400
+  }
+
+  routes = {
+    "POST ${local.api_resource_path}" : {
+      integration = {
+        uri  = module.access_requester_slack_handler.lambda_function_arn
+        type = "AWS_PROXY"
+      }
+    }
+  }
+  stage_name         = local.api_stage_name
+  create_domain_name = false
+}
