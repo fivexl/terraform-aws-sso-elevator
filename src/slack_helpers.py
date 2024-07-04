@@ -393,7 +393,8 @@ def create_slack_mention_by_principal_id(
         try:
             slack_user = get_user_by_email(slack_client, email)
             user_name = slack_user.real_name
-        except Exception:
+        except Exception as e:
+            logger.info(f"Failed to get slack user by email {email}. {e}")
             continue
 
     return f"{user_name}" if user_name is not None else aws_user_emails[0]
