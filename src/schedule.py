@@ -31,6 +31,7 @@ def get_next_cron_run_time(cron_expression: str, base_time: datetime) -> datetim
     logger.debug(f"Next run time: {next_run_time}")
     return next_run_time
 
+
 def check_rule_expression_and_get_next_run(rule: events_type_defs.DescribeRuleResponseTypeDef) -> datetime | str:
     schedule_expression = rule["ScheduleExpression"]
     current_time = datetime.utcnow()
@@ -188,12 +189,13 @@ def schedule_discard_buttons_event(
         ),
     )
 
+
 def schedule_approver_notification_event(
     schedule_client: EventBridgeSchedulerClient,
     message_ts: str,
     channel_id: str,
     time_to_wait: timedelta,
-) ->scheduler_type_defs.CreateScheduleOutputTypeDef | None:
+) -> scheduler_type_defs.CreateScheduleOutputTypeDef | None:
     # If the initial wait time is 0, we don't schedule the event
     if cfg.approver_renotification_initial_wait_time == 0:
         logger.info("Approver renotification is disabled, not scheduling approver notification event")
@@ -225,7 +227,7 @@ def schedule_approver_notification_event(
                     schedule_name=schedule_name,
                     time_stamp=message_ts,
                     channel_id=channel_id,
-                    time_to_wait_in_seconds=time_to_wait.total_seconds()
+                    time_to_wait_in_seconds=time_to_wait.total_seconds(),
                 ).dict()
             ),
         ),
