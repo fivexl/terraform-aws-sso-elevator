@@ -3,8 +3,6 @@ name: CodeGuru Review
 on:
   push:
     branches: [ "*" ]
-on:
-  workflow_dispatch:
 
 permissions:
   contents: read
