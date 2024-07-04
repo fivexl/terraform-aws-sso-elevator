@@ -1,8 +1,8 @@
 name: CodeGuru Review
 
-# on:
-#   push:
-#     branches: [ "*" ]
+on:
+  push:
+    branches: [ "*" ]
 on:
   workflow_dispatch:
 
