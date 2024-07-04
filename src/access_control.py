@@ -69,7 +69,7 @@ def make_decision_on_access_request(  # noqa: PLR0911
         decision_based_on_statements.add(statement)
         potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
 
-    if len(decision_based_on_statements) == 0:  # sourcery skip
+    if not decision_based_on_statements:
         return AccessRequestDecision(
             grant=False,
             reason=DecisionReason.NoStatements,
