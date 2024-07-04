@@ -43,36 +43,23 @@ def make_decision_on_access_request(  # noqa: PLR0911
     account_id: str,
     requester_email: str,
 ) -> AccessRequestDecision:
-    affected_statements = get_affected_statements(
-        statements, account_id, permission_set_name
-    )
+    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
     decision_based_on_statements: set[Statement] = set()
     potential_approvers = set()
 
     explicit_deny_self_approval = any(
-        statement.allow_self_approval is False
-        and requester_email in statement.approvers
-        for statement in affected_statements
+        statement.allow_self_approval is False and requester_email in statement.approvers for statement in affected_statements
     )
-    explicit_deny_approval_not_required = any(
-        statement.approval_is_not_required is False for statement in affected_statements
-    )
+    explicit_deny_approval_not_required = any(statement.approval_is_not_required is False for statement in affected_statements)
 
     for statement in affected_statements:
-        if (
-            statement.approval_is_not_required
-            and not explicit_deny_approval_not_required
-        ):
+        if statement.approval_is_not_required and not explicit_deny_approval_not_required:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset([statement]),
             )
-        if (
-            requester_email in statement.approvers
-            and statement.allow_self_approval
-            and not explicit_deny_self_approval
-        ):
+        if requester_email in statement.approvers and statement.allow_self_approval and not explicit_deny_self_approval:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.SelfApproval,
@@ -80,11 +67,9 @@ def make_decision_on_access_request(  # noqa: PLR0911
             )
 
         decision_based_on_statements.add(statement)
-        potential_approvers.update(
-            approver for approver in statement.approvers if approver != requester_email
-        )
+        potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
 
-    if len(decision_based_on_statements) == 0:  # sourcery skip
+    if not decision_based_on_statements:
         return AccessRequestDecision(
             grant=False,
             reason=DecisionReason.NoStatements,
@@ -127,18 +112,12 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     approver_email: str,
     requester_email: str,
 ) -> ApproveRequestDecision:
-    affected_statements = get_affected_statements(
-        statements, account_id, permission_set_name
-    )
+    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
 
     for statement in affected_statements:
         if approver_email in statement.approvers:
             is_self_approval = approver_email == requester_email
-            if (
-                is_self_approval
-                and statement.allow_self_approval
-                or not is_self_approval
-            ):
+            if is_self_approval and statement.allow_self_approval or not is_self_approval:
                 return ApproveRequestDecision(
                     grant=action == entities.ApproverAction.Approve,
                     permit=True,
@@ -167,12 +146,8 @@ def execute_decision(  # noqa: PLR0913
         return False  # Temporary solution for testing
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    permission_set = sso.get_permission_set_by_name(
-        sso_client, sso_instance.arn, permission_set_name
-    )
-    user_principal_id = sso.get_user_principal_id_by_email(
-        identitystore_client, sso_instance.identity_store_id, requester.email
-    )
+    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
+    user_principal_id = sso.get_user_principal_id_by_email(identitystore_client, sso_instance.identity_store_id, requester.email)
     account_assignment = sso.UserAccountAssignment(
         instance_arn=sso_instance.arn,
         account_id=account_id,
@@ -180,9 +155,7 @@ def execute_decision(  # noqa: PLR0913
         user_principal_id=user_principal_id,
     )
 
-    logger.info(
-        "Creating account assignment", extra={"account_assignment": account_assignment}
-    )
+    logger.info("Creating account assignment", extra={"account_assignment": account_assignment})
 
     account_assignment_status = sso.create_account_assignment_and_wait_for_result(
         sso_client,

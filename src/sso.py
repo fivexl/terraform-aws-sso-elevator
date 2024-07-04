@@ -295,12 +295,14 @@ def list_permission_sets(client: SSOAdminClient, sso_instance_arn: str) -> Gener
     for permission_set_arn in list_permission_sets_arns(client, sso_instance_arn):
         yield describe_permission_set(client, sso_instance_arn, permission_set_arn)
 
+
 def list_users(client: IdentityStoreClient, identity_store_id: str) -> dict:
     paginator = client.get_paginator("list_users")
     r = {"Users": []}
     for page in paginator.paginate(IdentityStoreId=identity_store_id):
         r["Users"].extend(page["Users"])
     return r
+
 
 def get_user_principal_id_by_email(client: IdentityStoreClient, identity_store_id: str, email: str) -> str:
     response = list_users(client, identity_store_id=identity_store_id)
