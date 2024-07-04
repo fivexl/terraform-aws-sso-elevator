@@ -14,6 +14,11 @@ locals {
   s3_bucket_name_for_audit_entry = var.s3_bucket_name_for_audit_entry != "sso-elevator-audit-entry" ? var.s3_bucket_name_for_audit_entry : "sso-elevator-audit-entry-${random_string.random.result}"
   s3_bucket_name                 = var.s3_name_of_the_existing_bucket != "" ? var.s3_name_of_the_existing_bucket : local.s3_bucket_name_for_audit_entry
   s3_bucket_arn                  = "arn:aws:s3:::${local.s3_bucket_name}"
+
+  # HTTP API configuration
+  api_resource_path = "/access-requester"
+  api_stage_name    = "default"
+  full_api_url      = "${module.http_api.stage_invoke_url}${local.api_resource_path}"
 }
 
 resource "random_string" "random" {
