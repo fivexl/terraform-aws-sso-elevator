@@ -20,8 +20,8 @@ def parse_statement(_dict: dict) -> Statement:
             "resource": to_set_if_list_or_str(_dict["Resource"]),
             "approvers": to_set_if_list_or_str(_dict.get("Approvers", set())),
             "resource_type": _dict.get("ResourceType"),
-            "approval_is_not_required": _dict.get("ApprovalIsNotRequired", None),
-            "allow_self_approval": _dict.get("AllowSelfApproval", None),
+            "approval_is_not_required": _dict.get("ApprovalIsNotRequired"),
+            "allow_self_approval": _dict.get("AllowSelfApproval"),
         }
     )
 
