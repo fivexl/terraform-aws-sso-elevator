@@ -38,7 +38,7 @@ For more information on temporary elevated access for AWS and the AWS-provided s
 
 The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a Slack form. We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
 
-AWS announced that [Customers of AWS IAM Identity Center (successor to AWS Single Sign-On) can use CyberArk Secure Cloud Access, Ermetic, and Okta Access Requests for temporary elevated access](https://aws.amazon.com/about-aws/whats-new/2023/05/aws-partners-temporary-elevated-access-capabilities-iam-identity-center/). So if you are already using one of those vendors we recomend checking their offering first.
+AWS announced that [Customers of AWS IAM Identity Center (successor to AWS Single Sign-On) can use CyberArk Secure Cloud Access, Ermetic, and Okta Access Requests for temporary elevated access](https://aws.amazon.com/about-aws/whats-new/2023/05/aws-partners-temporary-elevated-access-capabilities-iam-identity-center/). So if you are already using one of those vendors we recommend checking their offering first.
 
 Watch demo
 [![Demo](https://img.youtube.com/vi/iR3Rdjd7QMU/maxresdefault.jpg)](https://youtu.be/iR3Rdjd7QMU)
@@ -47,12 +47,12 @@ Watch demo
 
 ```mermaid
 sequenceDiagram
-    Requester->>Slack: submits form in Slack - CMD+K, search access or /access commad
+    Requester->>Slack: submits form in Slack - CMD+K, search access or /access command
     Slack->>AWS Lambda - Access Requester: sends request to access-requester
     AWS Lambda - Access Requester->>Slack: sends a message to Slack channel with approve/deny buttons and tags approvers
     Approver->>Slack: pressed approve button in Slack message
     Slack->>AWS Lambda - Access Requester: Send approved request to access-requester
-    AWS Lambda - Access Requester->>AWS IAM Identity Center(SSO): creates user-level permission set assigment based on approved request
+    AWS Lambda - Access Requester->>AWS IAM Identity Center(SSO): creates user-level permission set assignment based on approved request
     AWS Lambda - Access Requester->>AWS EventBridge: creates revocation schedule
     AWS Lambda - Access Requester->>AWS S3: logs audit record
     AWS EventBridge->>AWS Lambda - Access Revoker: sends revocation event when times come
@@ -344,6 +344,7 @@ settings:
 | <a name="module_access_requester_slack_handler"></a> [access\_requester\_slack\_handler](#module\_access\_requester\_slack\_handler) | terraform-aws-modules/lambda/aws | 4.16.0 |
 | <a name="module_access_revoker"></a> [access\_revoker](#module\_access\_revoker) | terraform-aws-modules/lambda/aws | 4.16.0 |
 | <a name="module_audit_bucket"></a> [audit\_bucket](#module\_audit\_bucket) | fivexl/account-baseline/aws//modules/s3_baseline | 1.3.2 |
+| <a name="module_http_api"></a> [http\_api](#module\_http\_api) | terraform-aws-modules/apigateway-v2/aws | 5.0.0 |
 | <a name="module_sso_elevator_dependencies"></a> [sso\_elevator\_dependencies](#module\_sso\_elevator\_dependencies) | terraform-aws-modules/lambda/aws | 4.16.0 |
 
 ## Resources
@@ -406,7 +407,7 @@ settings:
 
 | Name | Description |
 |------|-------------|
-| <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
+| <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END OF PRE-COMMIT-TERRAFORM DOCS HOOK -->
 
