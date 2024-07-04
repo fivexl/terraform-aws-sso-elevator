@@ -1,5 +1,5 @@
 module "sso_elevator_dependencies" {
-  depends_on      = [null_resource.python_version_check]
+  count           = var.use_pre_created_image ? 0 : 1
   source          = "terraform-aws-modules/lambda/aws"
   version         = "4.16.0"
   create_layer    = true
@@ -8,7 +8,7 @@ module "sso_elevator_dependencies" {
   description     = "powertools-pydantic/boto3/slack_bolt"
 
   compatible_runtimes = ["python3.10"]
-  build_in_docker     = var.build_in_docker
+  build_in_docker     = true
   runtime             = "python${local.python_version}"
   docker_image        = "lambda/python:${local.python_version}"
   docker_file         = "${path.module}/src/docker/Dockerfile"

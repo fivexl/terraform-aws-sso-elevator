@@ -51,11 +51,5 @@ class ApproverNotificationEvent(BaseModel):
 
 class Event(BaseModel):
     __root__: (
-        ScheduledRevokeEvent |
-        DiscardButtonsEvent |
-        CheckOnInconsistency |
-        SSOElevatorScheduledRevocation |
-        ApproverNotificationEvent
-    ) = Field(
-        ..., discriminator="action"
-    )
+        ScheduledRevokeEvent | DiscardButtonsEvent | CheckOnInconsistency | SSOElevatorScheduledRevocation | ApproverNotificationEvent
+    ) = Field(..., discriminator="action")

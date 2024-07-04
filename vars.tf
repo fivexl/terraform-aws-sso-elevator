@@ -1,3 +1,15 @@
+variable "use_pre_created_image" {
+  description = "If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code."
+  type        = bool
+  default     = true
+}
+
+variable "ecr_owner_account_id" {
+  description = "In what account is the ECR repository located."
+  type        = string
+  default     = "754426185857"
+}
+
 variable "tags" {
   description = "A map of tags to assign to resources."
   type        = map(string)
@@ -92,12 +104,6 @@ variable "schedule_role_name" {
 
 variable "revoker_post_update_to_slack" {
   description = "Should revoker send a confirmation of the revocation to Slack?"
-  type        = bool
-  default     = true
-}
-
-variable "build_in_docker" {
-  description = "Whether to build the lambda in a docker container or using local python (poetry)"
   type        = bool
   default     = true
 }
