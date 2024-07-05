@@ -1,12 +1,9 @@
 name: Build and Push Docker Images
 
 on:
-    push:
-      tags: [ v* ]
-      branches: [ main ]
-    pull_request:
-      branches: [ main ]
-  
+  release:
+    types: [published]
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -29,24 +26,24 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Get commit SHA
-        id: get_sha
-        run: echo "GITHUB_SHA=${GITHUB_SHA}" >> $GITHUB_ENV
+      - name: Get tag name
+        id: get_tag
+        run: echo "GIT_TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
     
-      - name: Build and push image
+      - name: Build and push requester image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: src/docker/Dockerfile.requester
           push: true
-          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator:requester-${{ env.GITHUB_SHA }}
+          tags: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator:requester-${{ env.GIT_TAG }}
           provenance: false
 
-      - name: Build and push image
+      - name: Build and push revoker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: src/docker/Dockerfile.revoker
           push: true
-          tags: ${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator:revoker-${{ env.GITHUB_SHA }}
+          tags: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator:revoker-${{ env.GIT_TAG }}
           provenance: false
