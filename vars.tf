@@ -7,7 +7,10 @@ variable "use_deprecated_lambda_url" {
   In future versions, this variable will default to false, and the ability to use the Lambda URL will eventually be removed.
   EOT
   type        = bool
-  default     = true
+variable "ecr_repo_name" {
+  description = "The name of the ECR repository."
+  type        = string
+  default     = "aws-sso-elevator"
 }
 
 variable "use_pre_created_image" {
