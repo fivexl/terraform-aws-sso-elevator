@@ -184,7 +184,7 @@ data "aws_iam_policy_document" "slack_handler" {
 module "http_api" {
   source        = "terraform-aws-modules/apigateway-v2/aws"
   version       = "5.0.0"
-  name          = "access-requester-API"
+  name          = "sso-elevator-access-requster"
   description   = "API Gateway for SSO Elevator's access-requester Lambda, to communicate with Slack"
   protocol_type = "HTTP"
 
