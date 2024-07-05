@@ -11,7 +11,7 @@ module "access_revoker" {
   # Pull image from ecr
   package_type   = var.use_pre_created_image ? "Image" : "Zip"
   create_package = var.use_pre_created_image ? false : true
-  image_uri      = var.use_pre_created_image ? "${var.ecr_owner_account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/aws-sso-elevator-ecr:revoker-7b34f2e86ed8c7fb37036162b0cb0f03072e51e9" : null
+  image_uri      = var.use_pre_created_image ? "${var.ecr_owner_account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/aws-sso-elevator:revoker-aa4c9c4edbd942c328e6d91f9611dd51d4122407" : null
 
   # Build zip from source code using Docker
   hash_extra      = var.use_pre_created_image ? "" : var.revoker_lambda_name
