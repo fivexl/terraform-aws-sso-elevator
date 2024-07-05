@@ -81,25 +81,25 @@ variable "requester_lambda_name" {
 variable "event_brige_check_on_inconsistency_rule_name" {
   description = "value for the event bridge check on inconsistency rule name"
   type        = string
-  default     = "sso_elevator_check_on_inconsistency"
+  default     = "sso-elevator-check_on-inconsistency"
 }
 
 variable "event_brige_scheduled_revocation_rule_name" {
   description = "value for the event bridge scheduled revocation rule name"
   type        = string
-  default     = "sso_elevator_scheduled_revocation"
+  default     = "sso-elevator-scheduled-revocation"
 }
 
 variable "schedule_group_name" {
   description = "value for the schedule group name"
   type        = string
-  default     = "sso-elevator-scheduled-revocation" # TODO fix format to snake case
+  default     = "sso-elevator-scheduled-revocation"
 }
 
 variable "schedule_role_name" {
   description = "value for the schedule role name"
   type        = string
-  default     = "event-bridge-role-for-sso-elevator" # TODO fix format to snake case
+  default     = "sso-elevator-event-bridge-role"
 }
 
 variable "revoker_post_update_to_slack" {
