@@ -5,5 +5,10 @@ output "sso_elevator_bucket_id" {
 
 output "requester_api_endpoint_url" {
   description = "The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL."
-  value       = local.full_api_url
+  value       = try(local.full_api_url, "")
+}
+
+output "lambda_function_url" {
+  description = "value for the access_requester lambda function URL"
+  value       = try(module.access_requester_slack_handler.lambda_function_url, "")
 }

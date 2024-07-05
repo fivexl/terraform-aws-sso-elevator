@@ -1,3 +1,15 @@
+variable "use_deprecated_lambda_url" {
+  description = <<-EOT
+  If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future.
+  If false, the Lambda function will switch to using API Gateway for triggering.
+
+  Although the Lambda URL will remain as the default for backward compatibility, it is recommended to switch to using API Gateway.
+  In future versions, this variable will default to false, and the ability to use the Lambda URL will eventually be removed.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "use_pre_created_image" {
   description = "If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code."
   type        = bool

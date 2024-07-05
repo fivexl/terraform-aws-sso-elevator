@@ -18,7 +18,7 @@ locals {
   # HTTP API configuration
   api_resource_path = "/access-requester"
   api_stage_name    = "default"
-  full_api_url      = "${module.http_api.stage_invoke_url}${local.api_resource_path}"
+  full_api_url      = var.use_deprecated_lambda_url ? "" : "${module.http_api.stage_invoke_url}${local.api_resource_path}"
 }
 
 resource "random_string" "random" {
