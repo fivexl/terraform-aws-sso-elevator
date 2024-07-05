@@ -7,7 +7,7 @@ variable "use_pre_created_image" {
 variable "ecr_owner_account_id" {
   description = "In what account is the ECR repository located."
   type        = string
-  default     = "754426185857"
+  default     = "222341826240"
 }
 
 variable "tags" {
