@@ -8,6 +8,8 @@
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
 - [Deployment and Usage](#deployment-and-usage)
   - [Note on dependencies](#note-on-dependencies)
+  - [Updated Build Process](#updated-build-process)
+  - [API](#api)
   - [Module configuration options and automatic approval](#module-configuration-options-and-automatic-approval)
     - [Configuration structure](#configuration-structure)
     - [Explicit Deny](#explicit-deny)
@@ -80,6 +82,37 @@ When onboarding your organization, be aware that the access-revoker will revoke 
 Lambdas are built using Python 3.10 and rely on Poetry for package management and dependency resolution. To run Terraform, both Python 3.10 and Poetry need to be installed on your system. If these tools are not available, you can opt to package the Lambdas using Docker by providing the appropriate flag to the module. We do recommend using Docker build where possible to avoid misconfigurations or missing packages.
 
 The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
+
+## Updated Build Process
+In 1.4.0 release, the ability to build zip files locally without Docker has been removed due to issues with Python environments and version mismatches. Now, GitHub CI will pre-build the requester and revoker lambda Docker images and push them to FivexL's private ECR. Users can use these pre-built Docker images to build lambdas. 
+
+ECR is private for the following reasons:
+
+- AWS Lambda can't use any other source of images except ECR.
+- AWS Lambda can't use public ECR.
+- AWS Lambda doesn't support pulling container images from Amazon ECR using a pull-through cache rule (so we can't create a private repo from the user's side to pull images from the GHCR, for example).
+
+Images and repositories are replicated in every region that AWS SSO supports.
+
+**Conclusion**:
+Now there are only two ways to build an SSO elevator:
+
+Using pre-created images pulled from ECR (Default)
+Using Docker build to build images locally (provide the variable use_pre_created_image = false)
+There is also an option to host ECR yourself by providing the following variables:
+```hcl
+ecr_repo_name = "example_repo_name"
+ecr_owner_account_id = "<example_account_id>"
+```
+
+## API
+To address the [lambda-1](https://docs.aws.amazon.com/securityhub/latest/userguide/lambda-controls.html#lambda-1) SecurityHub control alert triggered by the default creation of a FunctionURLAllowPublicAccess resource-based policy for lambda, in 1.4.0 release module has migrated to using API Gateway by default. The lambda URL is deprecated and will be removed in future releases. If you need to continue using lambda URL, provide the variable:
+
+```hcl
+use_deprecated_lambda_url = true
+```
+
+To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.
 
 ## Module configuration options and automatic approval
 
