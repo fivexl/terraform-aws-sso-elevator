@@ -68,7 +68,7 @@ module "access_requester_slack_handler" {
   allowed_triggers = var.use_deprecated_lambda_url ? {} : {
     AllowExecutionFromAPIGateway = {
       service    = "apigateway"
-      source_arn = "${module.http_api.api_execution_arn}/*/*${local.api_resource_path}"
+      source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path}"
     }
   }
 
