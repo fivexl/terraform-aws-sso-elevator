@@ -92,7 +92,24 @@ ECR is private for the following reasons:
 - AWS Lambda can't use public ECR.
 - AWS Lambda doesn't support pulling container images from Amazon ECR using a pull-through cache rule (so we can't create a private repo from the user's side to pull images from the GHCR, for example).
 
-Images and repositories are replicated in every region that AWS SSO supports.
+Images and repositories are replicated in every region that AWS SSO supports exept these:
+```
+# ap_east_1
+# eu_south_1
+# ap_southeast_3
+# af_south_1
+# me_south_1
+# il_central_1
+# me_central_1
+# eu_south_2
+# ap_south_2
+# eu_central_2
+# ap_southeast_4
+# ca_west_1
+# us_gov_east_1
+# us_gov_west_1
+```
+Those regions are not enabled by deafult. If you need to use a region that is not supported by the module, please let us know by creating an issue, and we will add support for it. 
 
 **Conclusion**:
 Now there are only two ways to build an SSO elevator:
