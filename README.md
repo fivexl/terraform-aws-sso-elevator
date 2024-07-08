@@ -130,6 +130,7 @@ use_deprecated_lambda_url = true
 ```
 
 To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.
+**After updating the module, you can find the API URL in the output of the module. Please don't forget to update the Slack App manifest with the new URL.**
 
 ## Module configuration options and automatic approval
 
