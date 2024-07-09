@@ -208,7 +208,7 @@ module "http_api" {
   routes = {
     "POST ${local.api_resource_path}" : {
       integration = {
-        uri = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+        uri  = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
         type = "AWS_PROXY"
       }
     }
