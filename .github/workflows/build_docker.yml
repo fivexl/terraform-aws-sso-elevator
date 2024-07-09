@@ -29,9 +29,18 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Get tag name
+      - name: Get short SHA
+        id: get_sha
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Get tag name or SHA
         id: get_tag
-        run: echo "GIT_TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "GIT_TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+          else
+            echo "GIT_TAG=${{ env.SHORT_SHA }}" >> $GITHUB_ENV
+          fi
     
       - name: Build and push requester image
         uses: docker/build-push-action@v5
