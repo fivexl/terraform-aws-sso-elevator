@@ -95,6 +95,24 @@ module "access_requester_slack_handler" {
   tags = var.tags
 }
 
+# By default, the same policy is created by the "aws_lambda_function_url" resource
+# But for reason i was not able to find out, in some cases of creation with the "API Gateway" resource, the policy is not created
+# So we are creating the same policy but using the "aws_lambda_permission" resource.
+resource "aws_lambda_permission" "url" {
+  count                  = var.create_lambda_url ? 1 : 0
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = module.access_requester_slack_handler.lambda_function_name
+  principal              = "*"
+  statement_id           = "AllowExecutionFromLambdaURL"
+  function_url_auth_type = "NONE"
+  # Adds the following condition keys, which are required for the function to be invoked from a URL:
+  # "Condition": {
+  #      "StringEquals": {
+  #        "lambda:FunctionUrlAuthType": "None"
+  #      }
+  #    }
+}
+
 data "aws_iam_policy_document" "slack_handler" {
   statement {
     sid    = "GetSAMLProvider"
