@@ -123,10 +123,11 @@ ecr_owner_account_id = "<example_account_id>"
 ```
 
 ## API
-To address the [lambda-1](https://docs.aws.amazon.com/securityhub/latest/userguide/lambda-controls.html#lambda-1) SecurityHub control alert triggered by the default creation of a FunctionURLAllowPublicAccess resource-based policy for lambda, in 1.4.0 release module has migrated to using API Gateway by default. The lambda URL is deprecated and will be removed in future releases. If you need to continue using lambda URL, provide the variable:
+To address the [lambda-1](https://docs.aws.amazon.com/securityhub/latest/userguide/lambda-controls.html#lambda-1) SecurityHub control alert triggered by the default creation of a FunctionURLAllowPublicAccess resource-based policy for lambda, in 1.4.0 release module will eventually migrate to the usage of API Gateway by default. You still can use lambda URL  to seamlessly migrate to the API Gateway url, but it is deprecated and will be removed in future releases. You can use the following variables to control the behavior:
 
 ```hcl
-use_deprecated_lambda_url = true
+create_api_gateway = true # This will create an API Gateway for the requester lambda
+create_lambda_url = false # This will delete lambda url
 ```
 
 To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.

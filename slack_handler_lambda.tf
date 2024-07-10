@@ -65,16 +65,16 @@ module "access_requester_slack_handler" {
     MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
   }
 
-  allowed_triggers = var.use_deprecated_lambda_url ? {} : {
+  allowed_triggers = var.create_api_gateway ? {
     AllowExecutionFromAPIGateway = {
       service    = "apigateway"
       source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path}"
     }
-  }
+  } : {}
 
-  create_lambda_function_url = var.use_deprecated_lambda_url ? true : false
+  create_lambda_function_url = var.create_lambda_url ? true : false
 
-  cors = var.use_deprecated_lambda_url ? {
+  cors = var.create_lambda_url ? {
     allow_credentials = true
     allow_origins     = ["https://slack.com"]
     allow_methods     = ["POST"]
@@ -191,7 +191,7 @@ data "aws_iam_policy_document" "slack_handler" {
 }
 
 module "http_api" {
-  count         = var.use_deprecated_lambda_url ? 0 : 1
+  count         = var.create_api_gateway ? 1 : 0
   source        = "terraform-aws-modules/apigateway-v2/aws"
   version       = "5.0.0"
   name          = "sso-elevator-access-requster"

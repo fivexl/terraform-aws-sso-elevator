@@ -1,13 +1,16 @@
-variable "use_deprecated_lambda_url" {
-  description = <<-EOT
-  If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future.
-  If false, the Lambda function will switch to using API Gateway for triggering.
+variable "create_api_gateway" {
+  description = "If true, module will create & configure API Gateway for the Lambda function"
+  type        = bool
+  default     = true
+}
 
-  Although the Lambda URL will remain as the default for backward compatibility, it is recommended to switch to using API Gateway.
-  In future versions ability to use the Lambda URL will eventually be removed.
+variable "create_lambda_url" {
+  description = <<-EOT
+  If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future
+  If false, Lambda url will be deleted.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "ecr_repo_name" {
