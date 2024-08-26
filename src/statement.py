@@ -52,3 +52,20 @@ def get_affected_statements(statements: FrozenSet[Statement], account_id: str, p
 class OUStatement(BaseStatement):
     resource_type: ResourceType = Field(ResourceType.OU, const=True)
     resource: FrozenSet[Union[AWSOUName, WildCard]]
+
+
+class AWSSSOGroupID(ConstrainedStr):
+    regex = r"^([0-9a-f]{10}-)?[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$"
+
+
+class GroupStatement(BaseModel):
+    resource: FrozenSet[AWSSSOGroupID]
+    allow_self_approval: bool | None = None
+    approval_is_not_required: bool | None = None
+    approvers: FrozenSet[EmailStr] = Field(default_factory=frozenset)
+
+    def affects(self, group_id: str) -> bool:  # noqa: ANN101
+        return (group_id in self.resource)
+
+def get_affected_group_statements(statements: FrozenSet[GroupStatement], group_id: str) -> FrozenSet[GroupStatement]:
+    return frozenset(statement for statement in statements if statement.affects(group_id))

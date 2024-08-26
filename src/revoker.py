@@ -25,7 +25,10 @@ from events import (
     RevokeEvent,
     ScheduledRevokeEvent,
     SSOElevatorScheduledRevocation,
+    ScheduledGroupRevokeEvent,
+    GroupRevokeEvent
 )
+import test
 
 logger = config.get_logger(service="revoker")
 
@@ -55,6 +58,17 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 cfg=cfg,
                 scheduler_client=scheduler_client,
                 org_client=org_client,
+                slack_client=slack_client,
+                identitystore_client=identitystore_client,
+            )
+
+        case ScheduledGroupRevokeEvent():
+            logger.info("Handling GroupRevokeEvent", extra={"event": parsed_event})
+            return handle_scheduled_group_assignment_deletion(
+                group_revoke_event=parsed_event.revoke_event,
+                sso_client=sso_client,
+                cfg=cfg,
+                scheduler_client=scheduler_client,
                 slack_client=slack_client,
                 identitystore_client=identitystore_client,
             )
@@ -155,7 +169,9 @@ def slack_notify_user_on_revoke(  # noqa: PLR0913
     slack_client: slack_sdk.WebClient,
 ) -> SlackResponse:
     mention = slack_helpers.create_slack_mention_by_principal_id(
-        account_assignment=account_assignment,
+        sso_user_id= account_assignment.principal_id if isinstance(
+            account_assignment, sso.AccountAssignment
+            ) else account_assignment.user_principal_id,
         sso_client=sso_client,
         cfg=cfg,
         identitystore_client=identitystore_client,
@@ -164,6 +180,26 @@ def slack_notify_user_on_revoke(  # noqa: PLR0913
     return slack_client.chat_postMessage(
         channel=cfg.slack_channel_id,
         text=f"Revoked role {permission_set.name} for user {mention} in account {account.name}",
+    )
+
+
+def slack_notify_user_on_group_access_revoke(  # noqa: PLR0913
+    cfg: config.Config,
+    group_assignment: sso.GroupAssignment,
+    sso_client: SSOAdminClient,
+    identitystore_client: IdentityStoreClient,
+    slack_client: slack_sdk.WebClient,
+) -> SlackResponse:
+    mention = slack_helpers.create_slack_mention_by_principal_id(
+        sso_user_id=group_assignment.user_principal_id,
+        sso_client=sso_client,
+        cfg=cfg,
+        identitystore_client=identitystore_client,
+        slack_client=slack_client,
+    )
+    return slack_client.chat_postMessage(
+        channel=cfg.slack_channel_id,
+        text=f"User {mention} has been removed from the group {group_assignment.group_name}.",
     )
 
 
@@ -218,6 +254,44 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
         )
 
 
+
+def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
+    group_revoke_event: GroupRevokeEvent,
+    sso_client: SSOAdminClient,
+    cfg: config.Config,
+    scheduler_client: EventBridgeSchedulerClient,
+    slack_client: slack_sdk.WebClient,
+    identitystore_client: IdentityStoreClient,
+) -> SlackResponse | None:
+    logger.info("Handling scheduled account assignment deletion", extra={"revoke_event": GroupRevokeEvent})
+    group_assignment = group_revoke_event.group_assignment
+    test.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
+    # TODO: Add logging
+    s3.log_operation(
+        audit_entry=s3.GroupAccessAuditEntry(
+            group_name = group_assignment.group_name,
+            group_id = group_assignment.group_id,
+            membership_id = group_assignment.membership_id, # type: ignore # noqa: PGH003
+            reason = "scheduled_revocation",
+            requester_slack_id = group_revoke_event.requester.id,
+            requester_email = group_revoke_event.requester.email,
+            approver_slack_id = group_revoke_event.approver.id,
+            approver_email = group_revoke_event.approver.email,
+            operation_type = "revoke",
+            permission_duration = group_revoke_event.permission_duration,
+            ),
+        )
+    schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
+    if cfg.post_update_to_slack:
+        slack_notify_user_on_group_access_revoke(
+            cfg=cfg,
+            group_assignment = group_assignment,
+            sso_client=sso_client,
+            identitystore_client=identitystore_client,
+            slack_client=slack_client,
+        )
+
+
 def handle_check_on_inconsistency(  # noqa: PLR0913
     sso_client: SSOAdminClient,
     cfg: config.Config,
@@ -236,7 +310,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             principal_id=scheduled_event.revoke_event.user_account_assignment.user_principal_id,
             principal_type="USER",
         )
-        for scheduled_event in scheduled_revoke_events
+        for scheduled_event in scheduled_revoke_events if isinstance(scheduled_event, ScheduledRevokeEvent)
     ]
 
     for account_assignment in account_assignments:
@@ -244,7 +318,9 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             account = organizations.describe_account(org_client, account_assignment.account_id)
             logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
             mention = slack_helpers.create_slack_mention_by_principal_id(
-                account_assignment=account_assignment,
+                sso_user_id= account_assignment.principal_id if isinstance(
+                    account_assignment, sso.AccountAssignment
+                    ) else account_assignment.user_principal_id,
                 sso_client=sso_client,
                 cfg=cfg,
                 identitystore_client=identitystore_client,
@@ -287,7 +363,7 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
             principal_id=scheduled_event.revoke_event.user_account_assignment.user_principal_id,
             principal_type="USER",
         )
-        for scheduled_event in scheduled_revoke_events
+        for scheduled_event in scheduled_revoke_events if isinstance(scheduled_event, ScheduledRevokeEvent)
     ]
     for account_assignment in account_assignments:
         if account_assignment in account_assignments_from_events:

@@ -10,7 +10,7 @@ import s3
 import schedule
 import sso
 from entities import BaseModel
-from statement import Statement, get_affected_statements
+from statement import GroupStatement, Statement, get_affected_group_statements, get_affected_statements
 
 logger = config.get_logger("access_control")
 cfg = config.get_config()
@@ -33,18 +33,29 @@ class DecisionReason(Enum):
 class AccessRequestDecision(BaseModel):
     grant: bool
     reason: DecisionReason
-    based_on_statements: FrozenSet[Statement]
+    based_on_statements: FrozenSet[Statement] | FrozenSet[GroupStatement]
     approvers: FrozenSet[str] = frozenset()
 
 
 def make_decision_on_access_request(  # noqa: PLR0911
-    statements: FrozenSet[Statement],
-    permission_set_name: str,
-    account_id: str,
+    statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     requester_email: str,
+    permission_set_name: str | None = None,
+    account_id: str | None = None,
+    group_id: str | None = None,
 ) -> AccessRequestDecision:
-    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
-    decision_based_on_statements: set[Statement] = set()
+    if isinstance(statements, FrozenSet) and all(isinstance(item, Statement) for item in statements):
+        affected_statements = get_affected_statements(statements, account_id, permission_set_name) #type: ignore # noqa: PGH003
+
+    if isinstance(statements, FrozenSet) and all(isinstance(item, GroupStatement) for item in statements):
+        affected_statements = get_affected_group_statements(statements, group_id) #type: ignore # noqa: PGH003
+    # About type ignore:
+    # For some reason, pylance is not able to understand that we already checked the type of the items in the set,
+    # and shows a type error for "statements"
+    else:
+        raise TypeError("Statements contain mixed or unsupported types.")
+
+    decision_based_on_statements: set[Statement] | set[GroupStatement] = set()
     potential_approvers = set()
 
     explicit_deny_self_approval = any(

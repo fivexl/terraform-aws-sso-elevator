@@ -375,7 +375,7 @@ def remove_buttons_from_message_blocks(
 
 
 def create_slack_mention_by_principal_id(
-    account_assignment: sso.AccountAssignment | sso.UserAccountAssignment,
+    sso_user_id: str,
     sso_client: SSOAdminClient,
     cfg: config.Config,
     identitystore_client: IdentityStoreClient,
@@ -385,7 +385,7 @@ def create_slack_mention_by_principal_id(
     aws_user_emails = sso.get_user_emails(
         identitystore_client,
         sso_instance.identity_store_id,
-        account_assignment.principal_id if isinstance(account_assignment, sso.AccountAssignment) else account_assignment.user_principal_id,
+        sso_user_id,
     )
     user_name = None
 

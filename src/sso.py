@@ -80,6 +80,15 @@ class UserAccountAssignment:
         }
 
 
+@dataclass
+class GroupAssignment:
+    group_name: str
+    group_id: str
+    user_principal_id: str
+    membership_id: str
+    identity_store_id: str
+
+
 def create_account_assignment(client: SSOAdminClient, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
     response = client.create_account_assignment(**assignment.as_dict())
     return AccountAssignmentStatus.from_type_def(response["AccountAssignmentCreationStatus"])
@@ -333,10 +342,10 @@ def get_permission_sets_from_config(client: SSOAdminClient, cfg: config.Config) 
 def get_account_assignment_information(
     sso_client: SSOAdminClient, cfg: config.Config, org_client: OrganizationsClient
 ) -> list[AccountAssignment]:
-    describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    describe_sso_instance(sso_client, cfg.sso_instance_arn) # TODO: Remove this line
     accounts = organizations.get_accounts_from_config(org_client, cfg)
     permission_sets = get_permission_sets_from_config(sso_client, cfg)
-    account_assignments = list_user_account_assignments(
+    account_assignments = list_user_account_assignments( # TODO: move to the return block
         sso_client,
         cfg.sso_instance_arn,
         [a.id for a in accounts],

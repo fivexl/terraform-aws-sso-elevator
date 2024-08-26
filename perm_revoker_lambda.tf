@@ -155,6 +155,16 @@ data "aws_iam_policy_document" "revoker" {
     ]
     resources = ["${local.s3_bucket_arn}/${var.s3_bucket_partition_prefix}/*"]
   }
+  statement {
+    effect = "Allow"
+    actions = [
+      "identitystore:ListGroups",
+      "identitystore:DescribeGroup",
+      "identitystore:ListGroupMemberships",
+      "identitystore:DeleteGroupMembership"
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_scheduled_revocation" {

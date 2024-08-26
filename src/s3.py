@@ -7,7 +7,7 @@ from mypy_boto3_s3 import S3Client, type_defs
 import boto3
 
 from config import get_config, get_logger
-
+from typing import Literal
 cfg = get_config()
 logger = get_logger(service="s3")
 s3: S3Client = boto3.client("s3")
@@ -26,8 +26,25 @@ class AuditEntry:
     operation_type: str
     permission_duration: str | timedelta
 
+@dataclass
+class GroupAccessAuditEntry:
+    group_name: str
+    group_id: str
+    membership_id: str | None
+    reason: str
+    requester_slack_id: str
+    requester_email: str
+    approver_slack_id: str
+    approver_email: str
+    operation_type: Literal["grant"] | Literal["revoke"]
+    permission_duration: str | timedelta
+    audit_entry_type: Literal["group"] | Literal["account"]
+    user_principal_id: str
+    version = 1
+# Where we don't have info, we will write "NA" symbols
 
-def log_operation(audit_entry: AuditEntry) -> type_defs.PutObjectOutputTypeDef:
+
+def log_operation(audit_entry: AuditEntry | GroupAccessAuditEntry) -> type_defs.PutObjectOutputTypeDef:
     now = datetime.now()
     logger.debug("Posting audit entry to s3", extra={"audit_entry": audit_entry})
     logger.info("Posting audit entry to s3")

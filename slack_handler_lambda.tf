@@ -206,6 +206,17 @@ data "aws_iam_policy_document" "slack_handler" {
     ]
     resources = ["*"]
   }
+  statement {
+    effect = "Allow"
+    actions = [
+      "identitystore:ListGroups",
+      "identitystore:DescribeGroup",
+      "identitystore:ListGroupMemberships",
+      "identitystore:CreateGroupMembership",
+      "identitystore:DeleteGroupMembership"
+    ]
+    resources = ["*"]
+  }
 }
 
 module "http_api" {

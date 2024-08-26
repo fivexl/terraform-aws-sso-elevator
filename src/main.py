@@ -16,6 +16,7 @@ import organizations
 import schedule
 import slack_helpers
 import sso
+import test
 
 logger = config.get_logger(service="main")
 
@@ -95,6 +96,10 @@ app.shortcut("request_for_access")(
     load_select_options,
 )
 
+app.shortcut("request_for_group_membership")(
+    test.show_initial_form,
+    test.load_select_options,
+)
 
 cache_for_dublicate_requests = {}
 
@@ -102,7 +107,12 @@ cache_for_dublicate_requests = {}
 @handle_errors
 def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # noqa: ARG001
     logger.info("Handling button click")
-    payload = slack_helpers.ButtonClickedPayload.parse_obj(body)
+    try:
+        payload = slack_helpers.ButtonClickedPayload.parse_obj(body)
+    except Exception as e:
+        logger.exception(e)
+        return test.handle_group_button_click(body, client, context)
+
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
@@ -316,6 +326,11 @@ def handle_request_for_access_submittion(
 app.view(slack_helpers.RequestForAccessView.CALLBACK_ID)(
     ack=acknowledge_request,
     lazy=[handle_request_for_access_submittion],
+)
+
+app.view(test.RequestForGroupAccessView.CALLBACK_ID)(
+    ack=acknowledge_request,
+    lazy=[test.handle_request_for_group_access_submittion],
 )
 
 

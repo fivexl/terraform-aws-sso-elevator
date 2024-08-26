@@ -5,7 +5,7 @@ from aws_lambda_powertools import Logger
 from pydantic import BaseSettings, root_validator
 
 import entities
-from statement import Statement
+from statement import Statement, GroupStatement
 
 
 def parse_statement(_dict: dict) -> Statement:
@@ -20,6 +20,21 @@ def parse_statement(_dict: dict) -> Statement:
             "resource": to_set_if_list_or_str(_dict["Resource"]),
             "approvers": to_set_if_list_or_str(_dict.get("Approvers", set())),
             "resource_type": _dict.get("ResourceType"),
+            "approval_is_not_required": _dict.get("ApprovalIsNotRequired"),
+            "allow_self_approval": _dict.get("AllowSelfApproval"),
+        }
+    )
+
+def parse_group_statement(_dict: dict) -> GroupStatement:
+    def to_set_if_list_or_str(v: list | str) -> frozenset[str]:
+        if isinstance(v, list):
+            return frozenset(v)
+        return frozenset([v]) if isinstance(v, str) else v
+
+    return GroupStatement.parse_obj(
+        {
+            "resource": to_set_if_list_or_str(_dict["Resource"]),
+            "approvers": to_set_if_list_or_str(_dict.get("Approvers", set())),
             "approval_is_not_required": _dict.get("ApprovalIsNotRequired"),
             "allow_self_approval": _dict.get("AllowSelfApproval"),
         }
@@ -44,6 +59,7 @@ class Config(BaseSettings):
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"
     statements: frozenset[Statement]
+    group_statements: frozenset[GroupStatement]
 
     accounts: frozenset[str]
     permission_sets: frozenset[str]
@@ -67,6 +83,7 @@ class Config(BaseSettings):
     @root_validator(pre=True)
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
         statements = {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
+        group_statements = {parse_group_statement(st) for st in values.get("group_statements", [])}  # type: ignore # noqa: PGH003
         permission_sets = set()
         accounts = set()
         for statement in statements:
@@ -77,6 +94,7 @@ class Config(BaseSettings):
             "accounts": accounts,
             "permission_sets": permission_sets,
             "statements": frozenset(statements),
+            "group_statements": frozenset(group_statements),
         }
 
 

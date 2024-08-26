@@ -13,7 +13,7 @@ from pydantic import ValidationError
 import config
 import entities
 import sso
-from events import DiscardButtonsEvent, Event, RevokeEvent, ScheduledRevokeEvent, ApproverNotificationEvent
+from events import ApproverNotificationEvent, DiscardButtonsEvent, Event, GroupRevokeEvent, RevokeEvent, ScheduledRevokeEvent
 
 logger = config.get_logger(service="schedule")
 cfg = config.get_config()
@@ -64,9 +64,9 @@ def get_schedules(client: EventBridgeSchedulerClient) -> list[scheduler_type_def
     return scheduled_events
 
 
-def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRevokeEvent]:
+def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRevokeEvent | GroupRevokeEvent]:
     scheduled_events = get_schedules(client)
-    scheduled_revoke_events: list[ScheduledRevokeEvent] = []
+    scheduled_revoke_events: list[ScheduledRevokeEvent | GroupRevokeEvent] = []
     for full_schedule in scheduled_events:
         if full_schedule["Name"].startswith("discard-buttons"):
             continue
@@ -98,12 +98,16 @@ def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str) -> N
 
 def get_and_delete_scheduled_revoke_event_if_already_exist(
     client: EventBridgeSchedulerClient,
-    user_account_assignment: sso.UserAccountAssignment,
+    event: sso.UserAccountAssignment | GroupRevokeEvent,
 ) -> None:
     for scheduled_event in get_scheduled_events(client):
-        if scheduled_event.revoke_event.user_account_assignment == user_account_assignment:
+        if isinstance(scheduled_event, ScheduledRevokeEvent) and scheduled_event.revoke_event.user_account_assignment == event:
             logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
             delete_schedule(client, scheduled_event.revoke_event.schedule_name)
+        if isinstance(scheduled_event, GroupRevokeEvent) and scheduled_event.group_assignment == event:
+            logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.schedule_name})
+            delete_schedule(client, scheduled_event.schedule_name)
+
 
 
 def event_bridge_schedule_after(td: timedelta) -> str:
