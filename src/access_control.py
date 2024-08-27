@@ -37,6 +37,24 @@ class AccessRequestDecision(BaseModel):
     approvers: FrozenSet[str] = frozenset()
 
 
+def determine_affected_statements(
+    statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
+    account_id: str | None = None,
+    permission_set_name: str | None = None,
+    group_id: str | None = None,
+) -> FrozenSet[Statement] | FrozenSet[GroupStatement]:
+    if isinstance(statements, FrozenSet) and all(isinstance(item, Statement) for item in statements):
+        return get_affected_statements(statements, account_id, permission_set_name) #type: ignore # noqa: PGH003
+
+    if isinstance(statements, FrozenSet) and all(isinstance(item, GroupStatement) for item in statements):
+        return get_affected_group_statements(statements, group_id) #type: ignore # noqa: PGH003
+
+    # About type ignore:
+    # For some reason, pylance is not able to understand that we already checked the type of the items in the set,
+    # and shows a type error for "statements"
+    raise TypeError("Statements contain mixed or unsupported types.")
+
+
 def make_decision_on_access_request(  # noqa: PLR0911
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     requester_email: str,
@@ -44,16 +62,7 @@ def make_decision_on_access_request(  # noqa: PLR0911
     account_id: str | None = None,
     group_id: str | None = None,
 ) -> AccessRequestDecision:
-    if isinstance(statements, FrozenSet) and all(isinstance(item, Statement) for item in statements):
-        affected_statements = get_affected_statements(statements, account_id, permission_set_name) #type: ignore # noqa: PGH003
-
-    if isinstance(statements, FrozenSet) and all(isinstance(item, GroupStatement) for item in statements):
-        affected_statements = get_affected_group_statements(statements, group_id) #type: ignore # noqa: PGH003
-    # About type ignore:
-    # For some reason, pylance is not able to understand that we already checked the type of the items in the set,
-    # and shows a type error for "statements"
-    else:
-        raise TypeError("Statements contain mixed or unsupported types.")
+    affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
 
     decision_based_on_statements: set[Statement] | set[GroupStatement] = set()
     potential_approvers = set()
@@ -68,16 +77,16 @@ def make_decision_on_access_request(  # noqa: PLR0911
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.ApprovalNotRequired,
-                based_on_statements=frozenset([statement]),
+                based_on_statements=frozenset([statement]), #type: ignore # noqa: PGH003
             )
         if requester_email in statement.approvers and statement.allow_self_approval and not explicit_deny_self_approval:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.SelfApproval,
-                based_on_statements=frozenset([statement]),
+                based_on_statements=frozenset([statement]), #type: ignore # noqa: PGH003
             )
 
-        decision_based_on_statements.add(statement)
+        decision_based_on_statements.add(statement) #type: ignore # noqa: PGH003
         potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
 
     if not decision_based_on_statements:
@@ -112,18 +121,19 @@ class ApproveRequestDecision(BaseModel):
 
     grant: bool
     permit: bool
-    based_on_statements: FrozenSet[Statement]
+    based_on_statements: FrozenSet[Statement] | FrozenSet[GroupStatement]
 
 
 def make_decision_on_approve_request(  # noqa: PLR0913
     action: entities.ApproverAction,
     statements: frozenset[Statement],
-    permission_set_name: str,
-    account_id: str,
     approver_email: str,
     requester_email: str,
+    permission_set_name: str | None = None,
+    account_id: str | None = None,
+    group_id: str | None = None,
 ) -> ApproveRequestDecision:
-    affected_statements = get_affected_statements(statements, account_id, permission_set_name)
+    affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
 
     for statement in affected_statements:
         if approver_email in statement.approvers:
@@ -132,13 +142,13 @@ def make_decision_on_approve_request(  # noqa: PLR0913
                 return ApproveRequestDecision(
                     grant=action == entities.ApproverAction.Approve,
                     permit=True,
-                    based_on_statements=frozenset([statement]),
+                    based_on_statements=frozenset([statement]), #type: ignore # noqa: PGH003
                 )
 
     return ApproveRequestDecision(
         grant=False,
         permit=False,
-        based_on_statements=affected_statements,
+        based_on_statements=affected_statements, #type: ignore # noqa: PGH003
     )
 
 

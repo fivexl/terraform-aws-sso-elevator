@@ -216,7 +216,7 @@ def handle_request_for_group_access_submittion(
         group_id=request.group_id,
     )
 
-    show_buttons = False # TODO: implement this
+    show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
         blocks=build_approval_request_message_blocks(
             requester_slack_id=request.requester_slack_id,
@@ -308,7 +308,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     payload = ButtonGroupClickedPayload.parse_obj(body)
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
-    slack_helpers.get_user(client, id=payload.request.requester_slack_id)
+    requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
 
     if (
         cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
@@ -347,54 +347,54 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             thread_ts=payload.thread_ts,
         )
 
-    # decision = access_control.make_decision_on_approve_request(
-    #     action=payload.action,
-    #     statements=cfg.statements,
-    #     account_id=payload.request.account_id,
-    #     permission_set_name=payload.request.permission_set_name,
-    #     approver_email=approver.email,
-    #     requester_email=requester.email,
-    # )
-    # logger.info("Decision on request was made", extra={"decision": decision})
+    decision = access_control.make_decision_on_approve_request(
+        action=payload.action,
+        statements=cfg.statements,
+        group_id=payload.request.group_id,
+        approver_email=approver.email,
+        requester_email=requester.email,
+    )
 
-    # if not decision.permit:
-    #     cache_for_dublicate_requests.clear()
-    #     return client.chat_postMessage(
-    #         channel=payload.channel_id,
-    #         text=f"<@{approver.id}> you can not approve this request",
-    #         thread_ts=payload.thread_ts,
-    #     )
+    logger.info("Decision on request was made", extra={"decision": decision})
 
-    # text = f"Permissions granted to <@{requester.id}> by <@{approver.id}>."
-    # blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-    #     blocks=payload.message["blocks"],
-    #     color_coding_emoji=cfg.good_result_emoji,
-    # )
+    if not decision.permit:
+        cache_for_dublicate_requests.clear()
+        return client.chat_postMessage(
+            channel=payload.channel_id,
+            text=f"<@{approver.id}> you can not approve this request",
+            thread_ts=payload.thread_ts,
+        )
 
-    # blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
-    # blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
-    # client.chat_update(
-    #     channel=payload.channel_id,
-    #     ts=payload.thread_ts,
-    #     blocks=blocks,
-    #     text=text,
-    # )
+    text = f"Permissions granted to <@{requester.id}> by <@{approver.id}>."
+    blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+        blocks=payload.message["blocks"],
+        color_coding_emoji=cfg.good_result_emoji,
+    )
 
-    # access_control.execute_decision(
-    #     decision=decision,
-    #     permission_set_name=payload.request.permission_set_name,
-    #     account_id=payload.request.account_id,
-    #     permission_duration=payload.request.permission_duration,
-    #     approver=approver,
-    #     requester=requester,
-    #     reason=payload.request.reason,
-    # )
-    # cache_for_dublicate_requests.clear()
-    # return client.chat_postMessage(
-    #     channel=payload.channel_id,
-    #     text=text,
-    #     thread_ts=payload.thread_ts,
-    # )
+    blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
+    blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
+    client.chat_update(
+        channel=payload.channel_id,
+        ts=payload.thread_ts,
+        blocks=blocks,
+        text=text,
+    )
+
+    execute_decision(
+        decision=decision,
+        group = describe_group(identity_store_id, payload.request.group_id, identity_store_client),
+        user_principal_id = sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email),
+        permission_duration=payload.request.permission_duration,
+        approver=approver,
+        requester=requester,
+        reason=payload.request.reason,
+    )
+    cache_for_dublicate_requests.clear()
+    return client.chat_postMessage(
+        channel=payload.channel_id,
+        text=text,
+        thread_ts=payload.thread_ts,
+    )
 
 
 
@@ -676,9 +676,6 @@ class ButtonGroupClickedPayload(BaseModel):
             if field["text"].startswith(key):
                 return field["text"].split(": ")[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
-
-
-
 
 
 def build_approval_request_message_blocks(  # noqa: PLR0913
