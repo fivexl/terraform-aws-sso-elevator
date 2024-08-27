@@ -52,6 +52,7 @@ module "access_requester_slack_handler" {
 
     SSO_INSTANCE_ARN                            = local.sso_instance_arn
     STATEMENTS                                  = jsonencode(var.config)
+    GROUP_STATEMENTS                            = jsonencode(var.group_config)
     POWERTOOLS_LOGGER_LOG_EVENT                 = true
     SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
     REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn

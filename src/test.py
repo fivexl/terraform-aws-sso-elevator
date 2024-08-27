@@ -38,11 +38,11 @@ import events
 import s3
 import schedule
 import slack_helpers
+import socket_mode
 import sso
+from access_control import AccessRequestDecision, ApproveRequestDecision
 from entities import BaseModel
 from slack_helpers import unhumanize_timedelta
-from access_control import AccessRequestDecision, ApproveRequestDecision
-import creds
 
 # temporary mock
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
@@ -78,7 +78,7 @@ def handle_errors(fn):  # noqa: ANN001, ANN201
 
 
 cfg = config.get_config()
-app = App(token=creds.bot_token)
+app = App(token=socket_mode.bot_token)
 
 
 
@@ -741,5 +741,5 @@ app.view(RequestForGroupAccessView.CALLBACK_ID)(
 
 
 if __name__ == "__main__":
-    SocketModeHandler(app, creds.app_level_token).start()
+    SocketModeHandler(app, socket_mode.app_level_token).start()
 
