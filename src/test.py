@@ -42,14 +42,7 @@ from entities import BaseModel
 from errors import handle_errors
 from slack_helpers import unhumanize_timedelta
 
-# temporary mock
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-
 logger = config.get_logger(service="main")
-
-
 cfg = config.get_config()
 app = App(token=socket_mode.bot_token)
 
@@ -71,62 +64,6 @@ schedule_client = boto3.client("scheduler", region_name="us-east-1")
 sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 
 identity_store_id = sso_instance.identity_store_id
-
-
-@handle_errors
-def get_all_groups(identity_store_id, identity_store_client: IdentityStoreClient) -> list[entities.aws.SSOGroup]: # noqa: ANN102 ANN001
-    groups = []
-    for page in identity_store_client.get_paginator("list_groups").paginate(IdentityStoreId=identity_store_id):
-        groups.extend(
-            entities.aws.SSOGroup(
-                id=group.get("GroupId"),
-                identity_store_id=group.get("IdentityStoreId"),
-                name=group.get("DisplayName"),  # type: ignore # noqa: PGH003
-                description=group.get("Description"),
-            )
-            for group in page["Groups"]
-            if group.get("DisplayName") and group.get("GroupId")
-        )
-    # TODO: handle case when there are no groups
-    logger.info("Got information about all groups.")
-    logger.debug("Groups", extra={"groups": groups})
-    return groups
-
-def add_user_to_a_group(sso_group_id, sso_user_id, identity_store_id, identity_store_client:IdentityStoreClient):  # noqa: ANN201 ANN001
-    responce = identity_store_client.create_group_membership(
-        GroupId=sso_group_id,
-        MemberId= {"UserId": sso_user_id},
-        IdentityStoreId=identity_store_id
-    )
-    logger.info("User added to the group", extra={"group_id": sso_group_id, "user_id": sso_user_id, })
-    return responce
-
-def remove_user_from_group(identity_store_id, membership_id, identity_store_client: IdentityStoreClient): # noqa: ANN201 ANN001
-    responce = identity_store_client.delete_group_membership(IdentityStoreId=identity_store_id, MembershipId=membership_id)
-    logger.info("User removed from the group", extra={"membership_id": membership_id})
-    return responce
-
-def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> str | None:
-    paginator = identity_store_client.get_paginator("list_group_memberships")
-    for page in paginator.paginate(IdentityStoreId=identity_store_id, GroupId=group_id):
-        for group in page["GroupMemberships"]:
-            try:
-                if group["MemberId"]["UserId"] == sso_user_id: # type: ignore # noqa: PGH003
-                    logger.info("User is in the group", extra={"group": group})
-                    return group["MembershipId"] # type: ignore # noqa: PGH003 (ignoring this because we checked if user is in the group)
-            except Exception as e:
-                logger.error("Error while checking if user is in the group", extra={"error": e})
-    return None
-
-def describe_group(identity_store_id, group_id, identity_store_client: IdentityStoreClient) -> entities.aws.SSOGroup: # noqa: ANN201 ANN001
-    group = identity_store_client.describe_group(IdentityStoreId=identity_store_id, GroupId=group_id)
-    logger.info("Group described", extra={"group": group})
-    return entities.aws.SSOGroup(
-        id = group.get("GroupId"),
-        identity_store_id = group.get("IdentityStoreId"),
-        name = group.get("DisplayName"), # type: ignore # noqa: PGH003
-        description = group.get("Description"),
-    )
 
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
@@ -150,7 +87,7 @@ def show_initial_form(client: WebClient, body: dict, ack: Ack) -> SlackResponse 
 
 @handle_errors
 def load_select_options(client: WebClient, body: dict) -> SlackResponse:
-    groups = get_all_groups(identity_store_id, identity_store_client)
+    groups = sso.get_all_groups(identity_store_id, identity_store_client)
 
     trigger_id = body["trigger_id"]
 
@@ -176,7 +113,7 @@ def handle_request_for_group_access_submittion(
     logger.info("View submitted", extra={"view": request})
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)
 
-    group = describe_group(identity_store_id, request.group_id, identity_store_client)
+    group = sso.describe_group(identity_store_id, request.group_id, identity_store_client)
 
     decision = access_control.make_decision_on_access_request(
         cfg.group_statements,
@@ -350,7 +287,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 
     execute_decision(
         decision=decision,
-        group = describe_group(identity_store_id, payload.request.group_id, identity_store_client),
+        group = sso.describe_group(identity_store_id, payload.request.group_id, identity_store_client),
         user_principal_id = sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email),
         permission_duration=payload.request.permission_duration,
         approver=approver,
@@ -394,7 +331,7 @@ def execute_decision(  # noqa: PLR0913
         return False  # Temporary solution for testing
 
 
-    responce = add_user_to_a_group(group.id, user_principal_id, identity_store_id, identity_store_client)
+    responce = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identity_store_client)
     logger.info("User added to the group", extra={"group_id": group.id, "user_id": user_principal_id, })
 
     s3.log_operation(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Generator, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, Optional, TypeVar
 
 import config
 import entities
@@ -12,6 +12,7 @@ import organizations
 
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_identitystore import type_defs as idc_type_defs
     from mypy_boto3_organizations import OrganizationsClient
     from mypy_boto3_sso_admin import SSOAdminClient, type_defs
 
@@ -352,3 +353,74 @@ def get_account_assignment_information(
         [ps.arn for ps in permission_sets],
     )
     return account_assignments
+
+
+#-----------------Group Assignments-----------------#
+
+def get_all_groups(identity_store_id: str, identity_store_client: IdentityStoreClient) -> list[entities.aws.SSOGroup]:
+
+    try:
+        groups = []
+        for page in identity_store_client.get_paginator("list_groups").paginate(IdentityStoreId=identity_store_id):
+            groups.extend(
+                entities.aws.SSOGroup(
+                    id=group.get("GroupId"),
+                    identity_store_id=group.get("IdentityStoreId"),
+                    name=group.get("DisplayName"), # type: ignore # noqa: PGH003
+                    description=group.get("Description"),
+                )
+                for group in page["Groups"]
+                if group.get("DisplayName") and group.get("GroupId")
+            )
+        logger.info("Got information about all groups.")
+        logger.debug("Groups", extra={"groups": groups})
+        return groups
+    except Exception as e:
+        logger.error("Error while getting information about all groups", extra={"error": e})
+        raise e
+
+
+def add_user_to_a_group(
+    sso_group_id: str,
+    sso_user_id: str,
+    identity_store_id: str,
+    identity_store_client:IdentityStoreClient
+) -> idc_type_defs.CreateGroupMembershipResponseTypeDef:
+    responce = identity_store_client.create_group_membership(
+        GroupId=sso_group_id,
+        MemberId= {"UserId": sso_user_id},
+        IdentityStoreId=identity_store_id
+    )
+    logger.info("User added to the group", extra={"group_id": sso_group_id, "user_id": sso_user_id, })
+    return responce
+
+def remove_user_from_group(identity_store_id: str, membership_id: str, identity_store_client: IdentityStoreClient) -> Dict[str, Any]:
+    responce = identity_store_client.delete_group_membership(IdentityStoreId=identity_store_id, MembershipId=membership_id)
+    logger.info("User removed from the group", extra={"membership_id": membership_id})
+    logger.debug("User removed from the group", extra={"responce": responce})
+    return responce
+
+def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> str | None:
+    paginator = identity_store_client.get_paginator("list_group_memberships")
+    for page in paginator.paginate(IdentityStoreId=identity_store_id, GroupId=group_id):
+        for group in page["GroupMemberships"]:
+            try:
+                if group["MemberId"]["UserId"] == sso_user_id: # type: ignore # noqa: PGH003
+                    logger.info("User is in the group", extra={"group": group})
+                    return group["MembershipId"] # type: ignore # noqa: PGH003 (ignoring this because we checked if user is in the group)
+            except Exception as e:
+                logger.error("Error while checking if user is in the group", extra={"error": e})
+    return None
+
+
+def describe_group(identity_store_id: str, group_id: str, identity_store_client: IdentityStoreClient) -> entities.aws.SSOGroup:
+    group = identity_store_client.describe_group(IdentityStoreId=identity_store_id, GroupId=group_id)
+    logger.info("Group described", extra={"group": group})
+    return entities.aws.SSOGroup(
+        id = group.get("GroupId"),
+        identity_store_id = group.get("IdentityStoreId"),
+        name = group.get("DisplayName"), # type: ignore # noqa: PGH003
+        description = group.get("Description"),
+    )
+
+#-----------------Group Assignments-----------------#
