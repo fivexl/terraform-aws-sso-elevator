@@ -1,8 +1,6 @@
-import functools
 from datetime import timedelta
 
 import boto3
-from aws_lambda_powertools import Logger
 from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
@@ -11,7 +9,7 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
-import errors
+from errors import handle_errors
 import organizations
 import schedule
 import slack_helpers
@@ -35,31 +33,6 @@ app = App(
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
-
-
-def error_handler(client: WebClient, e: Exception, logger: Logger, context: BoltContext) -> None:
-    logger.exception(e)
-    if isinstance(e, errors.ConfigurationError):
-        text = f"<@{context['user_id']}> Your request for AWS permissions failed with error: {e}. Check logs for more details."
-        client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
-    else:
-        text = f"<@{context['user_id']}> Your request for AWS permissions failed with error. Check access-requester logs for more details."
-        client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
-
-
-def handle_errors(fn):  # noqa: ANN001, ANN201
-    # Default slack error handler (app.error) does not handle all exceptions. Or at least I did not find how to do it.
-    # So I created this error handler.
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        try:
-            return fn(*args, **kwargs)
-        except Exception as e:
-            client: WebClient = kwargs["client"]
-            context: BoltContext = kwargs["context"]
-            error_handler(client=client, e=e, logger=logger, context=context)
-
-    return wrapper
 
 
 trigger_view_map = {}

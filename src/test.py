@@ -1,11 +1,9 @@
 import datetime
-import functools
 import json
 from datetime import datetime, timedelta
 
 import boto3
 import jmespath as jp
-from aws_lambda_powertools import Logger
 from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_scheduler import EventBridgeSchedulerClient
 from mypy_boto3_scheduler import type_defs as scheduler_type_defs
@@ -33,7 +31,6 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
-import errors
 import events
 import s3
 import schedule
@@ -42,6 +39,7 @@ import socket_mode
 import sso
 from access_control import AccessRequestDecision, ApproveRequestDecision
 from entities import BaseModel
+from errors import handle_errors
 from slack_helpers import unhumanize_timedelta
 
 # temporary mock
@@ -50,31 +48,6 @@ from slack_helpers import unhumanize_timedelta
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 
 logger = config.get_logger(service="main")
-
-def error_handler(client: WebClient, e: Exception, logger: Logger, context: BoltContext) -> None:
-    logger.exception(e)
-    if isinstance(e, errors.ConfigurationError):
-        text = f"<@{context['user_id']}> Your request for AWS permissions failed with error: {e}. Check logs for more details."
-    else:
-        text = f"<@{context['user_id']}> Your request for AWS permissions failed with error. Check access-requester logs for more details."
-
-    client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
-
-
-def handle_errors(fn):  # noqa: ANN001, ANN201
-    # Default slack error handler (app.error) does not handle all exceptions. Or at least I did not find how to do it.
-    # So I created this error handler.
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        try:
-            return fn(*args, **kwargs)
-        except Exception as e:
-            client: WebClient = kwargs["client"]
-            context: BoltContext = kwargs["context"]
-            error_handler(client=client, e=e, logger=logger, context=context)
-
-    return wrapper
-
 
 
 cfg = config.get_config()
@@ -119,7 +92,6 @@ def get_all_groups(identity_store_id, identity_store_client: IdentityStoreClient
     logger.debug("Groups", extra={"groups": groups})
     return groups
 
-@handle_errors
 def add_user_to_a_group(sso_group_id, sso_user_id, identity_store_id, identity_store_client:IdentityStoreClient):  # noqa: ANN201 ANN001
     responce = identity_store_client.create_group_membership(
         GroupId=sso_group_id,
@@ -129,13 +101,11 @@ def add_user_to_a_group(sso_group_id, sso_user_id, identity_store_id, identity_s
     logger.info("User added to the group", extra={"group_id": sso_group_id, "user_id": sso_user_id, })
     return responce
 
-@handle_errors
 def remove_user_from_group(identity_store_id, membership_id, identity_store_client: IdentityStoreClient): # noqa: ANN201 ANN001
     responce = identity_store_client.delete_group_membership(IdentityStoreId=identity_store_id, MembershipId=membership_id)
     logger.info("User removed from the group", extra={"membership_id": membership_id})
     return responce
 
-@handle_errors
 def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> str | None:
     paginator = identity_store_client.get_paginator("list_group_memberships")
     for page in paginator.paginate(IdentityStoreId=identity_store_id, GroupId=group_id):
@@ -191,8 +161,6 @@ app.shortcut("request_for_group_membership")(
     show_initial_form,
     load_select_options,
 )
-
-
 
 
 
