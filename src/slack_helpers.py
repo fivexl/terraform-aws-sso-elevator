@@ -44,7 +44,8 @@ class RequestForAccess(BaseModel):
 
 
 class RequestForAccessView:
-    CALLBACK_ID = "request_for_access_submitted"
+    __name__ = "RequestForAccountAccessView"
+    CALLBACK_ID = "request_for__account_access_submitted"
 
     REASON_BLOCK_ID = "provide_reason"
     REASON_ACTION_ID = "provided_reason"

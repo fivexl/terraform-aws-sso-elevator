@@ -22,6 +22,7 @@ session = boto3.Session()
 schedule_client = session.client("scheduler")
 org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
+identity_store_client = session.client("identitystore")
 
 cfg = config.get_config()
 app = App(
@@ -42,17 +43,33 @@ trigger_view_map = {}
 # and available in both functions, we can use it as a key. The value is the view_id.
 
 
-def show_initial_form(client: WebClient, body: dict, ack: Ack) -> SlackResponse:
+@handle_errors
+def show_initial_form_for_request(client: WebClient,
+    body: dict,
+    ack: Ack,
+    view_class: slack_helpers.RequestForAccessView | test.RequestForGroupAccessView
+) -> SlackResponse:
     ack()
-    logger.info("Showing initial form")
+    logger.info(f"Showing initial form for {view_class.__name__}")
     logger.debug("Request body", extra={"body": body})
     trigger_id = body["trigger_id"]
-    response = client.views_open(trigger_id=trigger_id, view=slack_helpers.RequestForAccessView.build())
+    response = client.views_open(trigger_id=trigger_id, view=view_class.build())
     trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
     return response
 
 
-def load_select_options(client: WebClient, body: dict) -> SlackResponse:
+def load_select_options_for_group_access_request(client: WebClient, body: dict) -> SlackResponse:
+    logger.info("Loading select options for view (groups)")
+    logger.debug("Request body", extra={"body": body})
+    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    groups = sso.get_all_groups(sso_instance.identity_store_id, identity_store_client)
+    trigger_id = body["trigger_id"]
+
+    view = test.RequestForGroupAccessView.update_with_groups(groups=groups)
+    return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
+
+
+def load_select_options_for_account_access_request(client: WebClient, body: dict) -> SlackResponse:
     logger.info("Loading select options for view (accounts and permission sets)")
     logger.debug("Request body", extra={"body": body})
 
@@ -65,13 +82,13 @@ def load_select_options(client: WebClient, body: dict) -> SlackResponse:
 
 
 app.shortcut("request_for_access")(
-    show_initial_form,
-    load_select_options,
+    show_initial_form_for_request,
+    load_select_options_for_account_access_request
 )
 
 app.shortcut("request_for_group_membership")(
-    test.show_initial_form,
-    test.load_select_options,
+    show_initial_form_for_request,
+    load_select_options_for_group_access_request
 )
 
 cache_for_dublicate_requests = {}

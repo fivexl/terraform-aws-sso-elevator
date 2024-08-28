@@ -74,30 +74,8 @@ identity_store_id = sso_instance.identity_store_id
 #Main
 
 trigger_view_map = {}
-@handle_errors
-def show_initial_form(client: WebClient, body: dict, ack: Ack) -> SlackResponse | None:
-    ack()
-    logger.info("Showing initial form for group access")
-    logger.debug("Request body", extra={"body": body})
-    trigger_id = body["trigger_id"]
-    response = client.views_open(trigger_id=trigger_id, view=RequestForGroupAccessView.build())
-    trigger_view_map[trigger_id] = response.data["view"]["id"] # type: ignore # noqa: PGH003
-    return response
 
 
-@handle_errors
-def load_select_options(client: WebClient, body: dict) -> SlackResponse:
-    groups = sso.get_all_groups(identity_store_id, identity_store_client)
-
-    trigger_id = body["trigger_id"]
-
-    view = RequestForGroupAccessView.update_with_groups(groups=groups)
-    return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
-
-app.shortcut("request_for_group_membership")(
-    show_initial_form,
-    load_select_options,
-)
 
 
 
@@ -434,6 +412,7 @@ class RequestForGroupAccess(entities.BaseModel):
     permission_duration: timedelta
 
 class RequestForGroupAccessView:
+    __name__ = "RequestForGroupAccessView"
     CALLBACK_ID = "request_for_group_access_submitted"
 
     REASON_BLOCK_ID = "provide_reason"
