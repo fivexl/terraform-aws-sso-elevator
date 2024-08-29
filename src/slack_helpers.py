@@ -223,25 +223,28 @@ def unhumanize_timedelta(td_str: str) -> timedelta:
 
 def build_approval_request_message_blocks(  # noqa: PLR0913
     requester_slack_id: str,
-    account: entities.aws.Account,
-    role_name: str,
+    permission_duration: timedelta,
     reason: str,
     color_coding_emoji: str,
-    permission_duration: timedelta,
+    account: Optional[entities.aws.Account] = None,
+    group: Optional[entities.aws.SSOGroup] = None,
+    role_name: Optional[str] = None,
     show_buttons: bool = True,
 ) -> list[Block]:
+    fields = [
+        MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
+        MarkdownTextObject(text=f"Reason: {reason}"),
+        MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
+    ]
+    if group:
+        fields.insert(1, MarkdownTextObject(text=f"Group: {group.name} #{group.id}"))
+    elif account and role_name:
+        fields.insert(1, MarkdownTextObject(text=f"Account: {account.name} #{account.id}"))
+        fields.insert(2, MarkdownTextObject(text=f"Role name: {role_name}"))
+
     blocks: list[Block] = [
         HeaderSectionBlock.new(color_coding_emoji),
-        SectionBlock(
-            block_id="content",
-            fields=[
-                MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
-                MarkdownTextObject(text=f"Account: {account.name} #{account.id}"),
-                MarkdownTextObject(text=f"Role name: {role_name}"),
-                MarkdownTextObject(text=f"Reason: {reason}"),
-                MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
-            ],
-        ),
+        SectionBlock(block_id="content", fields=fields),
     ]
     if show_buttons:
         blocks.append(
