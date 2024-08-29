@@ -3,12 +3,9 @@ from datetime import timedelta
 import boto3
 import jmespath as jp
 from mypy_boto3_identitystore import IdentityStoreClient
-from mypy_boto3_scheduler import EventBridgeSchedulerClient
-from mypy_boto3_scheduler import type_defs as scheduler_type_defs
 from mypy_boto3_sso_admin import SSOAdminClient
 from pydantic import root_validator
 from slack_bolt import Ack, App, BoltContext
-from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import (
     DividerBlock,
@@ -26,7 +23,6 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
-import events
 import s3
 import schedule
 import slack_helpers
@@ -275,9 +271,6 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 
-
-
-
 def execute_decision(  # noqa: PLR0913
     decision: AccessRequestDecision | ApproveRequestDecision,
     group: entities.aws.SSOGroup,
@@ -494,24 +487,3 @@ class ButtonGroupClickedPayload(BaseModel):
             if field["text"].startswith(key):
                 return field["text"].split(": ")[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
-
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-
-
-def acknowledge_request(ack: Ack):  # noqa: ANN201
-    ack()
-
-app.view(RequestForGroupAccessView.CALLBACK_ID)(
-    ack=acknowledge_request,
-    lazy=[handle_request_for_group_access_submittion],
-)
-
-
-if __name__ == "__main__":
-    SocketModeHandler(app, socket_mode.app_level_token).start()
-
