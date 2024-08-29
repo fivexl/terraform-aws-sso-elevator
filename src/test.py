@@ -1,6 +1,4 @@
-import datetime
-import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import boto3
 import jmespath as jp
@@ -315,7 +313,7 @@ def execute_decision(  # noqa: PLR0913
             ),
         )
 
-    schedule_group_revoke_event(
+    schedule.schedule_group_revoke_event(
             permission_duration=permission_duration,
             schedule_client=schedule_client,
             approver=approver,
@@ -329,56 +327,6 @@ def execute_decision(  # noqa: PLR0913
             ),
         )
     return# type: ignore # noqa: PGH003
-
-
-
-
-#Schedule
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-
-
-
-def schedule_group_revoke_event(
-    schedule_client: EventBridgeSchedulerClient,
-    permission_duration: timedelta,
-    approver: entities.slack.User,
-    requester: entities.slack.User,
-    group_assignment: sso.GroupAssignment,
-) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
-    logger.info("Scheduling revoke event")
-    schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    revoke_event = events.GroupRevokeEvent(
-        action="event_bridge_group_revoke",
-        schedule_name=schedule_name,
-        approver=approver,
-        requester=requester,
-        group_assignment= group_assignment,
-        permission_duration=permission_duration,
-    )
-    schedule.get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, revoke_event)
-    logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
-    return schedule_client.create_schedule(
-        FlexibleTimeWindow={"Mode": "OFF"},
-        Name=schedule_name,
-        GroupName=cfg.schedule_group_name,
-        ScheduleExpression=schedule.event_bridge_schedule_after(permission_duration),
-        State="ENABLED",
-        Target=scheduler_type_defs.TargetTypeDef(
-            Arn=cfg.revoker_function_arn,
-            RoleArn=cfg.schedule_policy_arn,
-            Input=json.dumps(
-                {
-                    "action": "event_bridge_group_revoke",
-                    "revoke_event": revoke_event.json(),
-                },
-            ),
-        ),
-    )
 
 
 #Slack
