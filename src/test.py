@@ -8,14 +8,11 @@ from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_scheduler import EventBridgeSchedulerClient
 from mypy_boto3_scheduler import type_defs as scheduler_type_defs
 from mypy_boto3_sso_admin import SSOAdminClient
-from pydantic import BaseModel, root_validator
+from pydantic import root_validator
 from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import (
-    ActionsBlock,
-    Block,
-    ButtonElement,
     DividerBlock,
     InputBlock,
     MarkdownTextObject,

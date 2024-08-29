@@ -263,10 +263,9 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
 ) -> SlackResponse | None:
-    logger.info("Handling scheduled account assignment deletion", extra={"revoke_event": GroupRevokeEvent})
+    logger.info("Handling scheduled group access revokation", extra={"revoke_event": GroupRevokeEvent})
     group_assignment = group_revoke_event.group_assignment
     sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
-    # TODO: Add logging
     s3.log_operation(
         audit_entry=s3.GroupAccessAuditEntry(
             group_name = group_assignment.group_name,
