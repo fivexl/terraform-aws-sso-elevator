@@ -1,3 +1,4 @@
+import test
 from datetime import timedelta
 
 import boto3
@@ -9,12 +10,13 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
-from errors import handle_errors
 import organizations
 import schedule
 import slack_helpers
 import sso
-import test
+from errors import handle_errors
+from typing import Callable
+
 
 logger = config.get_logger(service="main")
 
@@ -43,20 +45,22 @@ trigger_view_map = {}
 # and available in both functions, we can use it as a key. The value is the view_id.
 
 
-@handle_errors
-def show_initial_form_for_request(client: WebClient,
-    body: dict,
-    ack: Ack,
-    view_class: slack_helpers.RequestForAccessView | test.RequestForGroupAccessView
-) -> SlackResponse:
-    ack()
-    logger.info(f"Showing initial form for {view_class.__name__}")
-    logger.debug("Request body", extra={"body": body})
-    trigger_id = body["trigger_id"]
-    response = client.views_open(trigger_id=trigger_id, view=view_class.build())
-    trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
-    return response
-
+def build_initial_form_handler(
+    view_class: slack_helpers.RequestForAccessView |
+    test.RequestForGroupAccessView
+) -> Callable[[WebClient, dict, Ack], SlackResponse]:
+    def show_initial_form_for_request(client: WebClient,
+        body: dict,
+        ack: Ack,
+    ) -> SlackResponse:
+        ack()
+        logger.info(f"Showing initial form for {view_class.__name__}")
+        logger.debug("Request body", extra={"body": body})
+        trigger_id = body["trigger_id"]
+        response = client.views_open(trigger_id=trigger_id, view=view_class.build())
+        trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
+        return response
+    return show_initial_form_for_request
 
 def load_select_options_for_group_access_request(client: WebClient, body: dict) -> SlackResponse:
     logger.info("Loading select options for view (groups)")
@@ -82,12 +86,12 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
 
 
 app.shortcut("request_for_access")(
-    show_initial_form_for_request,
+    build_initial_form_handler(view_class=slack_helpers.RequestForAccessView), #type: ignore # noqa: PGH003
     load_select_options_for_account_access_request
 )
 
 app.shortcut("request_for_group_membership")(
-    show_initial_form_for_request,
+    build_initial_form_handler(view_class=test.RequestForGroupAccessView), #type: ignore # noqa: PGH003
     load_select_options_for_group_access_request
 )
 
