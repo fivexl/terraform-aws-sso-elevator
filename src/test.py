@@ -90,7 +90,7 @@ def handle_request_for_group_access_submittion(
 
     show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
-        blocks=build_approval_request_message_blocks(
+        blocks=slack_helpers.build_approval_request_message_blocks(
             requester_slack_id=request.requester_slack_id,
             group=group,
             reason=request.reason,
@@ -549,49 +549,6 @@ class ButtonGroupClickedPayload(BaseModel):
             if field["text"].startswith(key):
                 return field["text"].split(": ")[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
-
-
-def build_approval_request_message_blocks(  # noqa: PLR0913
-    requester_slack_id: str,
-    group: entities.aws.SSOGroup,
-    reason: str,
-    color_coding_emoji: str,
-    permission_duration: timedelta,
-    show_buttons: bool = True,
-) -> list[Block]:
-    blocks: list[Block] = [
-        slack_helpers.HeaderSectionBlock.new(color_coding_emoji),
-        SectionBlock(
-            block_id="content",
-            fields=[
-                MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
-                MarkdownTextObject(text=f"Group: {group.name} #{group.id}"),
-                MarkdownTextObject(text=f"Reason: {reason}"),
-                MarkdownTextObject(text=f"Permission duration: {slack_helpers.humanize_timedelta(permission_duration)}"),
-            ],
-        ),
-    ]
-    if show_buttons:
-        blocks.append(
-            ActionsBlock(
-                block_id="buttons",
-                elements=[
-                    ButtonElement(
-                        action_id=entities.ApproverAction.Approve.value,
-                        text=PlainTextObject(text="Approve"),
-                        style="primary",
-                        value=entities.ApproverAction.Approve.value,
-                    ),
-                    ButtonElement(
-                        action_id=entities.ApproverAction.Discard.value,
-                        text=PlainTextObject(text="Discard"),
-                        style="danger",
-                        value=entities.ApproverAction.Discard.value,
-                    ),
-                ],
-            )
-        )
-    return blocks
 
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
