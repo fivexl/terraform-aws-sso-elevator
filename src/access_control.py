@@ -211,3 +211,64 @@ def execute_decision(  # noqa: PLR0913
         ),
     )
     return True  # Temporary solution for testing
+
+
+
+def execute_decision_on_group_request(  # noqa: PLR0913
+    decision: AccessRequestDecision | ApproveRequestDecision,
+    group: entities.aws.SSOGroup,
+    user_principal_id: str,
+    permission_duration: datetime.timedelta,
+    approver: entities.slack.User,
+    requester: entities.slack.User,
+    reason: str,
+    identity_store_id: str,
+
+) -> bool:
+    logger.info("Executing decision")
+    if not decision.grant:
+        logger.info("Access request denied")
+        return False  # Temporary solution for testing
+
+    if not sso.is_user_in_group(
+        identity_store_id = identity_store_id,
+        group_id = group.id,
+        sso_user_id = user_principal_id,
+        identity_store_client = identitystore_client,
+        ):
+
+        responce = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identitystore_client)
+
+    logger.info("User added to the group", extra={"group_id": group.id, "user_id": user_principal_id, })
+
+    s3.log_operation(
+        audit_entry=s3.GroupAccessAuditEntry(
+            group_name = group.name,
+            group_id = group.id,
+            membership_id = responce["MembershipId"],
+            reason = reason,
+            requester_slack_id = requester.id,
+            requester_email = requester.email,
+            approver_slack_id = "NA",
+            approver_email = "NA",
+            operation_type = "grant",
+            permission_duration = permission_duration,
+            audit_entry_type = "group",
+            user_principal_id = ""
+            ),
+        )
+
+    schedule.schedule_group_revoke_event(
+            permission_duration=permission_duration,
+            schedule_client=schedule_client,
+            approver=approver,
+            requester=requester,
+            group_assignment=sso.GroupAssignment(
+                identity_store_id=identity_store_id,
+                group_name=group.name,
+                group_id=group.id,
+                user_principal_id=user_principal_id,
+                membership_id=responce["MembershipId"],
+            ),
+        )
+    return# type: ignore # noqa: PGH003

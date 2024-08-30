@@ -1,4 +1,4 @@
-import test
+import group
 from datetime import timedelta
 
 import boto3
@@ -47,7 +47,7 @@ trigger_view_map = {}
 
 def build_initial_form_handler(
     view_class: slack_helpers.RequestForAccessView |
-    test.RequestForGroupAccessView
+    slack_helpers.RequestForGroupAccessView
 ) -> Callable[[WebClient, dict, Ack], SlackResponse]:
     def show_initial_form_for_request(client: WebClient,
         body: dict,
@@ -69,7 +69,7 @@ def load_select_options_for_group_access_request(client: WebClient, body: dict) 
     groups = sso.get_all_groups(sso_instance.identity_store_id, identity_store_client)
     trigger_id = body["trigger_id"]
 
-    view = test.RequestForGroupAccessView.update_with_groups(groups=groups)
+    view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
     return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
 
 
@@ -91,7 +91,7 @@ app.shortcut("request_for_access")(
 )
 
 app.shortcut("request_for_group_membership")(
-    build_initial_form_handler(view_class=test.RequestForGroupAccessView), #type: ignore # noqa: PGH003
+    build_initial_form_handler(view_class=group.RequestForGroupAccessView), #type: ignore # noqa: PGH003
     load_select_options_for_group_access_request
 )
 
@@ -105,7 +105,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         payload = slack_helpers.ButtonClickedPayload.parse_obj(body)
     except Exception as e:
         logger.exception(e)
-        return test.handle_group_button_click(body, client, context)
+        return group.handle_group_button_click(body, client, context)
 
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
@@ -322,9 +322,9 @@ app.view(slack_helpers.RequestForAccessView.CALLBACK_ID)(
     lazy=[handle_request_for_access_submittion],
 )
 
-app.view(test.RequestForGroupAccessView.CALLBACK_ID)(
+app.view(slack_helpers.RequestForGroupAccessView.CALLBACK_ID)(
     ack=acknowledge_request,
-    lazy=[test.handle_request_for_group_access_submittion],
+    lazy=[group.handle_request_for_group_access_submittion],
 )
 
 

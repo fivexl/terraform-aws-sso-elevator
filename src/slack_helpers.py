@@ -422,3 +422,168 @@ def get_max_duration_block(cfg: config.Config) -> list[Option]:
         Option(text=PlainTextObject(text=f"{i // 2:02d}:{(i % 2) * 30:02d}"), value=f"{i // 2:02d}:{(i % 2) * 30:02d}")
         for i in range(1, cfg.max_permissions_duration_time * 2 + 1)
     ]
+
+# Group
+#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+
+
+class RequestForGroupAccess(entities.BaseModel):
+    group_id: str
+    reason: str
+    requester_slack_id: str
+    permission_duration: timedelta
+
+class RequestForGroupAccessView:
+    __name__ = "RequestForGroupAccessView"
+    CALLBACK_ID = "request_for_group_access_submitted"
+
+    REASON_BLOCK_ID = "provide_reason"
+    REASON_ACTION_ID = "provided_reason"
+
+    GROUP_BLOCK_ID = "select_group"
+    GROUP_ACTION_ID = "selected_group"
+
+    DURATION_BLOCK_ID = "duration_picker"
+    DURATION_ACTION_ID = "duration_picker_action"
+
+    LOADING_BLOCK_ID = "loading"
+
+    @classmethod
+    def build(cls) -> View: # noqa: ANN102
+        return View(
+            type="modal",
+            callback_id=cls.CALLBACK_ID,
+            submit=PlainTextObject(text="Request"),
+            close=PlainTextObject(text="Cancel"),
+            title=PlainTextObject(text="Get AWS access"),
+            blocks=[
+                SectionBlock(text=MarkdownTextObject(text=":wave: Hey! Please fill form below to request access to AWS SSO group.")),
+                DividerBlock(),
+                SectionBlock(
+                    block_id=cls.DURATION_BLOCK_ID,
+                    text=MarkdownTextObject(text="Select the duration for which the access will be provided"),
+                    accessory=StaticSelectElement(
+                        action_id=cls.DURATION_ACTION_ID,
+                        initial_option=get_max_duration_block(cfg)[0],
+                        options=get_max_duration_block(cfg),
+                        placeholder=PlainTextObject(text="Select duration"),
+                    ),
+                ),
+                InputBlock(
+                    block_id=cls.REASON_BLOCK_ID,
+                    label=PlainTextObject(text="Why do you need access?"),
+                    element=PlainTextInputElement(
+                        action_id=cls.REASON_ACTION_ID,
+                        multiline=True,
+                    ),
+                ),
+                DividerBlock(),
+                SectionBlock(
+                    text=MarkdownTextObject(
+                        text="Remember to use access responsibly. All actions (AWS API calls) are being recorded.",
+                    ),
+                ),
+                SectionBlock(
+                    block_id=cls.LOADING_BLOCK_ID,
+                    text=MarkdownTextObject(
+                        text=":hourglass: Loading available accounts and permission sets...",
+                    ),
+                ),
+            ],
+        )
+    @classmethod
+    def update_with_groups(
+        cls, groups: list[entities.aws.SSOGroup] # noqa: ANN102
+    ) -> View:
+        view = cls.build()
+        view.blocks = remove_blocks(view.blocks, block_ids=[cls.LOADING_BLOCK_ID])
+        view.blocks = insert_blocks(
+            blocks=view.blocks,
+            blocks_to_insert=[
+                cls.build_select_group_input_block(groups),
+            ],
+            after_block_id=cls.REASON_BLOCK_ID,
+        )
+        return view
+
+    @classmethod
+    def build_select_group_input_block(cls, groups: list[entities.aws.SSOGroup]) -> InputBlock: # noqa: ANN102
+        # TODO: handle case when there are more than 100 groups
+        # 99 is the limit for StaticSelectElement
+        # https://slack.dev/python-slack-sdk/api-docs/slack_sdk/models/blocks/block_elements.html#:~:text=StaticSelectElement(InputInteractiveElement)%3A%0A%20%20%20%20type%20%3D%20%22static_select%22-,options_max_length%20%3D%20100,-option_groups_max_length%20%3D%20100%0A%0A%20%20%20%20%40property%0A%20%20%20%20def%20attributes(
+        if len(groups) > 99:  # noqa: PLR2004
+            groups = groups[:99]
+        sorted_groups = sorted(groups, key=lambda groups: groups.name)
+        return InputBlock(
+            block_id=cls.GROUP_BLOCK_ID,
+            label=PlainTextObject(text="Select group"),
+            element=StaticSelectElement(
+                action_id=cls.GROUP_ACTION_ID,
+                placeholder=PlainTextObject(text="Select group"),
+                options=[
+                    Option(text=PlainTextObject(text=f"{group.name}"), value=group.id) for group in sorted_groups
+                ],
+            ),
+        )
+
+    @classmethod
+    def parse(cls, obj: dict) -> RequestForGroupAccess:# noqa: ANN102
+        values = jp.search("view.state.values", obj)
+        hhmm = jp.search(f"{cls.DURATION_BLOCK_ID}.{cls.DURATION_ACTION_ID}.selected_option.value", values)
+        hours, minutes = map(int, hhmm.split(":"))
+        duration = timedelta(hours=hours, minutes=minutes)
+        return RequestForGroupAccess.parse_obj(
+            {
+                "permission_duration": duration,
+                "group_id": jp.search(f"{cls.GROUP_BLOCK_ID}.{cls.GROUP_ACTION_ID}.selected_option.value", values),
+                "reason": jp.search(f"{cls.REASON_BLOCK_ID}.{cls.REASON_ACTION_ID}.value", values),
+                "requester_slack_id": jp.search("user.id", obj),
+            }
+        )
+
+
+class ButtonGroupClickedPayload(BaseModel):
+    action: entities.ApproverAction
+    approver_slack_id: str
+    thread_ts: str
+    channel_id: str
+    message: dict
+    request: RequestForGroupAccess
+
+    class Config:
+        frozen = True
+
+    @root_validator(pre=True)
+    def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
+        fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
+        requester_mention = cls.find_in_fields(fields, "Requester")
+        requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
+        humanized_permission_duration = cls.find_in_fields(fields, "Permission duration")
+        permission_duration = unhumanize_timedelta(humanized_permission_duration)
+        group = cls.find_in_fields(fields, "Group")
+        group_id = group.split("#")[-1]
+        return {
+            "action": jp.search("actions[0].value", values),
+            "approver_slack_id": jp.search("user.id", values),
+            "thread_ts": jp.search("message.ts", values),
+            "channel_id": jp.search("channel.id", values),
+            "message": values.get("message"),
+            "request": RequestForGroupAccess(
+                requester_slack_id=requester_slack_id,
+                group_id=group_id,
+                reason=cls.find_in_fields(fields, "Reason"),
+                permission_duration=permission_duration,
+            ),
+        }
+
+    @staticmethod
+    def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
+        for field in fields:
+            if field["text"].startswith(key):
+                return field["text"].split(": ")[1].strip()
+        raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")

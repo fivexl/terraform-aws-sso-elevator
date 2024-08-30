@@ -28,7 +28,6 @@ from events import (
     ScheduledGroupRevokeEvent,
     GroupRevokeEvent
 )
-import test
 
 logger = config.get_logger(service="revoker")
 
