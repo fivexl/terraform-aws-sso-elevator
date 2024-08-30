@@ -3,6 +3,7 @@ from datetime import timedelta
 import boto3
 from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_sso_admin import SSOAdminClient
+from mypy_boto3_scheduler import EventBridgeSchedulerClient
 from slack_bolt import Ack, BoltContext
 from slack_sdk import WebClient
 
@@ -19,10 +20,10 @@ from errors import handle_errors
 logger = config.get_logger(service="main")
 cfg = config.get_config()
 
-
-identity_store_client: IdentityStoreClient = boto3.client("identitystore", region_name="us-east-1")
-sso_client: SSOAdminClient = boto3.client("sso-admin", region_name="us-east-1")
-schedule_client = boto3.client("scheduler", region_name="us-east-1")
+session = boto3._get_default_session()
+sso_client: SSOAdminClient = session.client("sso-admin")
+identity_store_client: IdentityStoreClient = session.client("identitystore")
+schedule_client: EventBridgeSchedulerClient = session.client("scheduler")
 sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 identity_store_id = sso_instance.identity_store_id
 
