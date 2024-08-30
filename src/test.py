@@ -212,7 +212,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 
     decision = access_control.make_decision_on_approve_request(
         action=payload.action,
-        statements=cfg.statements,
+        statements=cfg.group_statements, #type: ignore # noqa: PGH003
         group_id=payload.request.group_id,
         approver_email=approver.email,
         requester_email=requester.email,
@@ -285,8 +285,15 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         logger.info("Access request denied")
         return False  # Temporary solution for testing
 
+    if not sso.is_user_in_group(
+        identity_store_id = identity_store_id,
+        group_id = group.id,
+        sso_user_id = user_principal_id,
+        identity_store_client = identity_store_client,
+        ):
 
-    responce = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identity_store_client)
+        responce = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identity_store_client)
+
     logger.info("User added to the group", extra={"group_id": group.id, "user_id": user_principal_id, })
 
     s3.log_operation(
