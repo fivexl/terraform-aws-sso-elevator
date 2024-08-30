@@ -144,7 +144,7 @@ def handle_request_for_group_access_submittion(
 
     user_principal_id = sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email)
 
-    execute_decision(
+    execute_decision_on_group_request(
         group = group,
         user_principal_id = user_principal_id,
         permission_duration = request.permission_duration,
@@ -243,7 +243,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         text=text,
     )
 
-    execute_decision(
+    execute_decision_on_group_request(
         decision=decision,
         group = sso.describe_group(identity_store_id, payload.request.group_id, identity_store_client),
         user_principal_id = sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email),
@@ -271,7 +271,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 #-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 
-def execute_decision(  # noqa: PLR0913
+def execute_decision_on_group_request(  # noqa: PLR0913
     decision: AccessRequestDecision | ApproveRequestDecision,
     group: entities.aws.SSOGroup,
     user_principal_id: str,
@@ -297,8 +297,8 @@ def execute_decision(  # noqa: PLR0913
             reason = reason,
             requester_slack_id = requester.id,
             requester_email = requester.email,
-            approver_slack_id = "N/A",
-            approver_email = "N/A",
+            approver_slack_id = "NA",
+            approver_email = "NA",
             operation_type = "grant",
             permission_duration = permission_duration,
             audit_entry_type = "group",
