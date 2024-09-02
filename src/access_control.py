@@ -237,7 +237,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         identity_store_client = identitystore_client,
         ):
 
-        responce = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identitystore_client)
+        response = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identitystore_client)
 
     logger.info("User added to the group", extra={"group_id": group.id, "user_id": user_principal_id, })
 
@@ -245,7 +245,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         audit_entry=s3.GroupAccessAuditEntry(
             group_name = group.name,
             group_id = group.id,
-            membership_id = responce["MembershipId"],
+            membership_id = response["MembershipId"] if response else "NA",
             reason = reason,
             requester_slack_id = requester.id,
             requester_email = requester.email,
@@ -268,7 +268,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
                 group_name=group.name,
                 group_id=group.id,
                 user_principal_id=user_principal_id,
-                membership_id=responce["MembershipId"],
+                membership_id=response["MembershipId"] if response else "NA",
             ),
         )
     return# type: ignore # noqa: PGH003
