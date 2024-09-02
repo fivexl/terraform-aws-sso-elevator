@@ -116,9 +116,9 @@ def get_and_delete_scheduled_revoke_event_if_already_exist(
         if isinstance(scheduled_event, ScheduledRevokeEvent) and scheduled_event.revoke_event.user_account_assignment == event:
             logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
             delete_schedule(client, scheduled_event.revoke_event.schedule_name)
-        if isinstance(scheduled_event, GroupRevokeEvent) and scheduled_event.group_assignment == event:
-            logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.schedule_name})
-            delete_schedule(client, scheduled_event.schedule_name)
+        if isinstance(scheduled_event, ScheduledGroupRevokeEvent) and scheduled_event.revoke_event.group_assignment == event:
+            logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
+            delete_schedule(client, scheduled_event.revoke_event.schedule_name)
 
 
 
