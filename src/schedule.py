@@ -66,6 +66,7 @@ def get_schedules(client: EventBridgeSchedulerClient) -> list[scheduler_type_def
 
 def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRevokeEvent | GroupRevokeEvent]:
     scheduled_events = get_schedules(client)
+    logger.debug("Scheduled events", extra={"scheduled_events": scheduled_events})
     scheduled_revoke_events: list[ScheduledRevokeEvent | GroupRevokeEvent] = []
     for full_schedule in scheduled_events:
         if full_schedule["Name"].startswith("discard-buttons"):
