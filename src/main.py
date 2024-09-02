@@ -91,7 +91,7 @@ app.shortcut("request_for_access")(
 )
 
 app.shortcut("request_for_group_membership")(
-    build_initial_form_handler(view_class=group.RequestForGroupAccessView), #type: ignore # noqa: PGH003
+    build_initial_form_handler(view_class=slack_helpers.RequestForGroupAccessView), #type: ignore # noqa: PGH003
     load_select_options_for_group_access_request
 )
 
