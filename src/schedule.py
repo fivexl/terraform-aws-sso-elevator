@@ -98,7 +98,7 @@ def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str) -> N
 
 def get_and_delete_scheduled_revoke_event_if_already_exist(
     client: EventBridgeSchedulerClient,
-    event: sso.UserAccountAssignment | GroupRevokeEvent,
+    event: sso.UserAccountAssignment | sso.GroupAssignment,
 ) -> None:
     for scheduled_event in get_scheduled_events(client):
         if isinstance(scheduled_event, ScheduledRevokeEvent) and scheduled_event.revoke_event.user_account_assignment == event:
@@ -169,7 +169,7 @@ def schedule_group_revoke_event(
         group_assignment= group_assignment,
         permission_duration=permission_duration,
     )
-    get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, revoke_event)
+    get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, group_assignment)
     logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
     return schedule_client.create_schedule(
         FlexibleTimeWindow={"Mode": "OFF"},
