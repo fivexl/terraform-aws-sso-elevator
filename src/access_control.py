@@ -231,16 +231,17 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         return False  # Temporary solution for testing
 
     response = {}
-    if not sso.is_user_in_group(
-        identity_store_id = identity_store_id,
-        group_id = group.id,
-        sso_user_id = user_principal_id,
-        identity_store_client = identitystore_client,
-        ):
+    if sso.is_user_in_group(
+        identity_store_id=identity_store_id,
+        group_id=group.id,
+        sso_user_id=user_principal_id,
+        identity_store_client=identitystore_client,
+    ):
+        logger.info("User is already in the group",extra={"group_id": group.id, "user_id": user_principal_id})
 
+    else:
         response = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identitystore_client)
-
-    logger.info("User added to the group", extra={"group_id": group.id, "user_id": user_principal_id, })
+        logger.info("User added to the group",extra={"group_id": group.id, "user_id": user_principal_id})
 
     s3.log_operation(
         audit_entry=s3.GroupAccessAuditEntry(
