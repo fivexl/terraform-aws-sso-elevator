@@ -230,6 +230,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         logger.info("Access request denied")
         return False  # Temporary solution for testing
 
+    response = {}
     if not sso.is_user_in_group(
         identity_store_id = identity_store_id,
         group_id = group.id,
@@ -245,7 +246,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         audit_entry=s3.GroupAccessAuditEntry(
             group_name = group.name,
             group_id = group.id,
-            membership_id = response["MembershipId"] if response else "NA",
+            membership_id = response.get("MembershipId", "NA"),
             reason = reason,
             requester_slack_id = requester.id,
             requester_email = requester.email,
@@ -268,7 +269,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
                 group_name=group.name,
                 group_id=group.id,
                 user_principal_id=user_principal_id,
-                membership_id=response["MembershipId"] if response else "NA",
+                membership_id=response.get("MembershipId", "NA")
             ),
         )
     return# type: ignore # noqa: PGH003
