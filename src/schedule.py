@@ -101,6 +101,7 @@ def get_and_delete_scheduled_revoke_event_if_already_exist(
     event: sso.UserAccountAssignment | sso.GroupAssignment,
 ) -> None:
     for scheduled_event in get_scheduled_events(client):
+        logger.debug("Checking if schedule already exist", extra={"scheduled_event": scheduled_event})
         if isinstance(scheduled_event, ScheduledRevokeEvent) and scheduled_event.revoke_event.user_account_assignment == event:
             logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
             delete_schedule(client, scheduled_event.revoke_event.schedule_name)
