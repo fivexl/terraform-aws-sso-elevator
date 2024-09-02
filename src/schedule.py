@@ -13,7 +13,15 @@ from pydantic import ValidationError
 import config
 import entities
 import sso
-from events import ApproverNotificationEvent, DiscardButtonsEvent, Event, GroupRevokeEvent, RevokeEvent, ScheduledRevokeEvent
+from events import (
+    ApproverNotificationEvent,
+    DiscardButtonsEvent,
+    Event,
+    GroupRevokeEvent,
+    RevokeEvent,
+    ScheduledRevokeEvent,
+    ScheduledGroupRevokeEvent
+)
 
 logger = config.get_logger(service="schedule")
 cfg = config.get_config()
@@ -64,10 +72,10 @@ def get_schedules(client: EventBridgeSchedulerClient) -> list[scheduler_type_def
     return scheduled_events
 
 
-def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRevokeEvent | GroupRevokeEvent]:
+def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRevokeEvent | ScheduledGroupRevokeEvent]:
     scheduled_events = get_schedules(client)
     logger.debug("Scheduled events", extra={"scheduled_events": scheduled_events})
-    scheduled_revoke_events: list[ScheduledRevokeEvent | GroupRevokeEvent] = []
+    scheduled_revoke_events: list[ScheduledRevokeEvent | ScheduledGroupRevokeEvent] = []
     for full_schedule in scheduled_events:
         if full_schedule["Name"].startswith("discard-buttons"):
             continue
@@ -82,9 +90,9 @@ def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRe
 
         if isinstance(event.__root__, ScheduledRevokeEvent):
             scheduled_revoke_events.append(event.__root__)
-        elif isinstance(event.__root__, GroupRevokeEvent):
+        elif isinstance(event.__root__, ScheduledGroupRevokeEvent):
             scheduled_revoke_events.append(event.__root__)
-
+    logger.debug("Scheduled revoke events", extra={"scheduled_revoke_events": scheduled_revoke_events})
     return scheduled_revoke_events
 
 
