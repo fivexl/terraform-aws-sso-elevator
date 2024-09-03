@@ -398,16 +398,36 @@ def remove_user_from_group(identity_store_id: str, membership_id: str, identity_
     logger.debug("User removed from the group", extra={"responce": responce})
     return responce
 
-def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> str | None:
+
+def list_group_memberships(
+        identity_store_id: str,
+        group_id: str,
+        identity_store_client: IdentityStoreClient
+    ) -> list[entities.aws.GroupMembership]:
+    logger.info("Listing group memberships")
     paginator = identity_store_client.get_paginator("list_group_memberships")
+    group_memberships = []
     for page in paginator.paginate(IdentityStoreId=identity_store_id, GroupId=group_id):
-        for group in page["GroupMemberships"]:
-            try:
-                if group["MemberId"]["UserId"] == sso_user_id: # type: ignore # noqa: PGH003
-                    logger.info("User is in the group", extra={"group": group})
-                    return group["MembershipId"] # type: ignore # noqa: PGH003 (ignoring this because we checked if user is in the group)
-            except Exception as e:
-                logger.error("Error while checking if user is in the group", extra={"error": e})
+        memberships = page["GroupMemberships"]
+        group_memberships.extend(
+            entities.aws.GroupMembership(
+                user_principal_id=membership["MemberId"]["UserId"],  # type: ignore # noqa: PGH003
+                group_id=membership["GroupId"],  # type: ignore # noqa: PGH003
+                identity_store_id=membership["IdentityStoreId"],  # type: ignore # noqa: PGH003
+                membership_id=membership["MembershipId"],  # type: ignore # noqa: PGH003
+            )
+            for membership in memberships
+        )
+    logger.debug("Group memberships", extra={"group_memberships": group_memberships})
+    return group_memberships
+
+
+def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> str | None:
+    group_memberships = list_group_memberships(identity_store_id, group_id, identity_store_client)
+    for member in group_memberships:
+        if member.user_principal_id == sso_user_id: # type: ignore # noqa: PGH003
+            logger.info("User is in the group", extra={"group": member})
+            return member["MembershipId"] # type: ignore # noqa: PGH003 (ignoring this because we checked if user is in the group)
     return None
 
 
