@@ -399,14 +399,14 @@ def check_on_groups_inconsistency( # noqa: PLR0913
                 time_notice = f" The next scheduled revocation is set for {next_run_time_or_expression}."
             elif isinstance(next_run_time_or_expression, str):
                 time_notice = f" The revocation schedule is set as: {next_run_time_or_expression}."  # noqa: Q000
-                slack_client.chat_postMessage(
-                    channel=cfg.slack_channel_id,
-                    text=(
-                        f"""Inconsistent group assignment detected in {
-                            group_assignment.group_name}-{group_assignment.group_id} for user {mention}."""
-                        f"The unidentified assignment will be automatically revoked.{time_notice}"
-                    ),
-                )
+            slack_client.chat_postMessage(
+                channel=cfg.slack_channel_id,
+                text=(
+                    f"""Inconsistent group assignment detected in {
+                        group_assignment.group_name}-{group_assignment.group_id} for user {mention}."""
+                    f"The unidentified assignment will be automatically revoked.{time_notice}"
+                ),
+            )
 
 def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
     identity_store_client: IdentityStoreClient,
