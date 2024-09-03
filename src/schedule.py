@@ -174,7 +174,6 @@ def schedule_group_revoke_event(
     logger.info("Scheduling revoke event")
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     revoke_event = GroupRevokeEvent(
-        action="event_bridge_group_revoke",
         schedule_name=schedule_name,
         approver=approver,
         requester=requester,

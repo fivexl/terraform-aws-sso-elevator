@@ -66,7 +66,7 @@ def load_select_options_for_group_access_request(client: WebClient, body: dict) 
     logger.info("Loading select options for view (groups)")
     logger.debug("Request body", extra={"body": body})
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    groups = sso.get_all_groups(sso_instance.identity_store_id, identity_store_client)
+    groups = sso.get_groups_from_config(sso_instance.identity_store_id, identity_store_client, cfg)
     trigger_id = body["trigger_id"]
 
     view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)

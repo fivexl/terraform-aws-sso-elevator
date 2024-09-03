@@ -18,7 +18,6 @@ class RevokeEvent(BaseModel):
 
 
 class GroupRevokeEvent(BaseModel):
-    action: Literal["event_bridge_group_revoke"]
     schedule_name: str
     approver: entities.slack.User
     requester: entities.slack.User
