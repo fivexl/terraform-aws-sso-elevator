@@ -79,7 +79,14 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
 
         case CheckOnInconsistency():
             logger.info("Handling CheckOnInconsistency event", extra={"event": parsed_event})
-
+            check_on_groups_inconsistency(
+                identity_store_client=identitystore_client,
+                sso_client=sso_client,
+                scheduler_client=scheduler_client,
+                events_client=events_client,
+                cfg=cfg,
+                slack_client=slack_client,
+            )
             return handle_check_on_inconsistency(
                 sso_client=sso_client,
                 cfg=cfg,
@@ -92,6 +99,13 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
 
         case SSOElevatorScheduledRevocation():
             logger.info("Handling SSOElevatorScheduledRevocation event", extra={"event": parsed_event})
+            handle_sso_elevator_group_scheduled_revocation(
+                identity_store_client=identitystore_client,
+                sso_client=sso_client,
+                scheduler_client=scheduler_client,
+                cfg=cfg,
+                slack_client=slack_client,
+            )
             return handle_sso_elevator_scheduled_revocation(
                 sso_client=sso_client,
                 cfg=cfg,
@@ -344,8 +358,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
 
 
 
-def check_on_groups_inconsistency(
-    identity_store_id: str,
+def check_on_groups_inconsistency( # noqa: PLR0913
     identity_store_client: IdentityStoreClient,
     sso_client: SSOAdminClient,
     scheduler_client: EventBridgeSchedulerClient,
@@ -353,6 +366,9 @@ def check_on_groups_inconsistency(
     cfg: config.Config,
     slack_client:  slack_sdk.WebClient
 ) -> None:
+    sso_instance_arn = cfg.sso_instance_arn
+    sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
+    identity_store_id = sso_instance.identity_store_id
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
     group_assignments_from_events = [
@@ -393,13 +409,15 @@ def check_on_groups_inconsistency(
                 )
 
 def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
-    identity_store_id: str,
     identity_store_client: IdentityStoreClient,
     sso_client: SSOAdminClient,
     scheduler_client: EventBridgeSchedulerClient,
     cfg: config.Config,
     slack_client:  slack_sdk.WebClient
 ) -> None:
+    sso_instance_arn = cfg.sso_instance_arn
+    sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
+    identity_store_id = sso_instance.identity_store_id
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
     group_assignments_from_events = [
