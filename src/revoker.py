@@ -22,11 +22,11 @@ from events import (
     CheckOnInconsistency,
     DiscardButtonsEvent,
     Event,
+    GroupRevokeEvent,
     RevokeEvent,
+    ScheduledGroupRevokeEvent,
     ScheduledRevokeEvent,
     SSOElevatorScheduledRevocation,
-    ScheduledGroupRevokeEvent,
-    GroupRevokeEvent
 )
 
 logger = config.get_logger(service="revoker")
@@ -262,7 +262,7 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
 ) -> SlackResponse | None:
-    logger.info("Handling scheduled group access revokation", extra={"revoke_event": GroupRevokeEvent})
+    logger.info("Handling scheduled group access revokation", extra={"revoke_event": group_revoke_event})
     group_assignment = group_revoke_event.group_assignment
     sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
     s3.log_operation(
@@ -341,6 +341,109 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
                     f"The unidentified assignment will be automatically revoked.{time_notice}"
                 ),
             )
+
+
+
+def check_on_groups_inconsistency(
+    identity_store_id: str,
+    identity_store_client: IdentityStoreClient,
+    sso_client: SSOAdminClient,
+    scheduler_client: EventBridgeSchedulerClient,
+    events_client: EventBridgeClient,
+    cfg: config.Config,
+    slack_client:  slack_sdk.WebClient
+) -> None:
+    scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
+    group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
+    group_assignments_from_events = [
+        sso.GroupAssignment(
+            group_name = scheduled_event.revoke_event.group_assignment.group_name,
+            group_id = scheduled_event.revoke_event.group_assignment.group_id,
+            user_principal_id = scheduled_event.revoke_event.group_assignment.user_principal_id,
+            membership_id = scheduled_event.revoke_event.group_assignment.membership_id,
+            identity_store_id = scheduled_event.revoke_event.group_assignment.identity_store_id,
+        ) for scheduled_event in scheduled_revoke_events if isinstance(scheduled_event, ScheduledGroupRevokeEvent)
+    ]
+    for group_assignment in group_assignments:
+        if group_assignment not in group_assignments_from_events:
+            logger.warning("Group assignment is not in the scheduled events", extra={"assignment": group_assignment})
+            mention = slack_helpers.create_slack_mention_by_principal_id(
+                sso_user_id= group_assignment.user_principal_id,
+                sso_client=sso_client,
+                cfg=cfg,
+                identitystore_client=identity_store_client,
+                slack_client=slack_client,
+            )
+            rule = schedule.get_event_brige_rule(
+                event_brige_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
+            )
+            next_run_time_or_expression = schedule.check_rule_expression_and_get_next_run(rule)
+            time_notice = ""
+            if isinstance(next_run_time_or_expression, datetime):
+                time_notice = f" The next scheduled revocation is set for {next_run_time_or_expression}."
+            elif isinstance(next_run_time_or_expression, str):
+                time_notice = f" The revocation schedule is set as: {next_run_time_or_expression}."  # noqa: Q000
+                slack_client.chat_postMessage(
+                    channel=cfg.slack_channel_id,
+                    text=(
+                        f"""Inconsistent group assignment detected in {
+                            group_assignment.group_name}-{group_assignment.group_id} for user {mention}."""
+                        f"The unidentified assignment will be automatically revoked.{time_notice}"
+                    ),
+                )
+
+def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
+    identity_store_id: str,
+    identity_store_client: IdentityStoreClient,
+    sso_client: SSOAdminClient,
+    scheduler_client: EventBridgeSchedulerClient,
+    cfg: config.Config,
+    slack_client:  slack_sdk.WebClient
+) -> None:
+    scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
+    group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
+    group_assignments_from_events = [
+        sso.GroupAssignment(
+            group_name = scheduled_event.revoke_event.group_assignment.group_name,
+            group_id = scheduled_event.revoke_event.group_assignment.group_id,
+            user_principal_id = scheduled_event.revoke_event.group_assignment.user_principal_id,
+            membership_id = scheduled_event.revoke_event.group_assignment.membership_id,
+            identity_store_id = scheduled_event.revoke_event.group_assignment.identity_store_id,
+        ) for scheduled_event in scheduled_revoke_events if isinstance(scheduled_event, ScheduledGroupRevokeEvent)
+    ]
+    for group_assignment in group_assignments:
+        if group_assignment in group_assignments_from_events:
+            logger.info(
+                "Group assignment already scheduled for revocation. Skipping.",
+                extra={"group_assignment": group_assignment},
+            )
+            continue
+        else:
+            sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
+            s3.log_operation(
+                audit_entry=s3.GroupAccessAuditEntry(
+                    group_name = group_assignment.group_name,
+                    group_id = group_assignment.group_id,
+                    membership_id = group_assignment.membership_id,
+                    reason = "scheduled_revocation",
+                    requester_slack_id = "NA",
+                    requester_email = "NA",
+                    approver_slack_id = "NA",
+                    approver_email = "NA",
+                    operation_type = "revoke",
+                    permission_duration = "NA",
+                    audit_entry_type = "group",
+                    user_principal_id = group_assignment.user_principal_id,
+                    ),
+                )
+            if cfg.post_update_to_slack:
+                slack_notify_user_on_group_access_revoke(
+                    cfg=cfg,
+                    group_assignment = group_assignment,
+                    sso_client=sso_client,
+                    identitystore_client=identitystore_client,
+                    slack_client=slack_client,
+                )
 
 
 def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
