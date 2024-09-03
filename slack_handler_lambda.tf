@@ -214,7 +214,6 @@ data "aws_iam_policy_document" "slack_handler" {
       "identitystore:DescribeGroup",
       "identitystore:ListGroupMemberships",
       "identitystore:CreateGroupMembership",
-      "identitystore:DeleteGroupMembership"
     ]
     resources = ["*"]
   }
