@@ -40,6 +40,9 @@ def parse_group_statement(_dict: dict) -> GroupStatement:
         }
     )
 
+def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str]:
+    return frozenset(group for statement in statements for group in statement.resource)
+
 
 class Config(BaseSettings):
     schedule_policy_arn: str
@@ -63,6 +66,7 @@ class Config(BaseSettings):
 
     accounts: frozenset[str]
     permission_sets: frozenset[str]
+    groups: frozenset[str]
 
     s3_bucket_for_audit_entry_name: str
     s3_bucket_prefix_for_partitions: str
@@ -84,6 +88,7 @@ class Config(BaseSettings):
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
         statements = {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
         group_statements = {parse_group_statement(st) for st in values.get("group_statements", [])}  # type: ignore # noqa: PGH003
+        groups = get_groups_from_statements(group_statements)
         permission_sets = set()
         accounts = set()
         for statement in statements:
@@ -95,6 +100,7 @@ class Config(BaseSettings):
             "permission_sets": permission_sets,
             "statements": frozenset(statements),
             "group_statements": frozenset(group_statements),
+            "groups": groups,
         }
 
 

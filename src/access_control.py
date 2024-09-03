@@ -264,7 +264,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             operation_type = "grant",
             permission_duration = permission_duration,
             audit_entry_type = "group",
-            user_principal_id = ""
+            user_principal_id = user_principal_id,
             ),
         )
 
