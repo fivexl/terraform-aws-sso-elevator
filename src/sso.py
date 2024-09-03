@@ -355,8 +355,8 @@ def get_account_assignment_information(
 
 #-----------------Group Assignments-----------------#
 
-def get_all_groups(identity_store_id: str, identity_store_client: IdentityStoreClient) -> list[entities.aws.SSOGroup]:
-
+def get_groups_from_config(identity_store_id: str, identity_store_client: IdentityStoreClient, cfg: config.Config) -> list[entities.aws.SSOGroup]:
+    logger.info("Getting groups from config")
     try:
         groups = []
         for page in identity_store_client.get_paginator("list_groups").paginate(IdentityStoreId=identity_store_id):
@@ -368,13 +368,13 @@ def get_all_groups(identity_store_id: str, identity_store_client: IdentityStoreC
                     description=group.get("Description"),
                 )
                 for group in page["Groups"]
-                if group.get("DisplayName") and group.get("GroupId")
+                if group.get("DisplayName") and group.get("GroupId") in cfg.groups
             )
-        logger.info("Got information about all groups.")
+        groups = sorted(groups, key=lambda g: g.name)
         logger.debug("Groups", extra={"groups": groups})
         return groups
     except Exception as e:
-        logger.error("Error while getting information about all groups", extra={"error": e})
+        logger.error("Error while getting groups from config", extra={"error": e})
         raise e
 
 
