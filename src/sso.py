@@ -441,4 +441,21 @@ def describe_group(identity_store_id: str, group_id: str, identity_store_client:
         description = group.get("Description"),
     )
 
-#-----------------Group Assignments-----------------#
+def get_group_assignments(identity_store_id: str, identity_store_client: IdentityStoreClient, cfg: config.Config) -> list[GroupAssignment]:
+    logger.info("Getting group assignments")
+    groups = get_groups_from_config(identity_store_id, identity_store_client, cfg)
+    group_assignments = []
+    for group in groups:
+        group_memberships = list_group_memberships(identity_store_id, group.id, identity_store_client)
+        group_assignments.extend(
+            GroupAssignment(
+                group_name=group.name,
+                group_id=group.id,
+                user_principal_id=membership.user_principal_id,
+                membership_id=membership.membership_id,
+                identity_store_id=membership.identity_store_id,
+            )
+            for membership in group_memberships
+        )
+    logger.debug("Group assignments", extra={"group_assignments": group_assignments})
+    return group_assignments
