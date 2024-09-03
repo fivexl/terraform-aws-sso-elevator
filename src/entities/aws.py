@@ -18,3 +18,9 @@ class SSOGroup(BaseModel):
     id: str
     description: Optional[str]
     identity_store_id: str
+
+class GroupMembership(BaseModel):
+    user_principal_id: str
+    group_id: str
+    identity_store_id: str
+    membership_id: str
