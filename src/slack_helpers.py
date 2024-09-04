@@ -423,13 +423,14 @@ def get_max_duration_block(cfg: config.Config) -> list[Option]:
         for i in range(1, cfg.max_permissions_duration_time * 2 + 1)
     ]
 
+
 # Group
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 
 
 class RequestForGroupAccess(entities.BaseModel):
@@ -437,6 +438,7 @@ class RequestForGroupAccess(entities.BaseModel):
     reason: str
     requester_slack_id: str
     permission_duration: timedelta
+
 
 class RequestForGroupAccessView:
     __name__ = "RequestForGroupAccessView"
@@ -454,7 +456,7 @@ class RequestForGroupAccessView:
     LOADING_BLOCK_ID = "loading"
 
     @classmethod
-    def build(cls) -> View: # noqa: ANN102
+    def build(cls) -> View:  # noqa: ANN102
         return View(
             type="modal",
             callback_id=cls.CALLBACK_ID,
@@ -496,10 +498,9 @@ class RequestForGroupAccessView:
                 ),
             ],
         )
+
     @classmethod
-    def update_with_groups(
-        cls, groups: list[entities.aws.SSOGroup] # noqa: ANN102
-    ) -> View:
+    def update_with_groups(cls, groups: list[entities.aws.SSOGroup]) -> View:  # noqa: ANN102
         view = cls.build()
         view.blocks = remove_blocks(view.blocks, block_ids=[cls.LOADING_BLOCK_ID])
         view.blocks = insert_blocks(
@@ -512,7 +513,7 @@ class RequestForGroupAccessView:
         return view
 
     @classmethod
-    def build_select_group_input_block(cls, groups: list[entities.aws.SSOGroup]) -> InputBlock: # noqa: ANN102
+    def build_select_group_input_block(cls, groups: list[entities.aws.SSOGroup]) -> InputBlock:  # noqa: ANN102
         # TODO: handle case when there are more than 100 groups
         # 99 is the limit for StaticSelectElement
         # https://slack.dev/python-slack-sdk/api-docs/slack_sdk/models/blocks/block_elements.html#:~:text=StaticSelectElement(InputInteractiveElement)%3A%0A%20%20%20%20type%20%3D%20%22static_select%22-,options_max_length%20%3D%20100,-option_groups_max_length%20%3D%20100%0A%0A%20%20%20%20%40property%0A%20%20%20%20def%20attributes(
@@ -525,14 +526,12 @@ class RequestForGroupAccessView:
             element=StaticSelectElement(
                 action_id=cls.GROUP_ACTION_ID,
                 placeholder=PlainTextObject(text="Select group"),
-                options=[
-                    Option(text=PlainTextObject(text=f"{group.name}"), value=group.id) for group in sorted_groups
-                ],
+                options=[Option(text=PlainTextObject(text=f"{group.name}"), value=group.id) for group in sorted_groups],
             ),
         )
 
     @classmethod
-    def parse(cls, obj: dict) -> RequestForGroupAccess:# noqa: ANN102
+    def parse(cls, obj: dict) -> RequestForGroupAccess:  # noqa: ANN102
         values = jp.search("view.state.values", obj)
         hhmm = jp.search(f"{cls.DURATION_BLOCK_ID}.{cls.DURATION_ACTION_ID}.selected_option.value", values)
         hours, minutes = map(int, hhmm.split(":"))

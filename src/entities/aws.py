@@ -13,11 +13,13 @@ class PermissionSet(BaseModel):
     arn: str
     description: Optional[str]
 
+
 class SSOGroup(BaseModel):
     name: str
     id: str
     description: Optional[str]
     identity_store_id: str
+
 
 class GroupMembership(BaseModel):
     user_principal_id: str

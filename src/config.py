@@ -25,6 +25,7 @@ def parse_statement(_dict: dict) -> Statement:
         }
     )
 
+
 def parse_group_statement(_dict: dict) -> GroupStatement:
     def to_set_if_list_or_str(v: list | str) -> frozenset[str]:
         if isinstance(v, list):
@@ -39,6 +40,7 @@ def parse_group_statement(_dict: dict) -> GroupStatement:
             "allow_self_approval": _dict.get("AllowSelfApproval"),
         }
     )
+
 
 def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str]:
     return frozenset(group for statement in statements for group in statement.resource)

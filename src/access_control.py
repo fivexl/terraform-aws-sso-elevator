@@ -44,10 +44,10 @@ def determine_affected_statements(
     group_id: str | None = None,
 ) -> FrozenSet[Statement] | FrozenSet[GroupStatement]:
     if isinstance(statements, FrozenSet) and all(isinstance(item, Statement) for item in statements):
-        return get_affected_statements(statements, account_id, permission_set_name) #type: ignore # noqa: PGH003
+        return get_affected_statements(statements, account_id, permission_set_name)  # type: ignore # noqa: PGH003
 
     if isinstance(statements, FrozenSet) and all(isinstance(item, GroupStatement) for item in statements):
-        return get_affected_group_statements(statements, group_id) #type: ignore # noqa: PGH003
+        return get_affected_group_statements(statements, group_id)  # type: ignore # noqa: PGH003
 
     # About type ignore:
     # For some reason, pylance is not able to understand that we already checked the type of the items in the set,
@@ -77,16 +77,16 @@ def make_decision_on_access_request(  # noqa: PLR0911
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.ApprovalNotRequired,
-                based_on_statements=frozenset([statement]), #type: ignore # noqa: PGH003
+                based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
             )
         if requester_email in statement.approvers and statement.allow_self_approval and not explicit_deny_self_approval:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.SelfApproval,
-                based_on_statements=frozenset([statement]), #type: ignore # noqa: PGH003
+                based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
             )
 
-        decision_based_on_statements.add(statement) #type: ignore # noqa: PGH003
+        decision_based_on_statements.add(statement)  # type: ignore # noqa: PGH003
         potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
 
     if not decision_based_on_statements:
@@ -142,13 +142,13 @@ def make_decision_on_approve_request(  # noqa: PLR0913
                 return ApproveRequestDecision(
                     grant=action == entities.ApproverAction.Approve,
                     permit=True,
-                    based_on_statements=frozenset([statement]), #type: ignore # noqa: PGH003
+                    based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
                 )
 
     return ApproveRequestDecision(
         grant=False,
         permit=False,
-        based_on_statements=affected_statements, #type: ignore # noqa: PGH003
+        based_on_statements=affected_statements,  # type: ignore # noqa: PGH003
     )
 
 
@@ -195,8 +195,8 @@ def execute_decision(  # noqa: PLR0913
             request_id=account_assignment_status.request_id,
             operation_type="grant",
             permission_duration=permission_duration,
-            sso_user_principal_id = user_principal_id,
-            audit_entry_type = "account"
+            sso_user_principal_id=user_principal_id,
+            audit_entry_type="account",
         ),
     )
 
@@ -215,7 +215,6 @@ def execute_decision(  # noqa: PLR0913
     return True  # Temporary solution for testing
 
 
-
 def execute_decision_on_group_request(  # noqa: PLR0913
     decision: AccessRequestDecision | ApproveRequestDecision,
     group: entities.aws.SSOGroup,
@@ -225,7 +224,6 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     requester: entities.slack.User,
     reason: str,
     identity_store_id: str,
-
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -238,48 +236,40 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         sso_user_id=user_principal_id,
         identity_store_client=identitystore_client,
     ):
-        logger.info("User is already in the group",extra={
-            "group_id": group.id,
-            "user_id": user_principal_id,
-            "membership_id": membership_id
-            }
+        logger.info(
+            "User is already in the group", extra={"group_id": group.id, "user_id": user_principal_id, "membership_id": membership_id}
         )
     else:
-        membership_id = sso.add_user_to_a_group(group.id,user_principal_id,identity_store_id,identitystore_client)["MembershipId"]
-        logger.info("User added to the group",extra={
-            "group_id": group.id,
-            "user_id": user_principal_id,
-            "membership_id": membership_id
-            }
-        )
+        membership_id = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identitystore_client)["MembershipId"]
+        logger.info("User added to the group", extra={"group_id": group.id, "user_id": user_principal_id, "membership_id": membership_id})
 
     s3.log_operation(
         audit_entry=s3.AuditEntry(
-            group_name = group.name,
-            group_id = group.id,
-            reason = reason,
-            requester_slack_id = requester.id,
-            requester_email = requester.email,
-            approver_slack_id = approver.id,
-            approver_email = approver.email,
-            operation_type = "grant",
-            permission_duration = permission_duration,
-            audit_entry_type = "group",
-            sso_user_principal_id = user_principal_id,
-            ),
-        )
+            group_name=group.name,
+            group_id=group.id,
+            reason=reason,
+            requester_slack_id=requester.id,
+            requester_email=requester.email,
+            approver_slack_id=approver.id,
+            approver_email=approver.email,
+            operation_type="grant",
+            permission_duration=permission_duration,
+            audit_entry_type="group",
+            sso_user_principal_id=user_principal_id,
+        ),
+    )
 
     schedule.schedule_group_revoke_event(
-            permission_duration=permission_duration,
-            schedule_client=schedule_client,
-            approver=approver,
-            requester=requester,
-            group_assignment=sso.GroupAssignment(
-                identity_store_id=identity_store_id,
-                group_name=group.name,
-                group_id=group.id,
-                user_principal_id=user_principal_id,
-                membership_id=membership_id,
-            ),
-        )
-    return# type: ignore # noqa: PGH003
+        permission_duration=permission_duration,
+        schedule_client=schedule_client,
+        approver=approver,
+        requester=requester,
+        group_assignment=sso.GroupAssignment(
+            identity_store_id=identity_store_id,
+            group_name=group.name,
+            group_id=group.id,
+            user_principal_id=user_principal_id,
+            membership_id=membership_id,
+        ),
+    )
+    return  # type: ignore # noqa: PGH003

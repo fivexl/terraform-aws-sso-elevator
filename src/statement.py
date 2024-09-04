@@ -65,7 +65,8 @@ class GroupStatement(BaseModel):
     approvers: FrozenSet[EmailStr] = Field(default_factory=frozenset)
 
     def affects(self, group_id: str) -> bool:  # noqa: ANN101
-        return (group_id in self.resource)
+        return group_id in self.resource
+
 
 def get_affected_group_statements(statements: FrozenSet[GroupStatement], group_id: str) -> FrozenSet[GroupStatement]:
     return frozenset(statement for statement in statements if statement.affects(group_id))

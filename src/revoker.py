@@ -156,8 +156,8 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
             approver_email="NA",
             operation_type="revoke",
             permission_duration="NA",
-            sso_user_principal_id = account_assignment.user_principal_id,
-            audit_entry_type = "account",
+            sso_user_principal_id=account_assignment.user_principal_id,
+            audit_entry_type="account",
         ),
     )
 
@@ -184,9 +184,9 @@ def slack_notify_user_on_revoke(  # noqa: PLR0913
     slack_client: slack_sdk.WebClient,
 ) -> SlackResponse:
     mention = slack_helpers.create_slack_mention_by_principal_id(
-        sso_user_id= account_assignment.principal_id if isinstance(
-            account_assignment, sso.AccountAssignment
-            ) else account_assignment.user_principal_id,
+        sso_user_id=account_assignment.principal_id
+        if isinstance(account_assignment, sso.AccountAssignment)
+        else account_assignment.user_principal_id,
         sso_client=sso_client,
         cfg=cfg,
         identitystore_client=identitystore_client,
@@ -252,8 +252,8 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
             approver_email=revoke_event.approver.email,
             operation_type="revoke",
             permission_duration=revoke_event.permission_duration,
-            sso_user_principal_id = user_account_assignment.user_principal_id,
-            audit_entry_type = "account",
+            sso_user_principal_id=user_account_assignment.user_principal_id,
+            audit_entry_type="account",
         ),
     )
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
@@ -271,7 +271,6 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
         )
 
 
-
 def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     group_revoke_event: GroupRevokeEvent,
     sso_client: SSOAdminClient,
@@ -285,24 +284,24 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
     s3.log_operation(
         audit_entry=s3.AuditEntry(
-            group_name = group_assignment.group_name,
-            group_id = group_assignment.group_id,
-            reason = "scheduled_revocation",
-            requester_slack_id = group_revoke_event.requester.id,
-            requester_email = group_revoke_event.requester.email,
-            approver_slack_id = group_revoke_event.approver.id,
-            approver_email = group_revoke_event.approver.email,
-            operation_type = "revoke",
-            permission_duration = group_revoke_event.permission_duration,
-            sso_user_principal_id = group_assignment.user_principal_id,
-            audit_entry_type = "group"
-            ),
-        )
+            group_name=group_assignment.group_name,
+            group_id=group_assignment.group_id,
+            reason="scheduled_revocation",
+            requester_slack_id=group_revoke_event.requester.id,
+            requester_email=group_revoke_event.requester.email,
+            approver_slack_id=group_revoke_event.approver.id,
+            approver_email=group_revoke_event.approver.email,
+            operation_type="revoke",
+            permission_duration=group_revoke_event.permission_duration,
+            sso_user_principal_id=group_assignment.user_principal_id,
+            audit_entry_type="group",
+        ),
+    )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
     if cfg.post_update_to_slack:
         slack_notify_user_on_group_access_revoke(
             cfg=cfg,
-            group_assignment = group_assignment,
+            group_assignment=group_assignment,
             sso_client=sso_client,
             identitystore_client=identitystore_client,
             slack_client=slack_client,
@@ -327,7 +326,8 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             principal_id=scheduled_event.revoke_event.user_account_assignment.user_principal_id,
             principal_type="USER",
         )
-        for scheduled_event in scheduled_revoke_events if isinstance(scheduled_event, ScheduledRevokeEvent)
+        for scheduled_event in scheduled_revoke_events
+        if isinstance(scheduled_event, ScheduledRevokeEvent)
     ]
 
     for account_assignment in account_assignments:
@@ -335,9 +335,9 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             account = organizations.describe_account(org_client, account_assignment.account_id)
             logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
             mention = slack_helpers.create_slack_mention_by_principal_id(
-                sso_user_id= account_assignment.principal_id if isinstance(
-                    account_assignment, sso.AccountAssignment
-                    ) else account_assignment.user_principal_id,
+                sso_user_id=account_assignment.principal_id
+                if isinstance(account_assignment, sso.AccountAssignment)
+                else account_assignment.user_principal_id,
                 sso_client=sso_client,
                 cfg=cfg,
                 identitystore_client=identitystore_client,
@@ -362,14 +362,13 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             )
 
 
-
-def check_on_groups_inconsistency( # noqa: PLR0913
+def check_on_groups_inconsistency(  # noqa: PLR0913
     identity_store_client: IdentityStoreClient,
     sso_client: SSOAdminClient,
     scheduler_client: EventBridgeSchedulerClient,
     events_client: EventBridgeClient,
     cfg: config.Config,
-    slack_client:  slack_sdk.WebClient
+    slack_client: slack_sdk.WebClient,
 ) -> None:
     sso_instance_arn = cfg.sso_instance_arn
     sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
@@ -378,18 +377,20 @@ def check_on_groups_inconsistency( # noqa: PLR0913
     group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
     group_assignments_from_events = [
         sso.GroupAssignment(
-            group_name = scheduled_event.revoke_event.group_assignment.group_name,
-            group_id = scheduled_event.revoke_event.group_assignment.group_id,
-            user_principal_id = scheduled_event.revoke_event.group_assignment.user_principal_id,
-            membership_id = scheduled_event.revoke_event.group_assignment.membership_id,
-            identity_store_id = scheduled_event.revoke_event.group_assignment.identity_store_id,
-        ) for scheduled_event in scheduled_revoke_events if isinstance(scheduled_event, ScheduledGroupRevokeEvent)
+            group_name=scheduled_event.revoke_event.group_assignment.group_name,
+            group_id=scheduled_event.revoke_event.group_assignment.group_id,
+            user_principal_id=scheduled_event.revoke_event.group_assignment.user_principal_id,
+            membership_id=scheduled_event.revoke_event.group_assignment.membership_id,
+            identity_store_id=scheduled_event.revoke_event.group_assignment.identity_store_id,
+        )
+        for scheduled_event in scheduled_revoke_events
+        if isinstance(scheduled_event, ScheduledGroupRevokeEvent)
     ]
     for group_assignment in group_assignments:
         if group_assignment not in group_assignments_from_events:
             logger.warning("Group assignment is not in the scheduled events", extra={"assignment": group_assignment})
             mention = slack_helpers.create_slack_mention_by_principal_id(
-                sso_user_id= group_assignment.user_principal_id,
+                sso_user_id=group_assignment.user_principal_id,
                 sso_client=sso_client,
                 cfg=cfg,
                 identitystore_client=identity_store_client,
@@ -413,12 +414,13 @@ def check_on_groups_inconsistency( # noqa: PLR0913
                 ),
             )
 
+
 def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
     identity_store_client: IdentityStoreClient,
     sso_client: SSOAdminClient,
     scheduler_client: EventBridgeSchedulerClient,
     cfg: config.Config,
-    slack_client:  slack_sdk.WebClient
+    slack_client: slack_sdk.WebClient,
 ) -> None:
     sso_instance_arn = cfg.sso_instance_arn
     sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
@@ -427,12 +429,14 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
     group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
     group_assignments_from_events = [
         sso.GroupAssignment(
-            group_name = scheduled_event.revoke_event.group_assignment.group_name,
-            group_id = scheduled_event.revoke_event.group_assignment.group_id,
-            user_principal_id = scheduled_event.revoke_event.group_assignment.user_principal_id,
-            membership_id = scheduled_event.revoke_event.group_assignment.membership_id,
-            identity_store_id = scheduled_event.revoke_event.group_assignment.identity_store_id,
-        ) for scheduled_event in scheduled_revoke_events if isinstance(scheduled_event, ScheduledGroupRevokeEvent)
+            group_name=scheduled_event.revoke_event.group_assignment.group_name,
+            group_id=scheduled_event.revoke_event.group_assignment.group_id,
+            user_principal_id=scheduled_event.revoke_event.group_assignment.user_principal_id,
+            membership_id=scheduled_event.revoke_event.group_assignment.membership_id,
+            identity_store_id=scheduled_event.revoke_event.group_assignment.identity_store_id,
+        )
+        for scheduled_event in scheduled_revoke_events
+        if isinstance(scheduled_event, ScheduledGroupRevokeEvent)
     ]
     for group_assignment in group_assignments:
         if group_assignment in group_assignments_from_events:
@@ -445,23 +449,23 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
             sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
             s3.log_operation(
                 audit_entry=s3.AuditEntry(
-                    group_name = group_assignment.group_name,
-                    group_id = group_assignment.group_id,
-                    reason = "scheduled_revocation",
-                    requester_slack_id = "NA",
-                    requester_email = "NA",
-                    approver_slack_id = "NA",
-                    approver_email = "NA",
-                    operation_type = "revoke",
-                    permission_duration = "NA",
-                    audit_entry_type = "group",
-                    sso_user_principal_id = group_assignment.user_principal_id,
-                    ),
-                )
+                    group_name=group_assignment.group_name,
+                    group_id=group_assignment.group_id,
+                    reason="scheduled_revocation",
+                    requester_slack_id="NA",
+                    requester_email="NA",
+                    approver_slack_id="NA",
+                    approver_email="NA",
+                    operation_type="revoke",
+                    permission_duration="NA",
+                    audit_entry_type="group",
+                    sso_user_principal_id=group_assignment.user_principal_id,
+                ),
+            )
             if cfg.post_update_to_slack:
                 slack_notify_user_on_group_access_revoke(
                     cfg=cfg,
-                    group_assignment = group_assignment,
+                    group_assignment=group_assignment,
                     sso_client=sso_client,
                     identitystore_client=identitystore_client,
                     slack_client=slack_client,
@@ -486,7 +490,8 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
             principal_id=scheduled_event.revoke_event.user_account_assignment.user_principal_id,
             principal_type="USER",
         )
-        for scheduled_event in scheduled_revoke_events if isinstance(scheduled_event, ScheduledRevokeEvent)
+        for scheduled_event in scheduled_revoke_events
+        if isinstance(scheduled_event, ScheduledRevokeEvent)
     ]
     for account_assignment in account_assignments:
         if account_assignment in account_assignments_from_events:

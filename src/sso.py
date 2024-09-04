@@ -353,9 +353,12 @@ def get_account_assignment_information(
     )
 
 
-#-----------------Group Assignments-----------------#
+# -----------------Group Assignments-----------------#
 
-def get_groups_from_config(identity_store_id: str, identity_store_client: IdentityStoreClient, cfg: config.Config) -> list[entities.aws.SSOGroup]:
+
+def get_groups_from_config(
+    identity_store_id: str, identity_store_client: IdentityStoreClient, cfg: config.Config
+) -> list[entities.aws.SSOGroup]:
     logger.info("Getting groups from config")
     try:
         groups = []
@@ -364,7 +367,7 @@ def get_groups_from_config(identity_store_id: str, identity_store_client: Identi
                 entities.aws.SSOGroup(
                     id=group.get("GroupId"),
                     identity_store_id=group.get("IdentityStoreId"),
-                    name=group.get("DisplayName"), # type: ignore # noqa: PGH003
+                    name=group.get("DisplayName"),  # type: ignore # noqa: PGH003
                     description=group.get("Description"),
                 )
                 for group in page["Groups"]
@@ -379,18 +382,20 @@ def get_groups_from_config(identity_store_id: str, identity_store_client: Identi
 
 
 def add_user_to_a_group(
-    sso_group_id: str,
-    sso_user_id: str,
-    identity_store_id: str,
-    identity_store_client:IdentityStoreClient
+    sso_group_id: str, sso_user_id: str, identity_store_id: str, identity_store_client: IdentityStoreClient
 ) -> idc_type_defs.CreateGroupMembershipResponseTypeDef:
     responce = identity_store_client.create_group_membership(
-        GroupId=sso_group_id,
-        MemberId= {"UserId": sso_user_id},
-        IdentityStoreId=identity_store_id
+        GroupId=sso_group_id, MemberId={"UserId": sso_user_id}, IdentityStoreId=identity_store_id
     )
-    logger.info("User added to the group", extra={"group_id": sso_group_id, "user_id": sso_user_id, })
+    logger.info(
+        "User added to the group",
+        extra={
+            "group_id": sso_group_id,
+            "user_id": sso_user_id,
+        },
+    )
     return responce
+
 
 def remove_user_from_group(identity_store_id: str, membership_id: str, identity_store_client: IdentityStoreClient) -> Dict[str, Any]:
     responce = identity_store_client.delete_group_membership(IdentityStoreId=identity_store_id, MembershipId=membership_id)
@@ -400,10 +405,8 @@ def remove_user_from_group(identity_store_id: str, membership_id: str, identity_
 
 
 def list_group_memberships(
-        identity_store_id: str,
-        group_id: str,
-        identity_store_client: IdentityStoreClient
-    ) -> list[entities.aws.GroupMembership]:
+    identity_store_id: str, group_id: str, identity_store_client: IdentityStoreClient
+) -> list[entities.aws.GroupMembership]:
     logger.info("Listing group memberships")
     paginator = identity_store_client.get_paginator("list_group_memberships")
     group_memberships = []
@@ -425,9 +428,9 @@ def list_group_memberships(
 def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> str | None:
     group_memberships = list_group_memberships(identity_store_id, group_id, identity_store_client)
     for member in group_memberships:
-        if member.user_principal_id == sso_user_id: # type: ignore # noqa: PGH003
+        if member.user_principal_id == sso_user_id:  # type: ignore # noqa: PGH003
             logger.info("User is in the group", extra={"group": member})
-            return member["MembershipId"] # type: ignore # noqa: PGH003 (ignoring this because we checked if user is in the group)
+            return member["MembershipId"]  # type: ignore # noqa: PGH003 (ignoring this because we checked if user is in the group)
     return None
 
 
@@ -435,11 +438,12 @@ def describe_group(identity_store_id: str, group_id: str, identity_store_client:
     group = identity_store_client.describe_group(IdentityStoreId=identity_store_id, GroupId=group_id)
     logger.info("Group described", extra={"group": group})
     return entities.aws.SSOGroup(
-        id = group.get("GroupId"),
-        identity_store_id = group.get("IdentityStoreId"),
-        name = group.get("DisplayName"), # type: ignore # noqa: PGH003
-        description = group.get("Description"),
+        id=group.get("GroupId"),
+        identity_store_id=group.get("IdentityStoreId"),
+        name=group.get("DisplayName"),  # type: ignore # noqa: PGH003
+        description=group.get("Description"),
     )
+
 
 def get_group_assignments(identity_store_id: str, identity_store_client: IdentityStoreClient, cfg: config.Config) -> list[GroupAssignment]:
     logger.info("Getting group assignments")

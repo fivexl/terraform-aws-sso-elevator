@@ -20,7 +20,7 @@ from events import (
     GroupRevokeEvent,
     RevokeEvent,
     ScheduledRevokeEvent,
-    ScheduledGroupRevokeEvent
+    ScheduledGroupRevokeEvent,
 )
 
 logger = config.get_logger(service="schedule")
@@ -121,7 +121,6 @@ def get_and_delete_scheduled_revoke_event_if_already_exist(
             delete_schedule(client, scheduled_event.revoke_event.schedule_name)
 
 
-
 def event_bridge_schedule_after(td: timedelta) -> str:
     now = datetime.now(timezone.utc)
     return f"at({(now + td).replace(microsecond=0).isoformat().replace('+00:00', '')})"
@@ -177,7 +176,7 @@ def schedule_group_revoke_event(
         schedule_name=schedule_name,
         approver=approver,
         requester=requester,
-        group_assignment= group_assignment,
+        group_assignment=group_assignment,
         permission_duration=permission_duration,
     )
     get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, group_assignment)

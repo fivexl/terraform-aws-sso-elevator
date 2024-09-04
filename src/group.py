@@ -66,12 +66,12 @@ def handle_request_for_group_access_submittion(
         ts = slack_response["ts"]
         if ts is not None:
             schedule.schedule_discard_buttons_event(
-                schedule_client=schedule_client, #type: ignore # noqa: PGH003
+                schedule_client=schedule_client,  # type: ignore # noqa: PGH003
                 time_stamp=ts,
                 channel_id=cfg.slack_channel_id,
             )
             schedule.schedule_approver_notification_event(
-                schedule_client=schedule_client, #type: ignore # noqa: PGH003
+                schedule_client=schedule_client,  # type: ignore # noqa: PGH003
                 message_ts=ts,
                 channel_id=cfg.slack_channel_id,
                 time_to_wait=timedelta(
@@ -114,29 +114,29 @@ def handle_request_for_group_access_submittion(
     user_principal_id = sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email)
 
     access_control.execute_decision_on_group_request(
-        group = group,
-        user_principal_id = user_principal_id,
-        permission_duration = request.permission_duration,
-        approver = requester,
-        requester = requester,
-        reason = request.reason,
-        decision = decision,
+        group=group,
+        user_principal_id=user_principal_id,
+        permission_duration=request.permission_duration,
+        approver=requester,
+        requester=requester,
+        reason=request.reason,
+        decision=decision,
         identity_store_id=identity_store_id,
     )
 
     if decision.grant:
-
         client.chat_postMessage(
             channel=cfg.slack_channel_id,
             text=f"Permissions granted to <@{requester.id}>",
             thread_ts=slack_response["ts"],
         )
 
+
 cache_for_dublicate_requests = {}
 
 
 @handle_errors
-def handle_group_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  #type: ignore # noqa: PGH003 ARG001
+def handle_group_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # type: ignore # noqa: PGH003 ARG001
     logger.info("Handling button click")
     payload = slack_helpers.ButtonGroupClickedPayload.parse_obj(body)
     logger.info("Button click payload", extra={"payload": payload})
@@ -154,7 +154,6 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         )
     cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
     cache_for_dublicate_requests["group_id"] = payload.request.group_id
-
 
     if payload.action == entities.ApproverAction.Discard:
         blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
@@ -182,7 +181,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 
     decision = access_control.make_decision_on_approve_request(
         action=payload.action,
-        statements=cfg.group_statements, #type: ignore # noqa: PGH003
+        statements=cfg.group_statements,  # type: ignore # noqa: PGH003
         group_id=payload.request.group_id,
         approver_email=approver.email,
         requester_email=requester.email,
@@ -215,13 +214,13 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 
     access_control.execute_decision_on_group_request(
         decision=decision,
-        group = sso.describe_group(identity_store_id, payload.request.group_id, identity_store_client),
-        user_principal_id = sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email),
+        group=sso.describe_group(identity_store_id, payload.request.group_id, identity_store_client),
+        user_principal_id=sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email),
         permission_duration=payload.request.permission_duration,
         approver=approver,
         requester=requester,
         reason=payload.request.reason,
-        identity_store_id=identity_store_id
+        identity_store_id=identity_store_id,
     )
     cache_for_dublicate_requests.clear()
     return client.chat_postMessage(

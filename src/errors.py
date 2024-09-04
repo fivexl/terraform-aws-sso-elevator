@@ -46,4 +46,3 @@ def handle_errors(fn):  # noqa: ANN001, ANN201
             error_handler(client=client, e=e, logger=logger, context=context, cfg=cfg)
 
     return wrapper
-

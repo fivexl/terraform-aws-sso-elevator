@@ -46,10 +46,10 @@ trigger_view_map = {}
 
 
 def build_initial_form_handler(
-    view_class: slack_helpers.RequestForAccessView |
-    slack_helpers.RequestForGroupAccessView
+    view_class: slack_helpers.RequestForAccessView | slack_helpers.RequestForGroupAccessView,
 ) -> Callable[[WebClient, dict, Ack], SlackResponse]:
-    def show_initial_form_for_request(client: WebClient,
+    def show_initial_form_for_request(
+        client: WebClient,
         body: dict,
         ack: Ack,
     ) -> SlackResponse:
@@ -60,7 +60,9 @@ def build_initial_form_handler(
         response = client.views_open(trigger_id=trigger_id, view=view_class.build())
         trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
         return response
+
     return show_initial_form_for_request
+
 
 def load_select_options_for_group_access_request(client: WebClient, body: dict) -> SlackResponse:
     logger.info("Loading select options for view (groups)")
@@ -86,13 +88,13 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
 
 
 app.shortcut("request_for_access")(
-    build_initial_form_handler(view_class=slack_helpers.RequestForAccessView), #type: ignore # noqa: PGH003
-    load_select_options_for_account_access_request
+    build_initial_form_handler(view_class=slack_helpers.RequestForAccessView),  # type: ignore # noqa: PGH003
+    load_select_options_for_account_access_request,
 )
 
 app.shortcut("request_for_group_membership")(
-    build_initial_form_handler(view_class=slack_helpers.RequestForGroupAccessView), #type: ignore # noqa: PGH003
-    load_select_options_for_group_access_request
+    build_initial_form_handler(view_class=slack_helpers.RequestForGroupAccessView),  # type: ignore # noqa: PGH003
+    load_select_options_for_group_access_request,
 )
 
 cache_for_dublicate_requests = {}
