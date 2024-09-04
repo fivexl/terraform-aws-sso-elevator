@@ -88,6 +88,12 @@ class Config(BaseSettings):
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
         statements = {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
         group_statements = {parse_group_statement(st) for st in values.get("group_statements", [])}  # type: ignore # noqa: PGH003
+        if not group_statements and not statements:
+            raise ValueError(
+                """
+                At least one type of config is requred,
+                please provide 'config' or 'group_config' variable to terraform module"""
+            )
         groups = get_groups_from_statements(group_statements)
         permission_sets = set()
         accounts = set()
