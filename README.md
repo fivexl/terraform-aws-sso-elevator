@@ -5,6 +5,7 @@
 - [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack)
 - [Introduction](#introduction)
 - [Functionality](#functionality)
+  - [Group Assignments Mode](#group-assignments-mode)
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
 - [Deployment and Usage](#deployment-and-usage)
   - [Note on dependencies](#note-on-dependencies)
@@ -69,6 +70,50 @@ For auditing purposes, information about all access grants and revocations is st
 
 Additionally, the Access-Revoker continuously reconciles the revocation schedule with all user-level permission set assignments and issues warnings if it detects assignments without a revocation schedule (presumably created by someone manually). By default, the Access-Revoker will automatically revoke all unknown user-level permission set assignments daily. However, you can configure it to operate more or less frequently.
 
+## Group Assignments Mode
+Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access. Users can now use the /group-access command, which, instead of showing the form for account assignments, will present a Slack form where the user can select a group they want access to, specify a reason, and define the duration for which access is required.
+
+The basic logic for access, configuration, and Slack integration remains the same as before. To enable the new Group Assignments Mode, you need to provide the module with a new group_config Terraform variable:
+```hcl
+group_config = [
+    {              
+      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+      "ApprovalIsNotRequired": true
+    },
+    {              
+      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+      "AllowSelfApproval" : true,
+    },
+    {
+      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+    },
+]
+```
+There are two key differences compared to the standard Elevator configuration:
+- ResourceType is not required for group access configurations.
+- In the Resource field, you must provide group IDs instead of account IDs.
+
+The Elevator will only work with groups specified in the configuration.
+
+If you were using Terraform AWS SSO Elevator before version 2.0.0, you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
+{
+    "name": "group-access",
+    "type": "global",
+    "callback_id": "request_for_group_membership",
+    "description": "Request access to SSO Group"
+}
+To disable this functionality, simply remove the shortcut from the manifest.
+
+
 # Important Considerations and Assumptions
 
 SSO elevator assumes that your Slack user email will match SSO user id otherwise it won't be able to match Slack user sending request to an AWS SSO user.
@@ -94,20 +139,20 @@ ECR is private for the following reasons:
 
 Images and repositories are replicated in every region that AWS SSO supports exept these:
 ```
-# ap_east_1
-# eu_south_1
-# ap_southeast_3
-# af_south_1
-# me_south_1
-# il_central_1
-# me_central_1
-# eu_south_2
-# ap_south_2
-# eu_central_2
-# ap_southeast_4
-# ca_west_1
-# us_gov_east_1
-# us_gov_west_1
+- ap_east_1
+- eu_south_1
+- ap_southeast_3
+- af_south_1
+- me_south_1
+- il_central_1
+- me_central_1
+- eu_south_2
+- ap_south_2
+- eu_central_2
+- ap_southeast_4
+- ca_west_1
+- us_gov_east_1
+- us_gov_west_1
 ```
 Those regions are not enabled by deafult. If you need to use a region that is not supported by the module, please let us know by creating an issue, and we will add support for it. 
 
@@ -327,6 +372,28 @@ module "aws_sso_elevator" {
     },
 
   ]
+group_config = [
+    {              
+      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+      "ApprovalIsNotRequired": true
+    },
+    {              
+      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+      "AllowSelfApproval" : true,
+    },
+    {
+      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+    },
+]
 }
 
 output "aws_sso_elevator_lambda_function_url" {
@@ -354,6 +421,10 @@ features:
       type: global
       callback_id: request_for_access
       description: Request access to Permission Set in AWS Account
+    - name: group-access # Delete this shortcut if you want to prohibit access to the Group Assignments Mode
+      type: global
+      callback_id: request_for_group_membership
+      description: Request access to SSO Group
 oauth_config:
   scopes:
     bot:
