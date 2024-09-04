@@ -195,6 +195,8 @@ def execute_decision(  # noqa: PLR0913
             request_id=account_assignment_status.request_id,
             operation_type="grant",
             permission_duration=permission_duration,
+            sso_user_principal_id = user_principal_id,
+            audit_entry_type = "account"
         ),
     )
 
@@ -252,19 +254,18 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         )
 
     s3.log_operation(
-        audit_entry=s3.GroupAccessAuditEntry(
+        audit_entry=s3.AuditEntry(
             group_name = group.name,
             group_id = group.id,
-            membership_id = membership_id,
             reason = reason,
             requester_slack_id = requester.id,
             requester_email = requester.email,
-            approver_slack_id = "NA",
-            approver_email = "NA",
+            approver_slack_id = approver.id,
+            approver_email = approver.email,
             operation_type = "grant",
             permission_duration = permission_duration,
             audit_entry_type = "group",
-            user_principal_id = user_principal_id,
+            sso_user_principal_id = user_principal_id,
             ),
         )
 

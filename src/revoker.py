@@ -156,6 +156,8 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
             approver_email="NA",
             operation_type="revoke",
             permission_duration="NA",
+            sso_user_principal_id = account_assignment.user_principal_id,
+            audit_entry_type = "account",
         ),
     )
 
@@ -250,6 +252,8 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
             approver_email=revoke_event.approver.email,
             operation_type="revoke",
             permission_duration=revoke_event.permission_duration,
+            sso_user_principal_id = user_account_assignment.user_principal_id,
+            audit_entry_type = "account",
         ),
     )
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
@@ -280,10 +284,9 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     group_assignment = group_revoke_event.group_assignment
     sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
     s3.log_operation(
-        audit_entry=s3.GroupAccessAuditEntry(
+        audit_entry=s3.AuditEntry(
             group_name = group_assignment.group_name,
             group_id = group_assignment.group_id,
-            membership_id = group_assignment.membership_id, # type: ignore # noqa: PGH003
             reason = "scheduled_revocation",
             requester_slack_id = group_revoke_event.requester.id,
             requester_email = group_revoke_event.requester.email,
@@ -291,6 +294,8 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
             approver_email = group_revoke_event.approver.email,
             operation_type = "revoke",
             permission_duration = group_revoke_event.permission_duration,
+            sso_user_principal_id = group_assignment.user_principal_id,
+            audit_entry_type = "group"
             ),
         )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
@@ -439,10 +444,9 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
         else:
             sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
             s3.log_operation(
-                audit_entry=s3.GroupAccessAuditEntry(
+                audit_entry=s3.AuditEntry(
                     group_name = group_assignment.group_name,
                     group_id = group_assignment.group_id,
-                    membership_id = group_assignment.membership_id,
                     reason = "scheduled_revocation",
                     requester_slack_id = "NA",
                     requester_email = "NA",
@@ -451,7 +455,7 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
                     operation_type = "revoke",
                     permission_duration = "NA",
                     audit_entry_type = "group",
-                    user_principal_id = group_assignment.user_principal_id,
+                    sso_user_principal_id = group_assignment.user_principal_id,
                     ),
                 )
             if cfg.post_update_to_slack:
