@@ -17,20 +17,41 @@ VALID_STATEMENT_DICT = {
     "PermissionSet": "AdministratorAccess",
     "Approvers": "example@gmail.com",
 }
+VALID_GROUP_STATEMENT_DICT = {
+    "Resource": ["11111111-2222-3333-4444-555555555555"],
+    "Approvers": "example@gmail.com",
+    "AllowSelfApproval": True,
+}
+                  
 
 
 @given(strategies.statement_dict())
 @settings(max_examples=100)
 @example({}).xfail(raises=KeyError, reason="Empty dict is not a valid statement")
 @example(VALID_STATEMENT_DICT)
-def test_parse_statement(dict_statement: dict):
+@example(VALID_GROUP_STATEMENT_DICT)
+def test_parse_statement(dict_statement: dict, dict_group_statement: dict):
     try:
         config.parse_statement(dict_statement)
     except ValidationError:
         assert False
 
 
-def config_dict(statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.statement_dict()))):
+@given(strategies.group_statement_dict())
+@settings(max_examples=100)
+@example({}).xfail(raises=KeyError, reason="Empty dict is not a valid group_statement")
+@example(VALID_GROUP_STATEMENT_DICT)  
+def test_parse_group_statement(dict_group_statement: dict):
+    try:
+        config.parse_group_statement(dict_group_statement)
+    except ValidationError:
+        assert False
+
+
+def config_dict(
+    statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.statement_dict())),
+    group_statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.group_statement_dict())),
+):
     return st.fixed_dictionaries(
         {
             "schedule_policy_arn": strategies.json_safe_text,
@@ -46,6 +67,7 @@ def config_dict(statements: SearchStrategy = strategies.jsonstr(st.lists(strateg
             "log_level": st.one_of(st.just("INFO"), st.just("DEBUG"), st.just("WARNING"), st.just("ERROR"), st.just("CRITICAL")),
             "post_update_to_slack": strategies.str_bool,
             "statements": statements,
+            "group_statements": group_statements,
             "request_expiration_hours": st.integers(min_value=0, max_value=24),
             "approver_renotification_initial_wait_time": st.integers(min_value=0, max_value=60),
             "approver_renotification_backoff_multiplier": st.integers(min_value=0, max_value=10),
@@ -54,11 +76,20 @@ def config_dict(statements: SearchStrategy = strategies.jsonstr(st.lists(strateg
     )
 
 
-def valid_config_dict(statements_as_json: bool = True):
+
+def valid_config_dict(
+    statements_as_json: bool = True,
+    group_statements_as_json: bool = True
+):
     if statements_as_json:
         statements = json.dumps([VALID_STATEMENT_DICT])
     else:
         statements = [VALID_STATEMENT_DICT]
+    
+    if group_statements_as_json:
+        group_statements = json.dumps([VALID_GROUP_STATEMENT_DICT])
+    else:
+        group_statements = [VALID_GROUP_STATEMENT_DICT]
     return {
         "schedule_policy_arn": "x",
         "revoker_function_arn": "x",
@@ -70,6 +101,7 @@ def valid_config_dict(statements_as_json: bool = True):
         "log_level": "INFO",
         "post_update_to_slack": "False",
         "statements": statements,
+        "group_statements": group_statements,
         "s3_bucket_for_audit_entry_name": "x",
         "s3_bucket_prefix_for_partitions": "x",
         "sso_elevator_scheduled_revocation_rule_name": "x",

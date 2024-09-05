@@ -18,6 +18,9 @@ def jsonstr(strategy: SearchStrategy) -> SearchStrategy:
 # https://docs.aws.amazon.com/organizations/latest/APIReference/API_CreateAccountStatus.html
 aws_account_id = st.text(min_size=12, max_size=12, alphabet=string.digits)
 
+# group draw:
+group_id = st.text(min_size=36, max_size=36, alphabet=string.ascii_letters + string.digits + "-")
+
 # https://docs.aws.amazon.com/singlesignon/latest/APIReference/API_CreatePermissionSet.html#singlesignon-CreatePermissionSet-request-Name
 aws_permission_set_name = st.text(min_size=1, max_size=32, alphabet=string.ascii_letters + string.digits + "_+=,.@-")
 
@@ -74,8 +77,26 @@ def statement_dict(
             ),
         },
         optional={
-            "Approvers": st.one_of(st.emails(), st.lists(st.emails(), max_size=20)),
+            "Approvers": st.one_of(st.emails(), st.lists(st.emails(), max_size=20)), #type: ignore no
             "ApprovalIsNotRequired": st.booleans(),
             "AllowSelfApproval": st.booleans(),
         },
+    )
+
+
+@st.composite
+def group_resource(draw: st.DrawFn, ):
+    return draw(group_id)
+
+def group_statement_dict():
+    resource_strategy = group_resource()
+    return st.fixed_dictionaries(
+        mapping={
+            "Resource": st.one_of(resource_strategy, st.lists(resource_strategy, max_size=20), st.just("*")),
+        },
+        optional={
+            "Approvers": st.one_of(st.emails(), st.lists(st.emails(), max_size=20)),
+            "ApprovalIsNotRequired": st.booleans(),
+            "AllowSelfApproval": st.booleans(),
+        },# type: ignore # noqa: PGH003
     )
