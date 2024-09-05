@@ -18,7 +18,7 @@ VALID_STATEMENT_DICT = {
     "Approvers": "example@gmail.com",
 }
 VALID_GROUP_STATEMENT_DICT = {
-    "Resource": ["11111111-2222-3333-4444-555555555555"],
+    "Resource": ["11e111e1-e111-11ee-e111-1e11e1ee11e1"],
     "Approvers": "example@gmail.com",
     "AllowSelfApproval": True,
 }
