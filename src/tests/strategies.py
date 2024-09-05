@@ -25,15 +25,17 @@ def build_group_id_strategy():
     second_part = st.text(min_size=8, max_size=8, alphabet=full_alphabet_group_id)
     third_part = st.text(min_size=4, max_size=4, alphabet=full_alphabet_group_id)
     fourth_part = st.text(min_size=4, max_size=4, alphabet=full_alphabet_group_id)
-    fifth_part = st.text(min_size=12, max_size=12, alphabet=full_alphabet_group_id)
+    fifth_part = st.text(min_size=4, max_size=4, alphabet=full_alphabet_group_id)
+    sixth_part = st.text(min_size=12, max_size=12, alphabet=full_alphabet_group_id)
 
     return st.builds(
-        lambda first, second, third, fourth, fifth: f"{first}{('-' if first else '')}{second}-{third}-{fourth}-{fifth}",
+        lambda first, second, third, fourth, fifth, sixth: f"{first}{('-' if first else '')}{second}-{third}-{fourth}-{fifth}-{sixth}",
         first_ten,
         second_part,
         third_part,
         fourth_part,
-        fifth_part
+        fifth_part,
+        sixth_part
     )
 group_id = build_group_id_strategy()
 
