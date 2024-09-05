@@ -14,27 +14,27 @@ def jsonstr(strategy: SearchStrategy) -> SearchStrategy:
         strategy,
     )
 
-
 def build_group_id_strategy():
     lover_alphabet_group_id = ["a", "b", "c", "d", "e", "f", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
     full_alphabet_group_id = lover_alphabet_group_id + ["A", "B", "C", "D", "E", "F"]
 
-    # Strategies for different parts of the group ID
-    first_ten = st.text(min_size=10, max_size=10, alphabet=lover_alphabet_group_id)
+    first_ten = st.one_of(
+        st.text(min_size=0, max_size=0),
+        st.text(min_size=10, max_size=10, alphabet=lover_alphabet_group_id)
+    )
     second_part = st.text(min_size=8, max_size=8, alphabet=full_alphabet_group_id)
     third_part = st.text(min_size=4, max_size=4, alphabet=full_alphabet_group_id)
     fourth_part = st.text(min_size=4, max_size=4, alphabet=full_alphabet_group_id)
     fifth_part = st.text(min_size=12, max_size=12, alphabet=full_alphabet_group_id)
 
     return st.builds(
-        lambda first, second, third, fourth, fifth: f"{first}-{second}-{third}-{fourth}-{fifth}",
+        lambda first, second, third, fourth, fifth: f"{first}{('-' if first else '')}{second}-{third}-{fourth}-{fifth}",
         first_ten,
         second_part,
         third_part,
         fourth_part,
         fifth_part
     )
-
 group_id = build_group_id_strategy()
 
 # https://docs.aws.amazon.com/organizations/latest/APIReference/API_CreateAccountStatus.html
