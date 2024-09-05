@@ -1,4 +1,4 @@
-import datetime 
+import datetime
 import time
 from datetime import timedelta, timezone
 from typing import Optional, TypeVar, Union
@@ -308,6 +308,7 @@ class ButtonClickedPayload(BaseModel):
 
     @root_validator(pre=True)
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
+        message = values["message"]
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
@@ -320,7 +321,7 @@ class ButtonClickedPayload(BaseModel):
             "approver_slack_id": jp.search("user.id", values),
             "thread_ts": jp.search("message.ts", values),
             "channel_id": jp.search("channel.id", values),
-            "message": values.get("message"),
+            "message": message,
             "request": RequestForAccess(
                 requester_slack_id=requester_slack_id,
                 account_id=account_id,
@@ -559,6 +560,7 @@ class ButtonGroupClickedPayload(BaseModel):
 
     @root_validator(pre=True)
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
+        message = values["message"]
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
@@ -571,7 +573,7 @@ class ButtonGroupClickedPayload(BaseModel):
             "approver_slack_id": jp.search("user.id", values),
             "thread_ts": jp.search("message.ts", values),
             "channel_id": jp.search("channel.id", values),
-            "message": values.get("message"),
+            "message": message,
             "request": RequestForGroupAccess(
                 requester_slack_id=requester_slack_id,
                 group_id=group_id,
