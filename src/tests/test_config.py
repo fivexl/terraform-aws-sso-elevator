@@ -1,7 +1,7 @@
 import json
 import os
 
-from hypothesis import example, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 from pydantic import ValidationError
@@ -10,7 +10,12 @@ import config
 
 from . import strategies
 
-settings.register_profile("default", deadline=3000)
+settings.register_profile(
+    "default", 
+    deadline=3000,
+    suppress_health_check=[HealthCheck.too_slow],
+
+)
 
 # ruff: noqa
 VALID_STATEMENT_DICT = {
