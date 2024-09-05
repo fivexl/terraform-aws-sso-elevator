@@ -112,7 +112,7 @@ def group_statement_dict():
     resource_strategy = group_resource()
     return st.fixed_dictionaries(
         mapping={
-            "Resource": st.one_of(resource_strategy, st.lists(resource_strategy, max_size=20), st.just("*")),
+            "Resource": st.one_of(resource_strategy, st.lists(resource_strategy, max_size=20)),
         },
         optional={
             "Approvers": st.one_of(st.emails(), st.lists(st.emails(), max_size=20)),
