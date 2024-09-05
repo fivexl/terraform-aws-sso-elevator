@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from datetime import timezone
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, Optional, TypeVar
@@ -127,12 +128,12 @@ def retry_while(
     timeout_seconds: int = 20,
 ) -> T:
     # If timeout_seconds -1, then retry forever.
-    start = datetime.datetime.now()
+    start = datetime.datetime.now(timezone.utc)
 
     def is_timeout(timeout_seconds: int) -> bool:
         if timeout_seconds == -1:
             return False
-        return datetime.datetime.now() - start >= datetime.timedelta(seconds=timeout_seconds)
+        return datetime.datetime.now(timezone.utc) - start >= datetime.timedelta(seconds=timeout_seconds)
 
     while True:
         response = fn()

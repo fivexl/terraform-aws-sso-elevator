@@ -1,7 +1,7 @@
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import boto3
@@ -35,7 +35,7 @@ class AuditEntry:
 
 
 def log_operation(audit_entry: AuditEntry) -> type_defs.PutObjectOutputTypeDef:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     logger.debug("Posting audit entry to s3", extra={"audit_entry": audit_entry})
     logger.info("Posting audit entry to s3")
     if isinstance(audit_entry.permission_duration, timedelta):

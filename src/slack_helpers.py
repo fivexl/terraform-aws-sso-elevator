@@ -1,6 +1,6 @@
-import datetime
+import datetime 
 import time
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Optional, TypeVar, Union
 
 import jmespath as jp
@@ -350,14 +350,14 @@ def get_user(client: WebClient, id: str) -> entities.slack.User:
 
 
 def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
-    start = datetime.datetime.now()
+    start = datetime.datetime.now(timezone.utc)
     timeout_seconds = 30
     try:
         r = client.users_lookupByEmail(email=email)
         return parse_user(r.data)  # type: ignore
     except slack_sdk.errors.SlackApiError as e:
         if e.response["error"] == "ratelimited":
-            if datetime.datetime.now() - start >= datetime.timedelta(seconds=timeout_seconds):
+            if datetime.datetime.now(timezone.utc) - start >= datetime.timedelta(seconds=timeout_seconds):
                 raise e
             logger.info(f"Rate limited when getting slack user by email. Sleeping for 3 seconds. {e}")
             time.sleep(3)

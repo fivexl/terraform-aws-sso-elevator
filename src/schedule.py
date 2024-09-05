@@ -42,7 +42,7 @@ def get_next_cron_run_time(cron_expression: str, base_time: datetime) -> datetim
 
 def check_rule_expression_and_get_next_run(rule: events_type_defs.DescribeRuleResponseTypeDef) -> datetime | str:
     schedule_expression = rule["ScheduleExpression"]
-    current_time = datetime.utcnow()
+    current_time = datetime.now(timezone.utc)
     logger.debug(f"Current time: {current_time}")
     logger.debug(f"Schedule expression: {schedule_expression}")
 
@@ -134,7 +134,7 @@ def schedule_revoke_event(
     user_account_assignment: sso.UserAccountAssignment,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
     logger.info("Scheduling revoke event")
-    schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, user_account_assignment)
     revoke_event = RevokeEvent(
         schedule_name=schedule_name,
@@ -171,7 +171,7 @@ def schedule_group_revoke_event(
     group_assignment: sso.GroupAssignment,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
     logger.info("Scheduling revoke event")
-    schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     revoke_event = GroupRevokeEvent(
         schedule_name=schedule_name,
         approver=approver,
@@ -211,7 +211,7 @@ def schedule_discard_buttons_event(
     permission_duration = timedelta(hours=cfg.request_expiration_hours)
 
     logger.info("Scheduling discard buttons event")
-    schedule_name = "discard-buttons" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = "discard-buttons" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     logger.debug(
         "Creating schedule",
         extra={
@@ -254,7 +254,7 @@ def schedule_approver_notification_event(
         return
 
     logger.info("Scheduling approver notification event")
-    schedule_name = "approvers-renotification" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = "approvers-renotification" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     logger.debug(
         "Creating schedule",
         extra={
