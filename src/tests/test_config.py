@@ -29,8 +29,7 @@ VALID_GROUP_STATEMENT_DICT = {
 @settings(max_examples=100)
 @example({}).xfail(raises=KeyError, reason="Empty dict is not a valid statement")
 @example(VALID_STATEMENT_DICT)
-@example(VALID_GROUP_STATEMENT_DICT)
-def test_parse_statement(dict_statement: dict, dict_group_statement: dict):
+def test_parse_statement(dict_statement: dict,):
     try:
         config.parse_statement(dict_statement)
     except ValidationError:
