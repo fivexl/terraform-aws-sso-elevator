@@ -105,7 +105,7 @@ def statement_dict(
 
 
 @st.composite
-def group_resource(draw: st.DrawFn, ):
+def group_resource(draw: st.DrawFn):
     return draw(group_id)
 
 def group_statement_dict():

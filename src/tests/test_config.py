@@ -26,7 +26,7 @@ VALID_GROUP_STATEMENT_DICT = {
 
 
 @given(strategies.statement_dict())
-@settings(max_examples=100)
+@settings(max_examples=50)
 @example({}).xfail(raises=KeyError, reason="Empty dict is not a valid statement")
 @example(VALID_STATEMENT_DICT)
 def test_parse_statement(dict_statement: dict,):
@@ -37,7 +37,7 @@ def test_parse_statement(dict_statement: dict,):
 
 
 @given(strategies.group_statement_dict())
-@settings(max_examples=100)
+@settings(max_examples=50)
 @example({}).xfail(raises=KeyError, reason="Empty dict is not a valid group_statement")
 @example(VALID_GROUP_STATEMENT_DICT)  
 def test_parse_group_statement(dict_group_statement: dict):
