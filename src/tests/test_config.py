@@ -10,6 +10,8 @@ import config
 
 from . import strategies
 
+settings.register_profile("default", deadline=3000)
+
 # ruff: noqa
 VALID_STATEMENT_DICT = {
     "ResourceType": "Account",
