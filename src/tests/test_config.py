@@ -77,8 +77,28 @@ def valid_config_dict(statements_as_json: bool = True):
         "approver_renotification_initial_wait_time": "15",
         "approver_renotification_backoff_multiplier": "2",
         "max_permissions_duration_time": "24",
-        "statements": "[]",
-        "group_statements": "[]",
+        "statements": json.dumps(
+            [
+                {
+                    "ResourceType" : "Account",
+                    "Resource" : ["*"],
+                    "PermissionSet" : "*",
+                    "Approvers" : ["email@domen.com",],
+                    "AllowSelfApproval" : True,
+                }
+            ]
+        ),
+        "group_statements": json.dumps(
+            [
+                {
+                    "Resource" : ["11111111-2222-3333-4444-555555555555"],
+                    "Approvers" : [
+                        "email@domen.com"
+                    ],
+                    "AllowSelfApproval" : True,
+                },
+            ]
+        )
     }
 
 
