@@ -77,6 +77,8 @@ def valid_config_dict(statements_as_json: bool = True):
         "approver_renotification_initial_wait_time": "15",
         "approver_renotification_backoff_multiplier": "2",
         "max_permissions_duration_time": "24",
+        "statements": "[]",
+        "group_statements": "[]",
     }
 
 
