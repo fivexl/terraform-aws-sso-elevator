@@ -22,6 +22,8 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "approver_renotification_initial_wait_time": "15",
         "approver_renotification_backoff_multiplier": "2",
         "max_permissions_duration_time": "24",
+        "statements": "[]",
+        "group_statements": "[]",
     }
     os.environ |= mock_env
 
