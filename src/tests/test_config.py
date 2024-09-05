@@ -121,9 +121,14 @@ def test_config_load_environment_variables(dict_config: dict):
     config.Config()  # type: ignore
 
 
-@given(config_dict(statements=st.lists(strategies.statement_dict(), max_size=20)))
+@given(
+    config_dict(
+        statements=st.lists(strategies.statement_dict(), max_size=20),
+        group_statements=st.lists(strategies.group_statement_dict(), max_size=20),
+    )
+)
 @settings(max_examples=50)
-@example(valid_config_dict(statements_as_json=False))
-@example(valid_config_dict(statements_as_json=False) | {"post_update_to_slack": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
+@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False))
+@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False) | {"post_update_to_slack": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
 def test_config_init(dict_config: dict):
     config.Config(**dict_config)
