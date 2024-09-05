@@ -10,13 +10,6 @@ import config
 
 from . import strategies
 
-settings.register_profile(
-    "default", 
-    deadline=3000,
-    suppress_health_check=[HealthCheck.too_slow],
-
-)
-
 # ruff: noqa
 VALID_STATEMENT_DICT = {
     "ResourceType": "Account",
@@ -33,7 +26,7 @@ VALID_GROUP_STATEMENT_DICT = {
 
 
 @given(strategies.statement_dict())
-@settings(max_examples=50)
+@settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 @example({}).xfail(raises=KeyError, reason="Empty dict is not a valid statement")
 @example(VALID_STATEMENT_DICT)
 def test_parse_statement(dict_statement: dict,):
@@ -44,7 +37,7 @@ def test_parse_statement(dict_statement: dict,):
 
 
 @given(strategies.group_statement_dict())
-@settings(max_examples=50)
+@settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 @example({}).xfail(raises=KeyError, reason="Empty dict is not a valid group_statement")
 @example(VALID_GROUP_STATEMENT_DICT)  
 def test_parse_group_statement(dict_group_statement: dict):
@@ -122,7 +115,7 @@ def valid_config_dict(
 @example(valid_config_dict())
 @example({}).xfail(raises=ValidationError, reason="Empty dict is not a valid config")
 @example(valid_config_dict() | {"post_update_to_slack": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
-@settings(max_examples=50)
+@settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 def test_config_load_environment_variables(dict_config: dict):
     os.environ = dict_config
     config.Config()  # type: ignore
@@ -134,7 +127,7 @@ def test_config_load_environment_variables(dict_config: dict):
         group_statements=st.lists(strategies.group_statement_dict(), max_size=20),
     )
 )
-@settings(max_examples=50)
+@settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 @example(valid_config_dict(statements_as_json=False, group_statements_as_json=False))
 @example(valid_config_dict(statements_as_json=False, group_statements_as_json=False) | {"post_update_to_slack": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
 def test_config_init(dict_config: dict):
