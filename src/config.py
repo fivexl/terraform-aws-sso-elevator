@@ -118,6 +118,7 @@ class Config(BaseSettings):
         groups = get_groups_from_statements(group_statements)
         permission_sets = set()
         accounts = set()
+        s3_bucket_prefix_for_partitions = values.get("s3_bucket_prefix_for_partitions", "").rstrip("/")
         for statement in statements:
             permission_sets.update(statement.permission_set)
             if statement.resource_type == "Account":
@@ -128,6 +129,7 @@ class Config(BaseSettings):
             "statements": frozenset(statements),
             "group_statements": frozenset(group_statements),
             "groups": groups,
+            "s3_bucket_prefix_for_partitions": s3_bucket_prefix_for_partitions,
         }
 
 

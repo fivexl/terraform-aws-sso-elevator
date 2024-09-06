@@ -143,7 +143,11 @@ variable "s3_bucket_name_for_audit_entry" {
 }
 
 variable "s3_bucket_partition_prefix" {
-  description = "The prefix for the S3 bucket partitions"
+  description = <<EOT
+  The prefix for the S3 audit bucket object partitions.
+  Don't use slashes (/) in the prefix, as it will be added automatically, e.g. "logs" will be transformed to "logs/".
+  If you want to use the root of the bucket, leave this empty.
+  EOT
   type        = string
   default     = "logs"
 }
