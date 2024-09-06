@@ -431,7 +431,7 @@ def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, id
     for member in group_memberships:
         if member.user_principal_id == sso_user_id:  # type: ignore # noqa: PGH003
             logger.info("User is in the group", extra={"group": member})
-            return member["MembershipId"]  # type: ignore # noqa: PGH003 (ignoring this because we checked if user is in the group)
+            return member.membership_id
     return None
 
 
