@@ -16,6 +16,24 @@ class RevokeEvent(BaseModel):
     permission_duration: timedelta
 
 
+class GroupRevokeEvent(BaseModel):
+    schedule_name: str
+    approver: entities.slack.User
+    requester: entities.slack.User
+    group_assignment: sso.GroupAssignment
+    permission_duration: timedelta
+
+
+class ScheduledGroupRevokeEvent(BaseModel):
+    action: Literal["event_bridge_group_revoke"]
+    revoke_event: GroupRevokeEvent
+
+    @root_validator(pre=True)
+    def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
+        values["revoke_event"] = GroupRevokeEvent.parse_raw(values["revoke_event"])
+        return values
+
+
 class ScheduledRevokeEvent(BaseModel):
     action: Literal["event_bridge_revoke"]
     revoke_event: RevokeEvent
@@ -51,5 +69,10 @@ class ApproverNotificationEvent(BaseModel):
 
 class Event(BaseModel):
     __root__: (
-        ScheduledRevokeEvent | DiscardButtonsEvent | CheckOnInconsistency | SSOElevatorScheduledRevocation | ApproverNotificationEvent
+        ScheduledRevokeEvent
+        | DiscardButtonsEvent
+        | CheckOnInconsistency
+        | SSOElevatorScheduledRevocation
+        | ApproverNotificationEvent
+        | ScheduledGroupRevokeEvent
     ) = Field(..., discriminator="action")

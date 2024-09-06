@@ -51,6 +51,7 @@ module "access_revoker" {
 
     SSO_INSTANCE_ARN            = local.sso_instance_arn
     STATEMENTS                  = jsonencode(var.config)
+    GROUP_STATEMENTS            = jsonencode(var.group_config)
     POWERTOOLS_LOGGER_LOG_EVENT = true
 
     POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
@@ -154,6 +155,16 @@ data "aws_iam_policy_document" "revoker" {
       "s3:PutObject",
     ]
     resources = ["${local.s3_bucket_arn}/${var.s3_bucket_partition_prefix}/*"]
+  }
+  statement {
+    effect = "Allow"
+    actions = [
+      "identitystore:ListGroups",
+      "identitystore:DescribeGroup",
+      "identitystore:ListGroupMemberships",
+      "identitystore:DeleteGroupMembership"
+    ]
+    resources = ["*"]
   }
 }
 

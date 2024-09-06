@@ -1,6 +1,6 @@
 import datetime
 import time
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Optional, TypeVar, Union
 
 import jmespath as jp
@@ -44,7 +44,8 @@ class RequestForAccess(BaseModel):
 
 
 class RequestForAccessView:
-    CALLBACK_ID = "request_for_access_submitted"
+    __name__ = "RequestForAccountAccessView"
+    CALLBACK_ID = "request_for__account_access_submitted"
 
     REASON_BLOCK_ID = "provide_reason"
     REASON_ACTION_ID = "provided_reason"
@@ -222,25 +223,28 @@ def unhumanize_timedelta(td_str: str) -> timedelta:
 
 def build_approval_request_message_blocks(  # noqa: PLR0913
     requester_slack_id: str,
-    account: entities.aws.Account,
-    role_name: str,
+    permission_duration: timedelta,
     reason: str,
     color_coding_emoji: str,
-    permission_duration: timedelta,
+    account: Optional[entities.aws.Account] = None,
+    group: Optional[entities.aws.SSOGroup] = None,
+    role_name: Optional[str] = None,
     show_buttons: bool = True,
 ) -> list[Block]:
+    fields = [
+        MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
+        MarkdownTextObject(text=f"Reason: {reason}"),
+        MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
+    ]
+    if group:
+        fields.insert(1, MarkdownTextObject(text=f"Group: {group.name} #{group.id}"))
+    elif account and role_name:
+        fields.insert(1, MarkdownTextObject(text=f"Account: {account.name} #{account.id}"))
+        fields.insert(2, MarkdownTextObject(text=f"Role name: {role_name}"))
+
     blocks: list[Block] = [
         HeaderSectionBlock.new(color_coding_emoji),
-        SectionBlock(
-            block_id="content",
-            fields=[
-                MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
-                MarkdownTextObject(text=f"Account: {account.name} #{account.id}"),
-                MarkdownTextObject(text=f"Role name: {role_name}"),
-                MarkdownTextObject(text=f"Reason: {reason}"),
-                MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
-            ],
-        ),
+        SectionBlock(block_id="content", fields=fields),
     ]
     if show_buttons:
         blocks.append(
@@ -304,6 +308,7 @@ class ButtonClickedPayload(BaseModel):
 
     @root_validator(pre=True)
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
+        message = values["message"]
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
@@ -316,7 +321,7 @@ class ButtonClickedPayload(BaseModel):
             "approver_slack_id": jp.search("user.id", values),
             "thread_ts": jp.search("message.ts", values),
             "channel_id": jp.search("channel.id", values),
-            "message": values.get("message"),
+            "message": message,
             "request": RequestForAccess(
                 requester_slack_id=requester_slack_id,
                 account_id=account_id,
@@ -346,14 +351,14 @@ def get_user(client: WebClient, id: str) -> entities.slack.User:
 
 
 def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
-    start = datetime.datetime.now()
+    start = datetime.datetime.now(timezone.utc)
     timeout_seconds = 30
     try:
         r = client.users_lookupByEmail(email=email)
         return parse_user(r.data)  # type: ignore
     except slack_sdk.errors.SlackApiError as e:
         if e.response["error"] == "ratelimited":
-            if datetime.datetime.now() - start >= datetime.timedelta(seconds=timeout_seconds):
+            if datetime.datetime.now(timezone.utc) - start >= datetime.timedelta(seconds=timeout_seconds):
                 raise e
             logger.info(f"Rate limited when getting slack user by email. Sleeping for 3 seconds. {e}")
             time.sleep(3)
@@ -375,7 +380,7 @@ def remove_buttons_from_message_blocks(
 
 
 def create_slack_mention_by_principal_id(
-    account_assignment: sso.AccountAssignment | sso.UserAccountAssignment,
+    sso_user_id: str,
     sso_client: SSOAdminClient,
     cfg: config.Config,
     identitystore_client: IdentityStoreClient,
@@ -385,7 +390,7 @@ def create_slack_mention_by_principal_id(
     aws_user_emails = sso.get_user_emails(
         identitystore_client,
         sso_instance.identity_store_id,
-        account_assignment.principal_id if isinstance(account_assignment, sso.AccountAssignment) else account_assignment.user_principal_id,
+        sso_user_id,
     )
     user_name = None
 
@@ -418,3 +423,168 @@ def get_max_duration_block(cfg: config.Config) -> list[Option]:
         Option(text=PlainTextObject(text=f"{i // 2:02d}:{(i % 2) * 30:02d}"), value=f"{i // 2:02d}:{(i % 2) * 30:02d}")
         for i in range(1, cfg.max_permissions_duration_time * 2 + 1)
     ]
+
+
+# Group
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
+
+
+class RequestForGroupAccess(entities.BaseModel):
+    group_id: str
+    reason: str
+    requester_slack_id: str
+    permission_duration: timedelta
+
+
+class RequestForGroupAccessView:
+    __name__ = "RequestForGroupAccessView"
+    CALLBACK_ID = "request_for_group_access_submitted"
+
+    REASON_BLOCK_ID = "provide_reason"
+    REASON_ACTION_ID = "provided_reason"
+
+    GROUP_BLOCK_ID = "select_group"
+    GROUP_ACTION_ID = "selected_group"
+
+    DURATION_BLOCK_ID = "duration_picker"
+    DURATION_ACTION_ID = "duration_picker_action"
+
+    LOADING_BLOCK_ID = "loading"
+
+    @classmethod
+    def build(cls) -> View:  # noqa: ANN102
+        return View(
+            type="modal",
+            callback_id=cls.CALLBACK_ID,
+            submit=PlainTextObject(text="Request"),
+            close=PlainTextObject(text="Cancel"),
+            title=PlainTextObject(text="Get AWS access"),
+            blocks=[
+                SectionBlock(text=MarkdownTextObject(text=":wave: Hey! Please fill form below to request access to AWS SSO group.")),
+                DividerBlock(),
+                SectionBlock(
+                    block_id=cls.DURATION_BLOCK_ID,
+                    text=MarkdownTextObject(text="Select the duration for which the access will be provided"),
+                    accessory=StaticSelectElement(
+                        action_id=cls.DURATION_ACTION_ID,
+                        initial_option=get_max_duration_block(cfg)[0],
+                        options=get_max_duration_block(cfg),
+                        placeholder=PlainTextObject(text="Select duration"),
+                    ),
+                ),
+                InputBlock(
+                    block_id=cls.REASON_BLOCK_ID,
+                    label=PlainTextObject(text="Why do you need access?"),
+                    element=PlainTextInputElement(
+                        action_id=cls.REASON_ACTION_ID,
+                        multiline=True,
+                    ),
+                ),
+                DividerBlock(),
+                SectionBlock(
+                    text=MarkdownTextObject(
+                        text="Remember to use access responsibly. All actions (AWS API calls) are being recorded.",
+                    ),
+                ),
+                SectionBlock(
+                    block_id=cls.LOADING_BLOCK_ID,
+                    text=MarkdownTextObject(
+                        text=":hourglass: Loading available accounts and permission sets...",
+                    ),
+                ),
+            ],
+        )
+
+    @classmethod
+    def update_with_groups(cls, groups: list[entities.aws.SSOGroup]) -> View:  # noqa: ANN102
+        view = cls.build()
+        view.blocks = remove_blocks(view.blocks, block_ids=[cls.LOADING_BLOCK_ID])
+        view.blocks = insert_blocks(
+            blocks=view.blocks,
+            blocks_to_insert=[
+                cls.build_select_group_input_block(groups),
+            ],
+            after_block_id=cls.REASON_BLOCK_ID,
+        )
+        return view
+
+    @classmethod
+    def build_select_group_input_block(cls, groups: list[entities.aws.SSOGroup]) -> InputBlock:  # noqa: ANN102
+        # TODO: handle case when there are more than 100 groups
+        # 99 is the limit for StaticSelectElement
+        # https://slack.dev/python-slack-sdk/api-docs/slack_sdk/models/blocks/block_elements.html#:~:text=StaticSelectElement(InputInteractiveElement)%3A%0A%20%20%20%20type%20%3D%20%22static_select%22-,options_max_length%20%3D%20100,-option_groups_max_length%20%3D%20100%0A%0A%20%20%20%20%40property%0A%20%20%20%20def%20attributes(
+        if len(groups) > 99:  # noqa: PLR2004
+            groups = groups[:99]
+        sorted_groups = sorted(groups, key=lambda groups: groups.name)
+        return InputBlock(
+            block_id=cls.GROUP_BLOCK_ID,
+            label=PlainTextObject(text="Select group"),
+            element=StaticSelectElement(
+                action_id=cls.GROUP_ACTION_ID,
+                placeholder=PlainTextObject(text="Select group"),
+                options=[Option(text=PlainTextObject(text=f"{group.name}"), value=group.id) for group in sorted_groups],
+            ),
+        )
+
+    @classmethod
+    def parse(cls, obj: dict) -> RequestForGroupAccess:  # noqa: ANN102
+        values = jp.search("view.state.values", obj)
+        hhmm = jp.search(f"{cls.DURATION_BLOCK_ID}.{cls.DURATION_ACTION_ID}.selected_option.value", values)
+        hours, minutes = map(int, hhmm.split(":"))
+        duration = timedelta(hours=hours, minutes=minutes)
+        return RequestForGroupAccess.parse_obj(
+            {
+                "permission_duration": duration,
+                "group_id": jp.search(f"{cls.GROUP_BLOCK_ID}.{cls.GROUP_ACTION_ID}.selected_option.value", values),
+                "reason": jp.search(f"{cls.REASON_BLOCK_ID}.{cls.REASON_ACTION_ID}.value", values),
+                "requester_slack_id": jp.search("user.id", obj),
+            }
+        )
+
+
+class ButtonGroupClickedPayload(BaseModel):
+    action: entities.ApproverAction
+    approver_slack_id: str
+    thread_ts: str
+    channel_id: str
+    message: dict
+    request: RequestForGroupAccess
+
+    class Config:
+        frozen = True
+
+    @root_validator(pre=True)
+    def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
+        message = values["message"]
+        fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
+        requester_mention = cls.find_in_fields(fields, "Requester")
+        requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
+        humanized_permission_duration = cls.find_in_fields(fields, "Permission duration")
+        permission_duration = unhumanize_timedelta(humanized_permission_duration)
+        group = cls.find_in_fields(fields, "Group")
+        group_id = group.split("#")[-1]
+        return {
+            "action": jp.search("actions[0].value", values),
+            "approver_slack_id": jp.search("user.id", values),
+            "thread_ts": jp.search("message.ts", values),
+            "channel_id": jp.search("channel.id", values),
+            "message": message,
+            "request": RequestForGroupAccess(
+                requester_slack_id=requester_slack_id,
+                group_id=group_id,
+                reason=cls.find_in_fields(fields, "Reason"),
+                permission_duration=permission_duration,
+            ),
+        }
+
+    @staticmethod
+    def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
+        for field in fields:
+            if field["text"].startswith(key):
+                return field["text"].split(": ")[1].strip()
+        raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")

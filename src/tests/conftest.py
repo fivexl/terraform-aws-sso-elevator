@@ -1,7 +1,7 @@
 import os
 
 import boto3
-
+import json
 
 def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
     mock_env = {
@@ -22,6 +22,28 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "approver_renotification_initial_wait_time": "15",
         "approver_renotification_backoff_multiplier": "2",
         "max_permissions_duration_time": "24",
+        "statements": json.dumps(
+            [
+                {
+                    "ResourceType" : "Account",
+                    "Resource" : ["*"],
+                    "PermissionSet" : "*",
+                    "Approvers" : ["email@domen.com",],
+                    "AllowSelfApproval" : True,
+                }
+            ]
+        ),
+        "group_statements": json.dumps(
+            [
+                {
+                    "Resource" : ["11111111-2222-3333-4444-555555555555"],
+                    "Approvers" : [
+                        "email@domen.com"
+                    ],
+                    "AllowSelfApproval" : True,
+                },
+            ]
+        )
     }
     os.environ |= mock_env
 

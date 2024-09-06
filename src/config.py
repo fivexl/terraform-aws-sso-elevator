@@ -5,7 +5,7 @@ from aws_lambda_powertools import Logger
 from pydantic import BaseSettings, root_validator
 
 import entities
-from statement import Statement
+from statement import Statement, GroupStatement
 
 
 def parse_statement(_dict: dict) -> Statement:
@@ -26,6 +26,26 @@ def parse_statement(_dict: dict) -> Statement:
     )
 
 
+def parse_group_statement(_dict: dict) -> GroupStatement:
+    def to_set_if_list_or_str(v: list | str) -> frozenset[str]:
+        if isinstance(v, list):
+            return frozenset(v)
+        return frozenset([v]) if isinstance(v, str) else v
+
+    return GroupStatement.parse_obj(
+        {
+            "resource": to_set_if_list_or_str(_dict["Resource"]),
+            "approvers": to_set_if_list_or_str(_dict.get("Approvers", set())),
+            "approval_is_not_required": _dict.get("ApprovalIsNotRequired"),
+            "allow_self_approval": _dict.get("AllowSelfApproval"),
+        }
+    )
+
+
+def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str]:
+    return frozenset(group for statement in statements for group in statement.resource)
+
+
 class Config(BaseSettings):
     schedule_policy_arn: str
     revoker_function_arn: str
@@ -44,9 +64,11 @@ class Config(BaseSettings):
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"
     statements: frozenset[Statement]
+    group_statements: frozenset[GroupStatement]
 
     accounts: frozenset[str]
     permission_sets: frozenset[str]
+    groups: frozenset[str]
 
     s3_bucket_for_audit_entry_name: str
     s3_bucket_prefix_for_partitions: str
@@ -67,6 +89,14 @@ class Config(BaseSettings):
     @root_validator(pre=True)
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
         statements = {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
+        group_statements = {parse_group_statement(st) for st in values.get("group_statements", [])}  # type: ignore # noqa: PGH003
+        if not group_statements and not statements:
+            raise ValueError(
+                """
+                At least one type of config is requred,
+                please provide 'config' or 'group_config' variable to terraform module"""
+            )
+        groups = get_groups_from_statements(group_statements)
         permission_sets = set()
         accounts = set()
         for statement in statements:
@@ -77,6 +107,8 @@ class Config(BaseSettings):
             "accounts": accounts,
             "permission_sets": permission_sets,
             "statements": frozenset(statements),
+            "group_statements": frozenset(group_statements),
+            "groups": groups,
         }
 
 

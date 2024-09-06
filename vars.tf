@@ -87,6 +87,11 @@ variable "config" {
   type        = any
 }
 
+variable "group_config" {
+  description = "value for the SSO Elevator group config"
+  type        = any
+}
+
 variable "revoker_lambda_name" {
   description = "value for the revoker lambda name"
   type        = string

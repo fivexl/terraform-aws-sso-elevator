@@ -52,6 +52,7 @@ module "access_requester_slack_handler" {
 
     SSO_INSTANCE_ARN                            = local.sso_instance_arn
     STATEMENTS                                  = jsonencode(var.config)
+    GROUP_STATEMENTS                            = jsonencode(var.group_config)
     POWERTOOLS_LOGGER_LOG_EVENT                 = true
     SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
     REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
@@ -203,6 +204,16 @@ data "aws_iam_policy_document" "slack_handler" {
       "scheduler:ListSchedules",
       "scheduler:GetSchedule",
       "scheduler:DeleteSchedule",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    effect = "Allow"
+    actions = [
+      "identitystore:ListGroups",
+      "identitystore:DescribeGroup",
+      "identitystore:ListGroupMemberships",
+      "identitystore:CreateGroupMembership",
     ]
     resources = ["*"]
   }

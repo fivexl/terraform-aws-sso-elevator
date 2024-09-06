@@ -1,8 +1,7 @@
-import functools
+import group
 from datetime import timedelta
 
 import boto3
-from aws_lambda_powertools import Logger
 from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
@@ -11,11 +10,13 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
-import errors
 import organizations
 import schedule
 import slack_helpers
 import sso
+from errors import handle_errors
+from typing import Callable
+
 
 logger = config.get_logger(service="main")
 
@@ -23,6 +24,7 @@ session = boto3.Session()
 schedule_client = session.client("scheduler")
 org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
+identity_store_client = session.client("identitystore")
 
 cfg = config.get_config()
 app = App(
@@ -36,31 +38,6 @@ def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
     return slack_handler.handle(event, context)
 
 
-def error_handler(client: WebClient, e: Exception, logger: Logger, context: BoltContext) -> None:
-    logger.exception(e)
-    if isinstance(e, errors.ConfigurationError):
-        text = f"<@{context['user_id']}> Your request for AWS permissions failed with error: {e}. Check logs for more details."
-        client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
-    else:
-        text = f"<@{context['user_id']}> Your request for AWS permissions failed with error. Check access-requester logs for more details."
-        client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
-
-
-def handle_errors(fn):  # noqa: ANN001, ANN201
-    # Default slack error handler (app.error) does not handle all exceptions. Or at least I did not find how to do it.
-    # So I created this error handler.
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        try:
-            return fn(*args, **kwargs)
-        except Exception as e:
-            client: WebClient = kwargs["client"]
-            context: BoltContext = kwargs["context"]
-            error_handler(client=client, e=e, logger=logger, context=context)
-
-    return wrapper
-
-
 trigger_view_map = {}
 # To update the view, it is necessary to know the view_id. It is returned when the view is opened.
 # But shortcut 'request_for_access' handled by two functions. The first one opens the view and the second one updates it.
@@ -68,17 +45,37 @@ trigger_view_map = {}
 # and available in both functions, we can use it as a key. The value is the view_id.
 
 
-def show_initial_form(client: WebClient, body: dict, ack: Ack) -> SlackResponse:
-    ack()
-    logger.info("Showing initial form")
+def build_initial_form_handler(
+    view_class: slack_helpers.RequestForAccessView | slack_helpers.RequestForGroupAccessView,
+) -> Callable[[WebClient, dict, Ack], SlackResponse]:
+    def show_initial_form_for_request(
+        client: WebClient,
+        body: dict,
+        ack: Ack,
+    ) -> SlackResponse:
+        ack()
+        logger.info(f"Showing initial form for {view_class.__name__}")
+        logger.debug("Request body", extra={"body": body})
+        trigger_id = body["trigger_id"]
+        response = client.views_open(trigger_id=trigger_id, view=view_class.build())
+        trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
+        return response
+
+    return show_initial_form_for_request
+
+
+def load_select_options_for_group_access_request(client: WebClient, body: dict) -> SlackResponse:
+    logger.info("Loading select options for view (groups)")
     logger.debug("Request body", extra={"body": body})
+    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    groups = sso.get_groups_from_config(sso_instance.identity_store_id, identity_store_client, cfg)
     trigger_id = body["trigger_id"]
-    response = client.views_open(trigger_id=trigger_id, view=slack_helpers.RequestForAccessView.build())
-    trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
-    return response
+
+    view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
+    return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
 
 
-def load_select_options(client: WebClient, body: dict) -> SlackResponse:
+def load_select_options_for_account_access_request(client: WebClient, body: dict) -> SlackResponse:
     logger.info("Loading select options for view (accounts and permission sets)")
     logger.debug("Request body", extra={"body": body})
 
@@ -91,10 +88,14 @@ def load_select_options(client: WebClient, body: dict) -> SlackResponse:
 
 
 app.shortcut("request_for_access")(
-    show_initial_form,
-    load_select_options,
+    build_initial_form_handler(view_class=slack_helpers.RequestForAccessView),  # type: ignore # noqa: PGH003
+    load_select_options_for_account_access_request,
 )
 
+app.shortcut("request_for_group_membership")(
+    build_initial_form_handler(view_class=slack_helpers.RequestForGroupAccessView),  # type: ignore # noqa: PGH003
+    load_select_options_for_group_access_request,
+)
 
 cache_for_dublicate_requests = {}
 
@@ -102,7 +103,12 @@ cache_for_dublicate_requests = {}
 @handle_errors
 def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # noqa: ARG001
     logger.info("Handling button click")
-    payload = slack_helpers.ButtonClickedPayload.parse_obj(body)
+    try:
+        payload = slack_helpers.ButtonClickedPayload.parse_obj(body)
+    except Exception as e:
+        logger.exception(e)
+        return group.handle_group_button_click(body, client, context)
+
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
@@ -316,6 +322,11 @@ def handle_request_for_access_submittion(
 app.view(slack_helpers.RequestForAccessView.CALLBACK_ID)(
     ack=acknowledge_request,
     lazy=[handle_request_for_access_submittion],
+)
+
+app.view(slack_helpers.RequestForGroupAccessView.CALLBACK_ID)(
+    ack=acknowledge_request,
+    lazy=[group.handle_request_for_group_access_submittion],
 )
 
 

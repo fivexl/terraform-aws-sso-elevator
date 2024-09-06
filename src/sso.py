@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import datetime
+from datetime import timezone
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Generator, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, Optional, TypeVar
 
 import config
 import entities
@@ -12,6 +13,7 @@ import organizations
 
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_identitystore import type_defs as idc_type_defs
     from mypy_boto3_organizations import OrganizationsClient
     from mypy_boto3_sso_admin import SSOAdminClient, type_defs
 
@@ -80,6 +82,15 @@ class UserAccountAssignment:
         }
 
 
+@dataclass
+class GroupAssignment:
+    group_name: str
+    group_id: str
+    user_principal_id: str
+    membership_id: str
+    identity_store_id: str
+
+
 def create_account_assignment(client: SSOAdminClient, assignment: UserAccountAssignment) -> AccountAssignmentStatus:
     response = client.create_account_assignment(**assignment.as_dict())
     return AccountAssignmentStatus.from_type_def(response["AccountAssignmentCreationStatus"])
@@ -117,12 +128,12 @@ def retry_while(
     timeout_seconds: int = 20,
 ) -> T:
     # If timeout_seconds -1, then retry forever.
-    start = datetime.datetime.now()
+    start = datetime.datetime.now(timezone.utc)
 
     def is_timeout(timeout_seconds: int) -> bool:
         if timeout_seconds == -1:
             return False
-        return datetime.datetime.now() - start >= datetime.timedelta(seconds=timeout_seconds)
+        return datetime.datetime.now(timezone.utc) - start >= datetime.timedelta(seconds=timeout_seconds)
 
     while True:
         response = fn()
@@ -333,13 +344,123 @@ def get_permission_sets_from_config(client: SSOAdminClient, cfg: config.Config) 
 def get_account_assignment_information(
     sso_client: SSOAdminClient, cfg: config.Config, org_client: OrganizationsClient
 ) -> list[AccountAssignment]:
-    describe_sso_instance(sso_client, cfg.sso_instance_arn)
     accounts = organizations.get_accounts_from_config(org_client, cfg)
     permission_sets = get_permission_sets_from_config(sso_client, cfg)
-    account_assignments = list_user_account_assignments(
+    return list_user_account_assignments(
         sso_client,
         cfg.sso_instance_arn,
         [a.id for a in accounts],
         [ps.arn for ps in permission_sets],
     )
-    return account_assignments
+
+
+# -----------------Group Assignments-----------------#
+
+
+def get_groups_from_config(
+    identity_store_id: str, identity_store_client: IdentityStoreClient, cfg: config.Config
+) -> list[entities.aws.SSOGroup]:
+    logger.info("Getting groups from config")
+    try:
+        groups = []
+        for page in identity_store_client.get_paginator("list_groups").paginate(IdentityStoreId=identity_store_id):
+            groups.extend(
+                entities.aws.SSOGroup(
+                    id=group.get("GroupId"),
+                    identity_store_id=group.get("IdentityStoreId"),
+                    name=group.get("DisplayName"),  # type: ignore # noqa: PGH003
+                    description=group.get("Description"),
+                )
+                for group in page["Groups"]
+                if group.get("DisplayName") and group.get("GroupId") in cfg.groups
+            )
+        groups = sorted(groups, key=lambda g: g.name)
+        logger.debug("Groups", extra={"groups": groups})
+        return groups
+    except Exception as e:
+        logger.error("Error while getting groups from config", extra={"error": e})
+        raise e
+
+
+def add_user_to_a_group(
+    sso_group_id: str, sso_user_id: str, identity_store_id: str, identity_store_client: IdentityStoreClient
+) -> idc_type_defs.CreateGroupMembershipResponseTypeDef:
+    responce = identity_store_client.create_group_membership(
+        GroupId=sso_group_id, MemberId={"UserId": sso_user_id}, IdentityStoreId=identity_store_id
+    )
+    logger.info(
+        "User added to the group",
+        extra={
+            "group_id": sso_group_id,
+            "user_id": sso_user_id,
+        },
+    )
+    return responce
+
+
+def remove_user_from_group(identity_store_id: str, membership_id: str, identity_store_client: IdentityStoreClient) -> Dict[str, Any]:
+    responce = identity_store_client.delete_group_membership(IdentityStoreId=identity_store_id, MembershipId=membership_id)
+    logger.info("User removed from the group", extra={"membership_id": membership_id})
+    logger.debug("User removed from the group", extra={"responce": responce})
+    return responce
+
+
+def list_group_memberships(
+    identity_store_id: str, group_id: str, identity_store_client: IdentityStoreClient
+) -> list[entities.aws.GroupMembership]:
+    logger.info("Listing group memberships")
+    paginator = identity_store_client.get_paginator("list_group_memberships")
+    group_memberships = []
+    for page in paginator.paginate(IdentityStoreId=identity_store_id, GroupId=group_id):
+        memberships = page["GroupMemberships"]
+        group_memberships.extend(
+            entities.aws.GroupMembership(
+                user_principal_id=membership["MemberId"]["UserId"],  # type: ignore # noqa: PGH003
+                group_id=membership["GroupId"],  # type: ignore # noqa: PGH003
+                identity_store_id=membership["IdentityStoreId"],  # type: ignore # noqa: PGH003
+                membership_id=membership["MembershipId"],  # type: ignore # noqa: PGH003
+            )
+            for membership in memberships
+        )
+    logger.debug("Group memberships", extra={"group_memberships": group_memberships})
+    return group_memberships
+
+
+def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> str | None:
+    group_memberships = list_group_memberships(identity_store_id, group_id, identity_store_client)
+    for member in group_memberships:
+        if member.user_principal_id == sso_user_id:  # type: ignore # noqa: PGH003
+            logger.info("User is in the group", extra={"group": member})
+            return member["MembershipId"]  # type: ignore # noqa: PGH003 (ignoring this because we checked if user is in the group)
+    return None
+
+
+def describe_group(identity_store_id: str, group_id: str, identity_store_client: IdentityStoreClient) -> entities.aws.SSOGroup:
+    group = identity_store_client.describe_group(IdentityStoreId=identity_store_id, GroupId=group_id)
+    logger.info("Group described", extra={"group": group})
+    return entities.aws.SSOGroup(
+        id=group.get("GroupId"),
+        identity_store_id=group.get("IdentityStoreId"),
+        name=group.get("DisplayName"),  # type: ignore # noqa: PGH003
+        description=group.get("Description"),
+    )
+
+
+def get_group_assignments(identity_store_id: str, identity_store_client: IdentityStoreClient, cfg: config.Config) -> list[GroupAssignment]:
+    logger.info("Getting group assignments")
+    groups = get_groups_from_config(identity_store_id, identity_store_client, cfg)
+    group_assignments = []
+    for group in groups:
+        group_memberships = list_group_memberships(identity_store_id, group.id, identity_store_client)
+        group_assignments.extend(
+            GroupAssignment(
+                group_name=group.name,
+                group_id=group.id,
+                user_principal_id=membership.user_principal_id,
+                membership_id=membership.membership_id,
+                identity_store_id=membership.identity_store_id,
+            )
+            for membership in group_memberships
+        )
+    logger.debug("Group assignments", extra={"group_assignments": group_assignments})
+    return group_assignments

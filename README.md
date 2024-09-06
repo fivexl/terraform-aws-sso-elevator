@@ -5,6 +5,7 @@
 - [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack)
 - [Introduction](#introduction)
 - [Functionality](#functionality)
+  - [Group Assignments Mode](#group-assignments-mode)
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
 - [Deployment and Usage](#deployment-and-usage)
   - [Note on dependencies](#note-on-dependencies)
@@ -69,6 +70,50 @@ For auditing purposes, information about all access grants and revocations is st
 
 Additionally, the Access-Revoker continuously reconciles the revocation schedule with all user-level permission set assignments and issues warnings if it detects assignments without a revocation schedule (presumably created by someone manually). By default, the Access-Revoker will automatically revoke all unknown user-level permission set assignments daily. However, you can configure it to operate more or less frequently.
 
+## Group Assignments Mode
+Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access. Users can now use the /group-access command, which, instead of showing the form for account assignments, will present a Slack form where the user can select a group they want access to, specify a reason, and define the duration for which access is required.
+
+The basic logic for access, configuration, and Slack integration remains the same as before. To enable the new Group Assignments Mode, you need to provide the module with a new group_config Terraform variable:
+```hcl
+group_config = [
+    {              
+      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+      "ApprovalIsNotRequired": true
+    },
+    {              
+      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+      "AllowSelfApproval" : true,
+    },
+    {
+      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+    },
+]
+```
+There are two key differences compared to the standard Elevator configuration:
+- ResourceType is not required for group access configurations.
+- In the Resource field, you must provide group IDs instead of account IDs.
+
+The Elevator will only work with groups specified in the configuration.
+
+If you were using Terraform AWS SSO Elevator before version 2.0.0, you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
+{
+    "name": "group-access",
+    "type": "global",
+    "callback_id": "request_for_group_membership",
+    "description": "Request access to SSO Group"
+}
+To disable this functionality, simply remove the shortcut from the manifest.
+
+
 # Important Considerations and Assumptions
 
 SSO elevator assumes that your Slack user email will match SSO user id otherwise it won't be able to match Slack user sending request to an AWS SSO user.
@@ -94,20 +139,20 @@ ECR is private for the following reasons:
 
 Images and repositories are replicated in every region that AWS SSO supports exept these:
 ```
-# ap_east_1
-# eu_south_1
-# ap_southeast_3
-# af_south_1
-# me_south_1
-# il_central_1
-# me_central_1
-# eu_south_2
-# ap_south_2
-# eu_central_2
-# ap_southeast_4
-# ca_west_1
-# us_gov_east_1
-# us_gov_west_1
+- ap_east_1
+- eu_south_1
+- ap_southeast_3
+- af_south_1
+- me_south_1
+- il_central_1
+- me_central_1
+- eu_south_2
+- ap_south_2
+- eu_central_2
+- ap_southeast_4
+- ca_west_1
+- us_gov_east_1
+- us_gov_west_1
 ```
 Those regions are not enabled by deafult. If you need to use a region that is not supported by the module, please let us know by creating an issue, and we will add support for it. 
 
@@ -327,6 +372,28 @@ module "aws_sso_elevator" {
     },
 
   ]
+group_config = [
+    {              
+      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+      "ApprovalIsNotRequired": true
+    },
+    {              
+      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+      "AllowSelfApproval" : true,
+    },
+    {
+      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
+      "Approvers" : [
+        "email@gmail.com"
+      ]
+    },
+]
 }
 
 output "aws_sso_elevator_lambda_function_url" {
@@ -354,6 +421,10 @@ features:
       type: global
       callback_id: request_for_access
       description: Request access to Permission Set in AWS Account
+    - name: group-access # Delete this shortcut if you want to prohibit access to the Group Assignments Mode
+      type: global
+      callback_id: request_for_group_membership
+      description: Request access to SSO Group
 oauth_config:
   scopes:
     bot:
@@ -397,7 +468,7 @@ settings:
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | 5.56.1 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 5.65.0 |
 | <a name="provider_random"></a> [random](#provider\_random) | 3.6.2 |
 
 ## Modules
@@ -421,6 +492,7 @@ settings:
 | [aws_iam_role.eventbridge_role](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy.eventbridge_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_lambda_permission.eventbridge](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
+| [aws_lambda_permission.url](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
 | [aws_scheduler_schedule_group.one_time_schedule_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule_group) | resource |
 | [aws_sns_topic.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
 | [aws_sns_topic_subscription.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
@@ -439,9 +511,13 @@ settings:
 | <a name="input_approver_renotification_initial_wait_time"></a> [approver\_renotification\_initial\_wait\_time](#input\_approver\_renotification\_initial\_wait\_time) | The initial wait time before the first re-notification to the approver is sent. This is measured in minutes. If set to 0, no re-notifications will be sent. | `number` | `15` | no |
 | <a name="input_aws_sns_topic_subscription_email"></a> [aws\_sns\_topic\_subscription\_email](#input\_aws\_sns\_topic\_subscription\_email) | value for the email address to subscribe to the SNS topic | `string` | `""` | no |
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | n/a | yes |
-| <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"754426185857"` | no |
-| <a name="input_event_brige_check_on_inconsistency_rule_name"></a> [event\_brige\_check\_on\_inconsistency\_rule\_name](#input\_event\_brige\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `"sso_elevator_check_on_inconsistency"` | no |
-| <a name="input_event_brige_scheduled_revocation_rule_name"></a> [event\_brige\_scheduled\_revocation\_rule\_name](#input\_event\_brige\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `"sso_elevator_scheduled_revocation"` | no |
+| <a name="input_create_api_gateway"></a> [create\_api\_gateway](#input\_create\_api\_gateway) | If true, module will create & configure API Gateway for the Lambda function | `bool` | `true` | no |
+| <a name="input_create_lambda_url"></a> [create\_lambda\_url](#input\_create\_lambda\_url) | If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future<br>If false, Lambda url will be deleted. | `bool` | `true` | no |
+| <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
+| <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
+| <a name="input_event_brige_check_on_inconsistency_rule_name"></a> [event\_brige\_check\_on\_inconsistency\_rule\_name](#input\_event\_brige\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `"sso-elevator-check_on-inconsistency"` | no |
+| <a name="input_event_brige_scheduled_revocation_rule_name"></a> [event\_brige\_scheduled\_revocation\_rule\_name](#input\_event\_brige\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `"sso-elevator-scheduled-revocation"` | no |
+| <a name="input_group_config"></a> [group\_config](#input\_group\_config) | value for the SSO Elevator group config | `any` | n/a | yes |
 | <a name="input_log_level"></a> [log\_level](#input\_log\_level) | value for the log level | `string` | `"INFO"` | no |
 | <a name="input_max_permissions_duration_time"></a> [max\_permissions\_duration\_time](#input\_max\_permissions\_duration\_time) | Maximum duration of the permissions granted by the Elevator in hours. | `number` | `24` | no |
 | <a name="input_request_expiration_hours"></a> [request\_expiration\_hours](#input\_request\_expiration\_hours) | After how many hours should the request expire? If set to 0, the request will never expire. | `number` | `8` | no |
@@ -458,7 +534,7 @@ settings:
 | <a name="input_schedule_expression"></a> [schedule\_expression](#input\_schedule\_expression) | recovation schedule expression (will revoke all user-level assignments unknown to the Elevator) | `string` | `"cron(0 23 * * ? *)"` | no |
 | <a name="input_schedule_expression_for_check_on_inconsistency"></a> [schedule\_expression\_for\_check\_on\_inconsistency](#input\_schedule\_expression\_for\_check\_on\_inconsistency) | how often revoker should check for inconsistency (warn if found unknown user-level assignments) | `string` | `"rate(2 hours)"` | no |
 | <a name="input_schedule_group_name"></a> [schedule\_group\_name](#input\_schedule\_group\_name) | value for the schedule group name | `string` | `"sso-elevator-scheduled-revocation"` | no |
-| <a name="input_schedule_role_name"></a> [schedule\_role\_name](#input\_schedule\_role\_name) | value for the schedule role name | `string` | `"event-bridge-role-for-sso-elevator"` | no |
+| <a name="input_schedule_role_name"></a> [schedule\_role\_name](#input\_schedule\_role\_name) | value for the schedule role name | `string` | `"sso-elevator-event-bridge-role"` | no |
 | <a name="input_slack_bot_token"></a> [slack\_bot\_token](#input\_slack\_bot\_token) | value for the Slack bot token | `string` | n/a | yes |
 | <a name="input_slack_channel_id"></a> [slack\_channel\_id](#input\_slack\_channel\_id) | value for the Slack channel ID | `string` | n/a | yes |
 | <a name="input_slack_signing_secret"></a> [slack\_signing\_secret](#input\_slack\_signing\_secret) | value for the Slack signing secret | `string` | n/a | yes |
@@ -470,6 +546,7 @@ settings:
 
 | Name | Description |
 |------|-------------|
+| <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END OF PRE-COMMIT-TERRAFORM DOCS HOOK -->

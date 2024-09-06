@@ -13,7 +13,15 @@ from pydantic import ValidationError
 import config
 import entities
 import sso
-from events import DiscardButtonsEvent, Event, RevokeEvent, ScheduledRevokeEvent, ApproverNotificationEvent
+from events import (
+    ApproverNotificationEvent,
+    DiscardButtonsEvent,
+    Event,
+    GroupRevokeEvent,
+    RevokeEvent,
+    ScheduledRevokeEvent,
+    ScheduledGroupRevokeEvent,
+)
 
 logger = config.get_logger(service="schedule")
 cfg = config.get_config()
@@ -34,7 +42,7 @@ def get_next_cron_run_time(cron_expression: str, base_time: datetime) -> datetim
 
 def check_rule_expression_and_get_next_run(rule: events_type_defs.DescribeRuleResponseTypeDef) -> datetime | str:
     schedule_expression = rule["ScheduleExpression"]
-    current_time = datetime.utcnow()
+    current_time = datetime.now(timezone.utc)
     logger.debug(f"Current time: {current_time}")
     logger.debug(f"Schedule expression: {schedule_expression}")
 
@@ -64,9 +72,10 @@ def get_schedules(client: EventBridgeSchedulerClient) -> list[scheduler_type_def
     return scheduled_events
 
 
-def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRevokeEvent]:
+def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRevokeEvent | ScheduledGroupRevokeEvent]:
     scheduled_events = get_schedules(client)
-    scheduled_revoke_events: list[ScheduledRevokeEvent] = []
+    logger.debug("Scheduled events", extra={"scheduled_events": scheduled_events})
+    scheduled_revoke_events: list[ScheduledRevokeEvent | ScheduledGroupRevokeEvent] = []
     for full_schedule in scheduled_events:
         if full_schedule["Name"].startswith("discard-buttons"):
             continue
@@ -81,7 +90,9 @@ def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRe
 
         if isinstance(event.__root__, ScheduledRevokeEvent):
             scheduled_revoke_events.append(event.__root__)
-
+        elif isinstance(event.__root__, ScheduledGroupRevokeEvent):
+            scheduled_revoke_events.append(event.__root__)
+    logger.debug("Scheduled revoke events", extra={"scheduled_revoke_events": scheduled_revoke_events})
     return scheduled_revoke_events
 
 
@@ -98,10 +109,14 @@ def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str) -> N
 
 def get_and_delete_scheduled_revoke_event_if_already_exist(
     client: EventBridgeSchedulerClient,
-    user_account_assignment: sso.UserAccountAssignment,
+    event: sso.UserAccountAssignment | sso.GroupAssignment,
 ) -> None:
     for scheduled_event in get_scheduled_events(client):
-        if scheduled_event.revoke_event.user_account_assignment == user_account_assignment:
+        logger.debug("Checking if schedule already exist", extra={"scheduled_event": scheduled_event})
+        if isinstance(scheduled_event, ScheduledRevokeEvent) and scheduled_event.revoke_event.user_account_assignment == event:
+            logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
+            delete_schedule(client, scheduled_event.revoke_event.schedule_name)
+        if isinstance(scheduled_event, ScheduledGroupRevokeEvent) and scheduled_event.revoke_event.group_assignment == event:
             logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
             delete_schedule(client, scheduled_event.revoke_event.schedule_name)
 
@@ -119,7 +134,7 @@ def schedule_revoke_event(
     user_account_assignment: sso.UserAccountAssignment,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
     logger.info("Scheduling revoke event")
-    schedule_name = f"{cfg.revoker_function_name}" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, user_account_assignment)
     revoke_event = RevokeEvent(
         schedule_name=schedule_name,
@@ -148,6 +163,43 @@ def schedule_revoke_event(
     )
 
 
+def schedule_group_revoke_event(
+    schedule_client: EventBridgeSchedulerClient,
+    permission_duration: timedelta,
+    approver: entities.slack.User,
+    requester: entities.slack.User,
+    group_assignment: sso.GroupAssignment,
+) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
+    logger.info("Scheduling revoke event")
+    schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
+    revoke_event = GroupRevokeEvent(
+        schedule_name=schedule_name,
+        approver=approver,
+        requester=requester,
+        group_assignment=group_assignment,
+        permission_duration=permission_duration,
+    )
+    get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, group_assignment)
+    logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
+    return schedule_client.create_schedule(
+        FlexibleTimeWindow={"Mode": "OFF"},
+        Name=schedule_name,
+        GroupName=cfg.schedule_group_name,
+        ScheduleExpression=event_bridge_schedule_after(permission_duration),
+        State="ENABLED",
+        Target=scheduler_type_defs.TargetTypeDef(
+            Arn=cfg.revoker_function_arn,
+            RoleArn=cfg.schedule_policy_arn,
+            Input=json.dumps(
+                {
+                    "action": "event_bridge_group_revoke",
+                    "revoke_event": revoke_event.json(),
+                },
+            ),
+        ),
+    )
+
+
 def schedule_discard_buttons_event(
     schedule_client: EventBridgeSchedulerClient,
     time_stamp: str,
@@ -159,7 +211,7 @@ def schedule_discard_buttons_event(
     permission_duration = timedelta(hours=cfg.request_expiration_hours)
 
     logger.info("Scheduling discard buttons event")
-    schedule_name = "discard-buttons" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = "discard-buttons" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     logger.debug(
         "Creating schedule",
         extra={
@@ -202,7 +254,7 @@ def schedule_approver_notification_event(
         return
 
     logger.info("Scheduling approver notification event")
-    schedule_name = "approvers-renotification" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = "approvers-renotification" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     logger.debug(
         "Creating schedule",
         extra={
