@@ -91,7 +91,7 @@ module "access_requester_slack_handler" {
   # do not retry automatically
   maximum_retry_attempts = 0
 
-  cloudwatch_logs_retention_in_days = 365
+  cloudwatch_logs_retention_in_days = var.logs_retention_in_days
 
   tags = var.tags
 }
@@ -245,4 +245,8 @@ module "http_api" {
   stage_name         = local.api_stage_name
   create_domain_name = false
   tags               = var.tags
+  stage_access_log_settings = {
+    create_log_group            = true
+    log_group_retention_in_days = var.logs_retention_in_days
+  }
 }

@@ -88,7 +88,7 @@ module "access_revoker" {
   # do not retry automatically
   maximum_retry_attempts = 0
 
-  cloudwatch_logs_retention_in_days = 365
+  cloudwatch_logs_retention_in_days = var.logs_retention_in_days
 
   tags = var.tags
 }

@@ -109,7 +109,7 @@ variable "requester_lambda_name" {
 variable "event_brige_check_on_inconsistency_rule_name" {
   description = "value for the event bridge check on inconsistency rule name"
   type        = string
-  default     = "sso-elevator-check_on-inconsistency"
+  default     = "sso-elevator-check-on-inconsistency"
 }
 
 variable "event_brige_scheduled_revocation_rule_name" {
@@ -209,4 +209,10 @@ variable "max_permissions_duration_time" {
   description = "Maximum duration of the permissions granted by the Elevator in hours."
   type        = number
   default     = 24
+}
+
+variable "logs_retention_in_days" {
+  description = "The number of days you want to retain log events in the log group for both Lambda functions and API Gateway."
+  type        = number
+  default     = 365
 }
