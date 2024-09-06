@@ -7,6 +7,17 @@ from pydantic import BaseSettings, root_validator
 import entities
 from statement import Statement, GroupStatement
 
+def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Logger:
+    kwargs = {
+        "json_default": entities.json_default,
+        "level": level or os.environ.get("LOG_LEVEL", "INFO"),
+    }
+    if service:
+        kwargs["service"] = service
+    return Logger(**kwargs)
+
+logger = get_logger(service="config")
+
 
 def parse_statement(_dict: dict) -> Statement:
     def to_set_if_list_or_str(v: list | str) -> frozenset[str]:
@@ -88,14 +99,16 @@ class Config(BaseSettings):
 
     @root_validator(pre=True)
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
-        statements = {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
-        group_statements = {parse_group_statement(st) for st in values.get("group_statements", [])}  # type: ignore # noqa: PGH003
+        statements = {
+            parse_statement(st) for st in values.get("statements", []) # type: ignore # noqa: PGH003
+        } if values.get("statements") is not None else set()
+
+        group_statements = {
+            parse_group_statement(st) for st in values.get("group_statements", []) # type: ignore # noqa: PGH003
+            } if values.get("group_statements") is not None else set()
+
         if not group_statements and not statements:
-            raise ValueError(
-                """
-                At least one type of config is requred,
-                please provide 'config' or 'group_config' variable to terraform module"""
-            )
+            logger.warning("No statements and group statements found")
         groups = get_groups_from_statements(group_statements)
         permission_sets = set()
         accounts = set()
@@ -112,14 +125,6 @@ class Config(BaseSettings):
         }
 
 
-def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Logger:
-    kwargs = {
-        "json_default": entities.json_default,
-        "level": level or os.environ.get("LOG_LEVEL", "INFO"),
-    }
-    if service:
-        kwargs["service"] = service
-    return Logger(**kwargs)
 
 
 _config: Optional[Config] = None
