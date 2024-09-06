@@ -244,4 +244,5 @@ module "http_api" {
   }
   stage_name         = local.api_stage_name
   create_domain_name = false
+  tags               = var.tags
 }
