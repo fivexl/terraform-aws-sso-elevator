@@ -85,11 +85,13 @@ variable "sso_instance_arn" {
 variable "config" {
   description = "value for the SSO Elevator config"
   type        = any
+  default = []
 }
 
 variable "group_config" {
   description = "value for the SSO Elevator group config"
   type        = any
+  default = []
 }
 
 variable "revoker_lambda_name" {
