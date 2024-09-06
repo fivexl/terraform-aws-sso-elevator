@@ -56,12 +56,12 @@ def build_initial_form_handler(
         ack()
         if view_class == slack_helpers.RequestForGroupAccessView and not cfg.group_statements:
                 return client.chat_postMessage(
-                    channel=body["channel"]["id"],
+                    channel=cfg.slack_channel_id,
                     text="Group statements are not configured, please check the configuration. Or use another /command.",
                 )
         if view_class == slack_helpers.RequestForAccessView and not cfg.statements:
             return client.chat_postMessage(
-                channel=body["channel"]["id"],
+                channel=cfg.slack_channel_id,
                 text="Statements are not configured, please check the configuration. Or use another /command.",
             )
 
