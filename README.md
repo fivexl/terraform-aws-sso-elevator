@@ -71,7 +71,7 @@ For auditing purposes, information about all access grants and revocations is st
 Additionally, the Access-Revoker continuously reconciles the revocation schedule with all user-level permission set assignments and issues warnings if it detects assignments without a revocation schedule (presumably created by someone manually). By default, the Access-Revoker will automatically revoke all unknown user-level permission set assignments daily. However, you can configure it to operate more or less frequently.
 
 ## Group Assignments Mode
-Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access. Users can now use the /group-access command, which, instead of showing the form for account assignments, will present a Slack form where the user can select a group they want access to, specify a reason, and define the duration for which access is required.
+Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access. SSO elevator now can add users to a groups, to do so, you will need to use /group-access command, which, instead of showing the form for account assignments, will present a Slack form where the user can select a group they want access to, specify a reason, and define the duration for which access is required.
 
 The basic logic for access, configuration, and Slack integration remains the same as before. To enable the new Group Assignments Mode, you need to provide the module with a new group_config Terraform variable:
 ```hcl
