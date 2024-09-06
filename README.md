@@ -165,17 +165,6 @@ There is also an option to host ECR yourself by providing the following variable
 ```hcl
 ecr_repo_name = "example_repo_name"
 ecr_owner_account_id = "<example_account_id>"
-
-
-output "requester_api_endpoint_url" {
-  description = "The API Gateway URL to invoke the Lambda function"
-  value       = module.aws_sso_elevator.requester_api_endpoint_url
-}
-
-output "lambda_function_url" {
-  description = "The Lambda Function Url to invoke the Lambda function"
-  value       = module.aws_sso_elevator.lambda_function_url
-}
 ```
 
 ## API
