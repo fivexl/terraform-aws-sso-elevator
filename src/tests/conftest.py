@@ -3,6 +3,7 @@ import os
 import boto3
 import json
 
+
 def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
     mock_env = {
         "schedule_policy_arn": "x",
@@ -25,25 +26,25 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "statements": json.dumps(
             [
                 {
-                    "ResourceType" : "Account",
-                    "Resource" : ["*"],
-                    "PermissionSet" : "*",
-                    "Approvers" : ["email@domen.com",],
-                    "AllowSelfApproval" : True,
+                    "ResourceType": "Account",
+                    "Resource": ["*"],
+                    "PermissionSet": "*",
+                    "Approvers": [
+                        "email@domen.com",
+                    ],
+                    "AllowSelfApproval": True,
                 }
             ]
         ),
         "group_statements": json.dumps(
             [
                 {
-                    "Resource" : ["11111111-2222-3333-4444-555555555555"],
-                    "Approvers" : [
-                        "email@domen.com"
-                    ],
-                    "AllowSelfApproval" : True,
+                    "Resource": ["11111111-2222-3333-4444-555555555555"],
+                    "Approvers": ["email@domen.com"],
+                    "AllowSelfApproval": True,
                 },
             ]
-        )
+        ),
     }
     os.environ |= mock_env
 

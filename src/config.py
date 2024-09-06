@@ -7,6 +7,7 @@ from pydantic import BaseSettings, root_validator
 import entities
 from statement import Statement, GroupStatement
 
+
 def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Logger:
     kwargs = {
         "json_default": entities.json_default,
@@ -15,6 +16,7 @@ def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Lo
     if service:
         kwargs["service"] = service
     return Logger(**kwargs)
+
 
 logger = get_logger(service="config")
 
@@ -99,13 +101,17 @@ class Config(BaseSettings):
 
     @root_validator(pre=True)
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
-        statements = {
-            parse_statement(st) for st in values.get("statements", []) # type: ignore # noqa: PGH003
-        } if values.get("statements") is not None else set()
+        statements = (
+            {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
+            if values.get("statements") is not None
+            else set()
+        )
 
-        group_statements = {
-            parse_group_statement(st) for st in values.get("group_statements", []) # type: ignore # noqa: PGH003
-            } if values.get("group_statements") is not None else set()
+        group_statements = (
+            {parse_group_statement(st) for st in values.get("group_statements", [])}  # type: ignore # noqa: PGH003
+            if values.get("group_statements") is not None
+            else set()
+        )
 
         if not group_statements and not statements:
             logger.warning("No statements and group statements found")
@@ -123,8 +129,6 @@ class Config(BaseSettings):
             "group_statements": frozenset(group_statements),
             "groups": groups,
         }
-
-
 
 
 _config: Optional[Config] = None

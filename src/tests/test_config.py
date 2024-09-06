@@ -22,14 +22,15 @@ VALID_GROUP_STATEMENT_DICT = {
     "Approvers": "example@gmail.com",
     "AllowSelfApproval": True,
 }
-                  
 
 
 @given(strategies.statement_dict())
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 @example({}).xfail(raises=KeyError, reason="Empty dict is not a valid statement")
 @example(VALID_STATEMENT_DICT)
-def test_parse_statement(dict_statement: dict,):
+def test_parse_statement(
+    dict_statement: dict,
+):
     try:
         config.parse_statement(dict_statement)
     except ValidationError:
@@ -39,7 +40,7 @@ def test_parse_statement(dict_statement: dict,):
 @given(strategies.group_statement_dict())
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 @example({}).xfail(raises=KeyError, reason="Empty dict is not a valid group_statement")
-@example(VALID_GROUP_STATEMENT_DICT)  
+@example(VALID_GROUP_STATEMENT_DICT)
 def test_parse_group_statement(dict_group_statement: dict):
     try:
         config.parse_group_statement(dict_group_statement)
@@ -75,16 +76,12 @@ def config_dict(
     )
 
 
-
-def valid_config_dict(
-    statements_as_json: bool = True,
-    group_statements_as_json: bool = True
-):
+def valid_config_dict(statements_as_json: bool = True, group_statements_as_json: bool = True):
     if statements_as_json:
         statements = json.dumps([VALID_STATEMENT_DICT])
     else:
         statements = [VALID_STATEMENT_DICT]
-    
+
     if group_statements_as_json:
         group_statements = json.dumps([VALID_GROUP_STATEMENT_DICT])
     else:
@@ -129,6 +126,8 @@ def test_config_load_environment_variables(dict_config: dict):
 )
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 @example(valid_config_dict(statements_as_json=False, group_statements_as_json=False))
-@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False) | {"post_update_to_slack": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
+@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False) | {"post_update_to_slack": "x"}).xfail(
+    raises=ValidationError, reason="Invalid bool"
+)
 def test_config_init(dict_config: dict):
     config.Config(**dict_config)
