@@ -385,7 +385,7 @@ def get_groups_from_config(
 def add_user_to_a_group(
     sso_group_id: str, sso_user_id: str, identity_store_id: str, identity_store_client: IdentityStoreClient
 ) -> idc_type_defs.CreateGroupMembershipResponseTypeDef:
-    responce = identity_store_client.create_group_membership(
+    response = identity_store_client.create_group_membership(
         GroupId=sso_group_id, MemberId={"UserId": sso_user_id}, IdentityStoreId=identity_store_id
     )
     logger.info(
@@ -395,14 +395,14 @@ def add_user_to_a_group(
             "user_id": sso_user_id,
         },
     )
-    return responce
+    return response
 
 
 def remove_user_from_group(identity_store_id: str, membership_id: str, identity_store_client: IdentityStoreClient) -> Dict[str, Any]:
-    responce = identity_store_client.delete_group_membership(IdentityStoreId=identity_store_id, MembershipId=membership_id)
+    response = identity_store_client.delete_group_membership(IdentityStoreId=identity_store_id, MembershipId=membership_id)
     logger.info("User removed from the group", extra={"membership_id": membership_id})
-    logger.debug("User removed from the group", extra={"responce": responce})
-    return responce
+    logger.debug("User removed from the group", extra={"response": response})
+    return response
 
 
 def list_group_memberships(
