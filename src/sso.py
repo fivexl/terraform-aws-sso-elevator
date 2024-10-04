@@ -319,7 +319,7 @@ def get_user_principal_id_by_email(client: IdentityStoreClient, identity_store_i
     response = list_users(client, identity_store_id=identity_store_id)
     for user in response["Users"]:
         for user_email in user.get("Emails", []):
-            if user_email.get("Value") == email:
+            if user_email.get("Value", "").lower() == email.lower():
                 return user["UserId"]
 
     raise errors.NotFound(f"AWS SSO User with email {email} not found")
