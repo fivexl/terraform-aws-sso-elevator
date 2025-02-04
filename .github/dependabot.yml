@@ -21,3 +21,13 @@ updates:
       - "dependencies"
       - "python"
       - "layer"
+
+  - package-ecosystem: "terraform"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "terraform"
+    labels:
+      - "dependencies"
+      - "terraform"
