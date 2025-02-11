@@ -223,6 +223,9 @@ def unhumanize_timedelta(td_str: str) -> timedelta:
 
 def build_approval_request_message_blocks(  # noqa: PLR0913
     requester_slack_id: str,
+    slack_client: WebClient,
+    sso_client: SSOAdminClient,
+    identity_store_client: IdentityStoreClient,
     permission_duration: timedelta,
     reason: str,
     color_coding_emoji: str,
@@ -236,6 +239,25 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
         MarkdownTextObject(text=f"Reason: {reason}"),
         MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
     ]
+    _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
+        identity_store_client = identity_store_client,
+        identity_store_id = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+        email = get_user(slack_client, id=requester_slack_id).email,
+        cfg = cfg
+        )
+
+    if secondary_domain_was_used:
+        fields.append(
+            MarkdownTextObject(
+                text=(
+                    ":warning: *Attention: Secondary Domain Fallback Used*\n"
+                    "The requester's Slack email did not match any AWS SSO user.\n"
+                    "A secondary fallback domain was used to locate the user in AWS SSO.\n"
+                    "Proceed with caution and consider verifying the user's identity to mitigate potential security risks.\n"
+                    "We do not recommend relying on this feature."
+                )
+            )
+        )
     if group:
         fields.insert(1, MarkdownTextObject(text=f"Group: {group.name} #{group.id}"))
     elif account and role_name:

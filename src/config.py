@@ -72,6 +72,8 @@ class Config(BaseSettings):
     approver_renotification_initial_wait_time: int
     approver_renotification_backoff_multiplier: int
 
+    secondary_fallback_email_domains: frozenset[str]
+
     sso_instance_arn: str
 
     log_level: str = "INFO"

@@ -72,6 +72,7 @@ def config_dict(
             "approver_renotification_initial_wait_time": st.integers(min_value=0, max_value=60),
             "approver_renotification_backoff_multiplier": st.integers(min_value=0, max_value=10),
             "max_permissions_duration_time": st.integers(min_value=0, max_value=24),
+            "secondary_fallback_email_domains": st.lists(strategies.json_safe_text, max_size=10),
         }
     )
 
@@ -105,6 +106,7 @@ def valid_config_dict(statements_as_json: bool = True, group_statements_as_json:
         "approver_renotification_initial_wait_time": "15",
         "approver_renotification_backoff_multiplier": "2",
         "max_permissions_duration_time": "24",
+        "secondary_fallback_email_domains": json.dumps(["domen.com"]),
     }
 
 

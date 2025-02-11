@@ -216,3 +216,42 @@ variable "logs_retention_in_days" {
   type        = number
   default     = 365
 }
+
+variable "secondary_fallback_email_domains" {
+  type    = list(string)
+  default = []
+  description = <<EOT
+WARNING: 
+This feature is STRONGLY DISCOURAGED because it can introduce security risks and open up potential avenues for abuse.
+
+SSO Elevator uses Slack email addresses to find users in AWS SSO. In some cases, the domain of a Slack user's email 
+(e.g., "john.doe@gmail.com") differs from the domain defined in AWS SSO (e.g., "john.doe@example.com"). By setting 
+these fallback domains, SSO Elevator will attempt to replace the original domain from Slack with each secondary domain 
+in order to locate a matching AWS SSO user. 
+ 
+Use Cases:
+- This mechanism should only be used in rare or critical situations where you cannot align Slack and AWS SSO domains.
+
+Example:
+- Slack email: john.doe@gmail.com
+- AWS SSO email: john.doe@example.com
+
+Without fallback domains, SSO Elevator cannot find the SSO user due to the domain mismatch. By setting 
+secondary_fallback_email_domains = ["example.com"], SSO Elevator will swap out "gmail.com" for "example.com"
+(and any other domain in the list) and attempt to locate "john.doe@example.com" in AWS SSO.
+
+Security Risks & Recommendations:
+- If multiple SSO users share the same local-part (before the "@") across different domains, SSO Elevator may 
+  grant permissions to the wrong user.
+- Disable or remove entries in this variable as soon as you no longer need domain fallback functionality 
+  to restore a more secure configuration.
+
+IN SUMMARY:
+Use "secondary_fallback_email_domains" ONLY if absolutely necessary. It is best practice to maintain 
+consistent, verified email domains in Slack and AWS SSO. Remove these fallback entries as soon as you 
+resolve the underlying domain mismatch to minimize security exposure.
+
+Note: SSO Elevator will send message in channel if fallback domains are in use.
+EOT
+}
+

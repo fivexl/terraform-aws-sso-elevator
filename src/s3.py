@@ -32,6 +32,7 @@ class AuditEntry:
     group_name: Literal["NA"] | str = "NA"
     group_id: Literal["NA"] | str = "NA"
     group_membership_id: Literal["NA"] | str = "NA"
+    secondary_domain_was_used: bool = False
 
 
 def log_operation(audit_entry: AuditEntry) -> type_defs.PutObjectOutputTypeDef:

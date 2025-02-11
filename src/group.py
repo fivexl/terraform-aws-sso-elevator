@@ -51,6 +51,9 @@ def handle_request_for_group_access_submittion(
     show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
         blocks=slack_helpers.build_approval_request_message_blocks(
+            sso_client = sso_client,
+            identity_store_client = identity_store_client,
+            slack_client=client,
             requester_slack_id=request.requester_slack_id,
             group=group,
             reason=request.reason,
@@ -111,11 +114,8 @@ def handle_request_for_group_access_submittion(
         text=text,
     )
 
-    user_principal_id = sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email)
-
     access_control.execute_decision_on_group_request(
         group=group,
-        user_principal_id=user_principal_id,
         permission_duration=request.permission_duration,
         approver=requester,
         requester=requester,
@@ -215,7 +215,6 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     access_control.execute_decision_on_group_request(
         decision=decision,
         group=sso.describe_group(identity_store_id, payload.request.group_id, identity_store_client),
-        user_principal_id=sso.get_user_principal_id_by_email(identity_store_client, sso_instance.identity_store_id, requester.email),
         permission_duration=payload.request.permission_duration,
         approver=approver,
         requester=requester,

@@ -168,12 +168,18 @@ def execute_decision(  # noqa: PLR0913
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
-    user_principal_id = sso.get_user_principal_id_by_email(identitystore_client, sso_instance.identity_store_id, requester.email)
+    sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
+        identity_store_client = identitystore_client,
+        identity_store_id = sso_instance.identity_store_id,
+        email = requester.email,
+        cfg = cfg
+    )
+
     account_assignment = sso.UserAccountAssignment(
         instance_arn=sso_instance.arn,
         account_id=account_id,
         permission_set_arn=permission_set.arn,
-        user_principal_id=user_principal_id,
+        user_principal_id=sso_user_principal_id,
     )
 
     logger.info("Creating account assignment", extra={"account_assignment": account_assignment})
@@ -195,8 +201,9 @@ def execute_decision(  # noqa: PLR0913
             request_id=account_assignment_status.request_id,
             operation_type="grant",
             permission_duration=permission_duration,
-            sso_user_principal_id=user_principal_id,
+            sso_user_principal_id=sso_user_principal_id,
             audit_entry_type="account",
+            secondary_domain_was_used=secondary_domain_was_used,
         ),
     )
 
@@ -209,7 +216,7 @@ def execute_decision(  # noqa: PLR0913
             instance_arn=sso_instance.arn,
             account_id=account_id,
             permission_set_arn=permission_set.arn,
-            user_principal_id=user_principal_id,
+            user_principal_id=sso_user_principal_id,
         ),
     )
     return True  # Temporary solution for testing
@@ -218,7 +225,6 @@ def execute_decision(  # noqa: PLR0913
 def execute_decision_on_group_request(  # noqa: PLR0913
     decision: AccessRequestDecision | ApproveRequestDecision,
     group: entities.aws.SSOGroup,
-    user_principal_id: str,
     permission_duration: datetime.timedelta,
     approver: entities.slack.User,
     requester: entities.slack.User,
@@ -230,18 +236,25 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         logger.info("Access request denied")
         return False  # Temporary solution for testing
 
+    sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
+        identity_store_client = identitystore_client,
+        identity_store_id = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+        email = requester.email,
+        cfg = cfg
+    )
+
     if membership_id := sso.is_user_in_group(
         identity_store_id=identity_store_id,
         group_id=group.id,
-        sso_user_id=user_principal_id,
+        sso_user_id=sso_user_principal_id,
         identity_store_client=identitystore_client,
     ):
         logger.info(
-            "User is already in the group", extra={"group_id": group.id, "user_id": user_principal_id, "membership_id": membership_id}
+            "User is already in the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
         )
     else:
-        membership_id = sso.add_user_to_a_group(group.id, user_principal_id, identity_store_id, identitystore_client)["MembershipId"]
-        logger.info("User added to the group", extra={"group_id": group.id, "user_id": user_principal_id, "membership_id": membership_id})
+        membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, identitystore_client)["MembershipId"]
+        logger.info("User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id})
 
     s3.log_operation(
         audit_entry=s3.AuditEntry(
@@ -255,7 +268,8 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             operation_type="grant",
             permission_duration=permission_duration,
             audit_entry_type="group",
-            sso_user_principal_id=user_principal_id,
+            sso_user_principal_id=sso_user_principal_id,
+            secondary_domain_was_used=secondary_domain_was_used,
         ),
     )
 
@@ -268,7 +282,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             identity_store_id=identity_store_id,
             group_name=group.name,
             group_id=group.id,
-            user_principal_id=user_principal_id,
+            user_principal_id=sso_user_principal_id,
             membership_id=membership_id,
         ),
     )

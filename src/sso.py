@@ -315,14 +315,69 @@ def list_users(client: IdentityStoreClient, identity_store_id: str) -> dict:
     return r
 
 
-def get_user_principal_id_by_email(client: IdentityStoreClient, identity_store_id: str, email: str) -> str:
-    response = list_users(client, identity_store_id=identity_store_id)
-    for user in response["Users"]:
-        for user_email in user.get("Emails", []):
-            if user_email.get("Value", "").lower() == email.lower():
-                return user["UserId"]
+def _find_user_principal_id_by_email(email: str, list_of_users: dict) -> str | None:
+    try:
+        for user in list_of_users["Users"]:
+            for user_email in user.get("Emails", []):
+                if user_email.get("Value", "").lower() == email.lower():
+                    return user["UserId"]
+        logger.info("User not found", extra={"email": email})
+        return None
+    except errors.SSOUserNotFound as e:
+        logger.error("Error while getting user principal id by email", extra={"error": e})
+        raise e
 
-    raise errors.NotFound(f"AWS SSO User with email {email} not found")
+
+def get_user_principal_id_by_email(
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+    email: str,
+    cfg: config.Config,
+) -> tuple[str, bool]:
+    # sourcery skip: extract-method, use-named-expression
+    """
+    Attempts to fetch the UserId (Principal ID) from an identity store, using the primary
+    email first. If not found and one or more secondary domains are provided, tries each
+    secondary domain in turn.
+    """
+    secondary_fallback_email_domains = cfg.secondary_fallback_email_domains or []
+    list_of_users = list_users(identity_store_client, identity_store_id)
+
+    try:
+        logger.debug("Attempting to find user by primary email", extra={"email": email})
+        if user_id := _find_user_principal_id_by_email(
+          email, list_of_users
+        ):
+            return user_id, False
+
+        logger.debug("User not found with primary email, trying secondary domains", extra={
+            "primary_email": email,
+            "secondary_fallback_email_domains": secondary_fallback_email_domains
+        })
+        first_part, _ = email.split("@", 1)
+        for domain in secondary_fallback_email_domains:
+            secondary_domain_email = first_part + domain
+
+            if user_id := _find_user_principal_id_by_email(secondary_domain_email, list_of_users):
+                logger.info("Found user using secondary domain", extra={
+                    "candidate_email": secondary_domain_email,
+                    "original_email": email
+                })
+                logger.debug("User found", extra={"user_id": user_id})
+                return user_id, True
+
+        logger.warning("User was not found in SSO", extra={
+            "original_email": email,
+            "secondary_fallback_email_domains": secondary_fallback_email_domains
+        })
+
+        raise errors.SSOUserNotFound(
+            f"User with email {email} not found in SSO, secondary_fallback_email_domains: {secondary_fallback_email_domains}"
+        )
+
+    except Exception as e:
+        logger.error("Error while getting user principal id by email", extra={"error": e})
+        raise
 
 
 def get_user_emails(client: IdentityStoreClient, identity_store_id: str, user_id: str) -> list[str]:
