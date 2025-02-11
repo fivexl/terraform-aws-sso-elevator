@@ -51,6 +51,8 @@ def test_parse_group_statement(dict_group_statement: dict):
 def config_dict(
     statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.statement_dict())),
     group_statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.group_statement_dict())),
+    secondary_fallback_email_domains: SearchStrategy = strategies.jsonstr(st.lists(strategies.json_safe_text, max_size=10, min_size=1)),
+
 ):
     return st.fixed_dictionaries(
         {
@@ -72,12 +74,16 @@ def config_dict(
             "approver_renotification_initial_wait_time": st.integers(min_value=0, max_value=60),
             "approver_renotification_backoff_multiplier": st.integers(min_value=0, max_value=10),
             "max_permissions_duration_time": st.integers(min_value=0, max_value=24),
-            "secondary_fallback_email_domains": st.lists(strategies.json_safe_text, max_size=10),
+            "secondary_fallback_email_domains": secondary_fallback_email_domains,
         }
     )
 
 
-def valid_config_dict(statements_as_json: bool = True, group_statements_as_json: bool = True):
+def valid_config_dict(
+        statements_as_json: bool = True,
+        group_statements_as_json: bool = True,
+        secondary_fallback_email_domains_as_json: bool = True,
+        ):
     if statements_as_json:
         statements = json.dumps([VALID_STATEMENT_DICT])
     else:
@@ -87,6 +93,11 @@ def valid_config_dict(statements_as_json: bool = True, group_statements_as_json:
         group_statements = json.dumps([VALID_GROUP_STATEMENT_DICT])
     else:
         group_statements = [VALID_GROUP_STATEMENT_DICT]
+
+    if secondary_fallback_email_domains_as_json:
+        secondary_fallback_email_domains = json.dumps(["domen.com"])
+    else:
+        secondary_fallback_email_domains = ["domen.com"]
     return {
         "schedule_policy_arn": "x",
         "revoker_function_arn": "x",
@@ -106,7 +117,10 @@ def valid_config_dict(statements_as_json: bool = True, group_statements_as_json:
         "approver_renotification_initial_wait_time": "15",
         "approver_renotification_backoff_multiplier": "2",
         "max_permissions_duration_time": "24",
-        "secondary_fallback_email_domains": json.dumps(["domen.com"]),
+        "secondary_fallback_email_domains": secondary_fallback_email_domains,
+        # "secondary_fallback_email_domains": json.dumps(["domen.com"]),
+        # "secondary_fallback_email_domains": ["@domen.com"]
+
     }
 
 
@@ -124,11 +138,12 @@ def test_config_load_environment_variables(dict_config: dict):
     config_dict(
         statements=st.lists(strategies.statement_dict(), max_size=20),
         group_statements=st.lists(strategies.group_statement_dict(), max_size=20),
+        secondary_fallback_email_domains=st.lists(strategies.json_safe_text, max_size=10, min_size=1),
     )
 )
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
-@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False))
-@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False) | {"post_update_to_slack": "x"}).xfail(
+@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False, secondary_fallback_email_domains_as_json=False))
+@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False, secondary_fallback_email_domains_as_json=False) | {"post_update_to_slack": "x"}).xfail(
     raises=ValidationError, reason="Invalid bool"
 )
 def test_config_init(dict_config: dict):
