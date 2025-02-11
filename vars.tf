@@ -218,8 +218,8 @@ variable "logs_retention_in_days" {
 }
 
 variable "secondary_fallback_email_domains" {
-  type    = list(string)
-  default = []
+  type        = list(string)
+  default     = []
   description = <<EOT
 WARNING: 
 This feature is STRONGLY DISCOURAGED because it can introduce security risks and open up potential avenues for abuse.

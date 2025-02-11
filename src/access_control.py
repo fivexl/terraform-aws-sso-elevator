@@ -254,7 +254,12 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         )
     else:
         membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, identitystore_client)["MembershipId"]
-        logger.info("User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id})
+        logger.info("User added to the group", extra={
+            "group_id": group.id,
+            "user_id": sso_user_principal_id,
+            "membership_id": membership_id
+            }
+        )
 
     s3.log_operation(
         audit_entry=s3.AuditEntry(
