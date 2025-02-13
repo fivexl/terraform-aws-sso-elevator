@@ -87,6 +87,7 @@ class RequestForAccessView:
                     label=PlainTextObject(text="Why do you need access?"),
                     element=PlainTextInputElement(
                         action_id=cls.REASON_ACTION_ID,
+                        placeholder=PlainTextObject(text="Reason will be saved in audit logs. Please be specific."),
                         multiline=True,
                     ),
                 ),
@@ -504,6 +505,7 @@ class RequestForGroupAccessView:
                     label=PlainTextObject(text="Why do you need access?"),
                     element=PlainTextInputElement(
                         action_id=cls.REASON_ACTION_ID,
+                        placeholder=PlainTextObject(text="Reason will be saved in audit logs. Please be specific."),
                         multiline=True,
                     ),
                 ),
