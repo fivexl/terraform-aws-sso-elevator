@@ -255,3 +255,14 @@ Note: SSO Elevator will send message in channel if fallback domains are in use.
 EOT
 }
 
+variable "api_gateway_throttling_burst_limit" {
+  description = "The maximum number of requests that API Gateway allows in a burst."
+  type        = number
+  default     = 5
+}
+
+variable "api_gateway_throttling_rate_limit" {
+  description = "The maximum number of requests that API Gateway allows per second."
+  type        = number
+  default     = 1
+}

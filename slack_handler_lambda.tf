@@ -1,6 +1,6 @@
 module "access_requester_slack_handler" {
   source  = "terraform-aws-modules/lambda/aws"
-  version = "4.16.0"
+  version = "7.19.0"
 
   function_name = var.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"
@@ -241,6 +241,8 @@ module "http_api" {
         uri  = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
         type = "AWS_PROXY"
       }
+      throttling_burst_limit   = var.api_gateway_throttling_burst_limit
+      throttling_rate_limit    = var.api_gateway_throttling_rate_limit
     }
   }
   stage_name         = local.api_stage_name

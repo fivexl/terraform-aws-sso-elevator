@@ -1,6 +1,6 @@
 module "access_revoker" {
   source  = "terraform-aws-modules/lambda/aws"
-  version = "4.16.0"
+  version = "7.19.0"
 
   function_name = var.revoker_lambda_name
   description   = "Revokes temporary permissions"
