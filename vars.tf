@@ -225,7 +225,7 @@ WARNING:
 This feature is STRONGLY DISCOURAGED because it can introduce security risks and open up potential avenues for abuse.
 
 SSO Elevator uses Slack email addresses to find users in AWS SSO. In some cases, the domain of a Slack user's email 
-(e.g., "john.doe@gmail.com") differs from the domain defined in AWS SSO (e.g., "john.doe@example.com"). By setting 
+(e.g., "john.doe@old.domain") differs from the domain defined in AWS SSO (e.g., "john.doe@new.domain"). By setting 
 these fallback domains, SSO Elevator will attempt to replace the original domain from Slack with each secondary domain 
 in order to locate a matching AWS SSO user. 
  
@@ -233,12 +233,12 @@ Use Cases:
 - This mechanism should only be used in rare or critical situations where you cannot align Slack and AWS SSO domains.
 
 Example:
-- Slack email: john.doe@gmail.com
-- AWS SSO email: john.doe@example.com
+- Slack email: john.doe@old.domain
+- AWS SSO email: john.doe@new.domain
 
 Without fallback domains, SSO Elevator cannot find the SSO user due to the domain mismatch. By setting 
-secondary_fallback_email_domains = ["example.com"], SSO Elevator will swap out "gmail.com" for "example.com"
-(and any other domain in the list) and attempt to locate "john.doe@example.com" in AWS SSO.
+secondary_fallback_email_domains = ["@new.domain"], SSO Elevator will swap out "@old.domain" for "@new.domain"
+(and any other domain in the list) and attempt to locate "john.doe@new.domain" in AWS SSO.
 
 Security Risks & Recommendations:
 - If multiple SSO users share the same local-part (before the "@") across different domains, SSO Elevator may 
@@ -265,4 +265,15 @@ variable "api_gateway_throttling_rate_limit" {
   description = "The maximum number of requests that API Gateway allows per second."
   type        = number
   default     = 1
+}
+
+variable "send_dm_if_user_not_in_channel" {
+  type        = bool
+  default     = true
+  description = <<EOT
+If the user is not in the SSO Elevator channel, Elevator will send them a direct message with the request status 
+(waiting for approval, declined, approved, etc.) and the result of the request.
+Using this feature requires the following Slack app permissions: "channels:read", "groups:read", and "im:write". 
+Please ensure these permissions are enabled in the Slack app configuration.
+EOT
 }

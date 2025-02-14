@@ -85,23 +85,34 @@ def handle_request_for_group_access_submittion(
     match decision.reason:
         case access_control.DecisionReason.ApprovalNotRequired:
             text = "Approval for this Group is not required. Request will be approved automatically."
+            dm_text = "Approval for this Group is not required. Your request will be approved automatically."
             color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.SelfApproval:
             text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
+            dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
             color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.RequiresApproval:
             approvers = [slack_helpers.get_user_by_email(client, email) for email in decision.approvers]
             mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
             text = f"{mention_approvers} there is a request waiting for the approval."
+            dm_text = f"Your request is waiting for the approval from {mention_approvers}."
             color_coding_emoji = cfg.waiting_result_emoji
         case access_control.DecisionReason.NoApprovers:
             text = "Nobody can approve this request."
+            dm_text = "Nobody can approve this request."
             color_coding_emoji = cfg.bad_result_emoji
         case access_control.DecisionReason.NoStatements:
             text = "There are no statements for this Group."
+            dm_text = "There are no statements for this Group."
             color_coding_emoji = cfg.bad_result_emoji
 
+    is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+
+    logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
     client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
+    if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
+        logger.info(f"User {requester.id} is not in the channel, sending DM, message: {dm_text}")
+        client.chat_postMessage(channel=requester.id, text=dm_text)
 
     blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
         blocks=slack_response["message"]["blocks"],
@@ -130,6 +141,11 @@ def handle_request_for_group_access_submittion(
             text=f"Permissions granted to <@{requester.id}>",
             thread_ts=slack_response["ts"],
         )
+        if not is_user_in_channel and cfg.send_dm_if_user_not_in_channel:
+            client.chat_postMessage(
+                channel=requester.id,
+                text="Your request was processed, permissions granted.",
+            )
 
 
 cache_for_dublicate_requests = {}

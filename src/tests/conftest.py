@@ -11,6 +11,7 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "revoker_function_name": "x",
         "schedule_group_name": "x",
         "post_update_to_slack": "true",
+        "send_dm_if_user_not_in_channel": "true",
         "slack_channel_id": "x",
         "slack_bot_token": "x",
         "sso_instance_arn": "x",

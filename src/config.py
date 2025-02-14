@@ -74,6 +74,8 @@ class Config(BaseSettings):
 
     secondary_fallback_email_domains: list
 
+    send_dm_if_user_not_in_channel: bool = True
+
     sso_instance_arn: str
 
     log_level: str = "INFO"

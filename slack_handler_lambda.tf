@@ -65,6 +65,7 @@ module "access_requester_slack_handler" {
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER  = var.approver_renotification_backoff_multiplier
     MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
     SECONDARY_FALLBACK_EMAIL_DOMAINS            = jsonencode(var.secondary_fallback_email_domains)
+    SEND_DM_IF_USER_NOT_IN_CHANNEL              = var.send_dm_if_user_not_in_channel
   }
 
   allowed_triggers = var.create_api_gateway ? {
@@ -241,8 +242,8 @@ module "http_api" {
         uri  = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
         type = "AWS_PROXY"
       }
-      throttling_burst_limit   = var.api_gateway_throttling_burst_limit
-      throttling_rate_limit    = var.api_gateway_throttling_rate_limit
+      throttling_burst_limit = var.api_gateway_throttling_burst_limit
+      throttling_rate_limit  = var.api_gateway_throttling_rate_limit
     }
   }
   stage_name         = local.api_stage_name

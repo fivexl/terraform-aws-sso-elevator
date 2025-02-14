@@ -318,6 +318,16 @@ def button_click_info_block(action: entities.ApproverAction, approver_slack_id: 
     )
 
 
+def check_if_user_is_in_channel(client: WebClient, channel_id: str, user_id: str) -> bool:
+    logger.info(f"Checking if user {user_id} is in channel {channel_id}")
+
+    response = client.conversations_members(channel=channel_id)
+
+    members = jp.search("members", response.data)
+    logger.debug(f"Members in channel {channel_id}: {members}")
+    return user_id in members
+
+
 class ButtonClickedPayload(BaseModel):
     action: entities.ApproverAction
     approver_slack_id: str

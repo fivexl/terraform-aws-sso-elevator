@@ -19,6 +19,7 @@
     - [Single Approver](#single-approver)
     - [Diagram of processing a request:](#diagram-of-processing-a-request)
   - [Secondary Subdomain Fallback Feature:](#secondary-subdomain-fallback-feature)
+  - [Sending direct messages to users](#sending-direct-messages-to-users)
   - [Terraform deployment example](#terraform-deployment-example)
   - [Slack App creation](#slack-app-creation)
 - [Terraform docs](#terraform-docs)
@@ -219,19 +220,19 @@ WARNING:
 This feature is STRONGLY DISCOURAGED because it can introduce security risks.
 
 SSO Elevator uses Slack email addresses to find users in AWS SSO. In some cases, the domain of a Slack user's email 
-(e.g., "john.doe@gmail.com") differs from the domain defined in AWS SSO (e.g., "john.doe@example.com"). By setting 
+(e.g., "john.doe@old.domain") differs from the domain defined in AWS SSO (e.g., "john.doe@new.domain"). By setting 
 these fallback domains, SSO Elevator will attempt to replace the original domain from Slack with each secondary domain 
 in order to locate a matching AWS SSO user. 
  
 - This mechanism should only be used in rare or critical situations where you cannot align Slack and AWS SSO domains.
 
 Example:
-- Slack email: john.doe@gmail.com
-- AWS SSO email: john.doe@example.com
+- Slack email: john.doe@@old.domain
+- AWS SSO email: john.doe@new.domain
 
 Without fallback domains, SSO Elevator cannot find the SSO user due to the domain mismatch. By setting 
-secondary_fallback_email_domains = ["example.com"], SSO Elevator will try to swap out "gmail.com" for "example.com"
-(and any other domain in the list) and attempt to locate "john.doe@example.com" in AWS SSO.
+secondary_fallback_email_domains = ["@new.domain"], SSO Elevator will try to swap out "@old.domain" for "@new.domain"
+(and any other domain in the list) and attempt to locate "john.doe@new.domain" in AWS SSO.
 
 Security Risks & Recommendations:
 - If multiple SSO users share the same local-part (before the "@") across different domains, SSO Elevator may 
@@ -245,6 +246,10 @@ consistent, verified email domains in Slack and AWS SSO. Remove these fallback e
 resolve the underlying domain mismatch to minimize security exposure.
 
 SSO Elevator will update request message in channel with Warning, if fallback domains are in use.
+
+## Sending direct messages to users
+SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one exept them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
+
 
 ## Terraform deployment example
 
@@ -459,6 +464,10 @@ oauth_config:
       - users:read
       # 'channels:history': This permission is needed for the app to find old messages in order to handle "discard button" events.
       - channels:history
+      # Permissions below are required if "
+      - "channels:read", # View basic information about public channels in a workspace. It allows app to determine if requester is in the channel.
+      - "groups:read", # View basic information about private channels that slack app has been added to. Same as above but for private channels
+      - "im:write" # Allows the app to send direct messages to members of a workspace. It is used to send messages to the user if they are not in the channel.
 settings:
   interactivity:
     is_enabled: true
