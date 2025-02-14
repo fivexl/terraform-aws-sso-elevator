@@ -35,7 +35,7 @@ module "aws_sso_elevator" {
   schedule_expression                            = "cron(0 23 * * ? *)" # revoke access schedule expression
   schedule_expression_for_check_on_inconsistency = "rate(1 hour)"
   revoker_post_update_to_slack                   = true
-  send_dm_if_user_not_in_channel = true
+  send_dm_if_user_not_in_channel                 = true
 
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
