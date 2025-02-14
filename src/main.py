@@ -143,6 +143,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
+    is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
     if (
         cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
@@ -168,6 +169,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
 
         text = f"Request was discarded by<@{approver.id}> "
+        dm_text = f"Your request was discarded by <@{approver.id}>."
         client.chat_update(
             channel=payload.channel_id,
             ts=payload.thread_ts,
@@ -176,6 +178,12 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         )
 
         cache_for_dublicate_requests.clear()
+        if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
+            logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
+            client.chat_postMessage(
+                channel=requester.id,
+                text=dm_text
+        )
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=text,
@@ -201,6 +209,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         )
 
     text = f"Permissions granted to <@{requester.id}> by <@{approver.id}>."
+    dm_text = f"Your request was approved by <@{approver.id}>. Permissions granted."
     blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
         blocks=payload.message["blocks"],
         color_coding_emoji=cfg.good_result_emoji,
@@ -208,6 +217,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
 
     blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
     blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
+    is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
     client.chat_update(
         channel=payload.channel_id,
         ts=payload.thread_ts,
@@ -225,6 +235,12 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         reason=payload.request.reason,
     )
     cache_for_dublicate_requests.clear()
+    if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
+        logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
+        client.chat_postMessage(
+            channel=requester.id,
+            text=dm_text
+    )
     return client.chat_postMessage(
         channel=payload.channel_id,
         text=text,
