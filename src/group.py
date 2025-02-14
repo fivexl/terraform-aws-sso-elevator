@@ -115,8 +115,7 @@ def handle_request_for_group_access_submittion(
         client.chat_postMessage(
             channel=requester.id,
             text=f"""
-            {dm_text}
-            You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
+            {dm_text} You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
             """
         )
 
