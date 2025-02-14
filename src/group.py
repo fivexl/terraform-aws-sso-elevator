@@ -111,8 +111,14 @@ def handle_request_for_group_access_submittion(
     logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
     client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
     if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
-        logger.info(f"User {requester.id} is not in the channel, sending DM, message: {dm_text}")
-        client.chat_postMessage(channel=requester.id, text=dm_text)
+        logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
+        client.chat_postMessage(
+            channel=requester.id,
+            text=f"""
+            {dm_text}
+            You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
+            """
+        )
 
     blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
         blocks=slack_response["message"]["blocks"],
