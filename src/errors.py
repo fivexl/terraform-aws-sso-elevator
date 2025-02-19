@@ -38,7 +38,7 @@ def error_handler(client: WebClient, e: Exception, logger: Logger, context: Bolt
             "Check the logs for more details."
         )
     else:
-        text = f"<@{user_id}> Your request for AWS permissions encountered an unexpected error. " "Refer to the logs for more details."
+        text = f"<@{user_id}> Your request for AWS permissions encountered an unexpected error. Refer to the logs for more details."
     client.chat_postMessage(text=text, channel=cfg.slack_channel_id)
 
 
