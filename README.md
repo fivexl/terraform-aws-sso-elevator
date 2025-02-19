@@ -7,19 +7,19 @@
 - [Functionality](#functionality)
   - [Group Assignments Mode](#group-assignments-mode)
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
-- [Deployment and Usage](#deployment-and-usage)
-  - [Note on dependencies](#note-on-dependencies)
-  - [Updated Build Process](#updated-build-process)
-  - [API](#api)
-  - [Module configuration options and automatic approval](#module-configuration-options-and-automatic-approval)
-    - [Configuration structure](#configuration-structure)
+- [Module configuration, and features](#module-configuration-and-features)
+  - [Configuration structure](#configuration-structure)
     - [Explicit Deny](#explicit-deny)
     - [Automatic Approval](#automatic-approval)
     - [Aggregation of Rules](#aggregation-of-rules)
     - [Single Approver](#single-approver)
     - [Diagram of processing a request:](#diagram-of-processing-a-request)
   - [Secondary Subdomain Fallback Feature:](#secondary-subdomain-fallback-feature)
-  - [Sending direct messages to users](#sending-direct-messages-to-users)
+  - [Sending direct messages to users feature](#sending-direct-messages-to-users-feature)
+  - [API gateway feature](#api-gateway-feature)
+- [Deployment and Usage](#deployment-and-usage)
+  - [SSO delegation](#sso-delegation)
+  - [Build Process](#build-process)
   - [Terraform deployment example](#terraform-deployment-example)
   - [Slack App creation](#slack-app-creation)
 - [Terraform docs](#terraform-docs)
@@ -122,67 +122,13 @@ SSO elevator assumes that your Slack user email will match SSO user id otherwise
 
 When onboarding your organization, be aware that the access-revoker will revoke all user-level Permission Set assignments in the AWS accounts you specified in the module configuration. If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
 
-# Deployment and Usage
+The same behavior applies to group-level assignments: if you specify a group in the `group_configuration`, SSO Elevator will remove any users from that group if they were not added by SSO Elevator.
 
-## Note on dependencies
 
-Lambdas are built using Python 3.10 and rely on Poetry for package management and dependency resolution. To run Terraform, both Python 3.10 and Poetry need to be installed on your system. If these tools are not available, you can opt to package the Lambdas using Docker by providing the appropriate flag to the module. We do recommend using Docker build where possible to avoid misconfigurations or missing packages.
 
-The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
+# Module configuration, and features
 
-## Updated Build Process
-In 1.4.0 release, the ability to build zip files locally without Docker has been removed due to issues with Python environments and version mismatches. Now, GitHub CI will pre-build the requester and revoker lambda Docker images and push them to FivexL's private ECR. Users can use these pre-built Docker images to build lambdas. 
-
-ECR is private for the following reasons:
-
-- AWS Lambda can't use any other source of images except ECR.
-- AWS Lambda can't use public ECR.
-- AWS Lambda doesn't support pulling container images from Amazon ECR using a pull-through cache rule (so we can't create a private repo from the user's side to pull images from the GHCR, for example).
-
-Images and repositories are replicated in every region that AWS SSO supports except these:
-```
-- ap_east_1
-- eu_south_1
-- ap_southeast_3
-- af_south_1
-- me_south_1
-- il_central_1
-- me_central_1
-- eu_south_2
-- ap_south_2
-- eu_central_2
-- ap_southeast_4
-- ca_west_1
-- us_gov_east_1
-- us_gov_west_1
-```
-Those regions are not enabled by default. If you need to use a region that is not supported by the module, please let us know by creating an issue, and we will add support for it. 
-
-**Conclusion**:
-Now there are only two ways to build an SSO elevator:
-
-Using pre-created images pulled from ECR (Default)
-Using Docker build to build images locally (provide the variable use_pre_created_image = false)
-There is also an option to host ECR yourself by providing the following variables:
-```hcl
-ecr_repo_name = "example_repo_name"
-ecr_owner_account_id = "<example_account_id>"
-```
-
-## API
-To address the [lambda-1](https://docs.aws.amazon.com/securityhub/latest/userguide/lambda-controls.html#lambda-1) SecurityHub control alert triggered by the default creation of a FunctionURLAllowPublicAccess resource-based policy for lambda, in 1.4.0 release module will eventually migrate to the usage of API Gateway by default. You still can use lambda URL  to seamlessly migrate to the API Gateway url, but it is deprecated and will be removed in future releases. You can use the following variables to control the behavior:
-
-```hcl
-create_api_gateway = true # This will create an API Gateway for the requester lambda
-create_lambda_url = false # This will delete lambda url
-```
-
-To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.
-**After updating the module, you can find the API URL in the output of the module. Please don't forget to update the Slack App manifest with the new URL.**
-
-## Module configuration options and automatic approval
-
-### Configuration structure
+## Configuration structure
 
 The configuration is a list of dictionaries, where each dictionary represents a single configuration rule.
 
@@ -247,9 +193,92 @@ resolve the underlying domain mismatch to minimize security exposure.
 
 SSO Elevator will update request message in channel with Warning, if fallback domains are in use.
 
-## Sending direct messages to users
+## Sending direct messages to users feature
 SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one exept them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
 
+## API gateway feature
+To address the [lambda-1](https://docs.aws.amazon.com/securityhub/latest/userguide/lambda-controls.html#lambda-1) SecurityHub control alert triggered by the default creation of a FunctionURLAllowPublicAccess resource-based policy for lambda, in 1.4.0 release module will eventually migrate to the usage of API Gateway by default. You still can use lambda URL to seamlessly migrate to the API Gateway url, but it is deprecated and will be removed in future releases. You can use the following variables to control the behavior:
+
+```hcl
+create_api_gateway = true # This will create an API Gateway for the requester lambda
+create_lambda_url = false # This will delete lambda url
+```
+
+To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.
+**After updating the module, you can find the API URL in the output of the module. Please don't forget to update the Slack App manifest with the new URL.**
+
+# Deployment and Usage
+
+The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
+
+## SSO delegation
+AWS recommends delegating SSO administration to a separate “delegated SSO administrator account.” We also recommend creating a dedicated “sso-tooling” account responsible for managing access across your entire organization. The main reason for these recommendations is to reduce how much the management account has to handle, thereby limiting the blast radius in the event of a security incident.
+
+Although the module can be deployed in either the management account or the delegated SSO administrator account, we recommend deploying it in the delegated SSO administrator account.
+
+To do this, create a new AWS account (if you don’t already have one) and and delegate SSO administration to it. For more details on this process, refer to the [AWS documentation](https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin-how-to-register.html).
+
+Alternatively, you can use this Terraform snippet in your management account to delegate SSO permissions to the new account:
+
+```hcl
+resource "aws_organizations_delegated_administrator" "sso" {
+  account_id        = <<DELEGATED_ACCOUNT_ID>>
+  service_principal = "sso.amazonaws.com"
+}
+```
+This is only pre-requisite for the module to work in the delegated SSO administrator account. After this step, you can proceed with the module deployment.
+
+**Important Note:**
+
+The delegated SSO administrator account **cannot** be used to manage access to the management account. Specifically, any permission set created and managed by the management account can’t be used by the SSO tooling account. (If you create a permission set in the Management account and try to use it in the SSO account, you’ll get an “Access Denied” error.)
+
+This limitation ensures that the management account always manages access to itself, while the delegated SSO administrator account manages access to every other account in the organization. As a result, you won’t be able to use an `account_level` SSO elevator to manage access to the management account if the elevator is deployed in the delegated SSO administrator account.
+
+However, there is still a way to provide **temporary** access to the management account through SSO Elevator:
+
+1. Go to the management account and create a `ManagementAccountAccess` group and permission set (with required permissions).
+2. From the management account, assign the `ManagementAccountAccess` group and permission set to the management account.
+3. Use SSO Elevator to `/group_access` request access to this `ManagementAccountAccess` group, which will add you to the group and grant you access to the management account. (this way you don't directly use the permission set, so you don't hit the limitation and get access to the management account)
+
+With this approach, you can reduce how often you use the management account and how many resources you deploy there, while still being able to manage the entire organization and temporarily access the management account.
+
+## Build Process
+There are three ways to build an SSO elevator:
+
+Using pre-created images pulled from ECR (Default)
+Using Docker build to build images locally (provide the variable use_pre_created_image = false)
+There is also an option to host ECR yourself by providing the following variables:
+```hcl
+ecr_repo_name = "example_repo_name"
+ecr_owner_account_id = "<example_account_id>"
+```
+
+GitHub CI of this repository pre-builds the requester and revoker lambda Docker images on every release and push them to FivexL's private ECR. Users can use these pre-built Docker images to build lambdas.
+
+ECR is private for the following reasons:
+
+- AWS Lambda can't use any other source of images except ECR.
+- AWS Lambda can't use public ECR.
+- AWS Lambda doesn't support pulling container images from Amazon ECR using a pull-through cache rule (so we can't create a private repo from the user's side to pull images from the GHCR, for example).
+
+Images and repositories are replicated in every region that AWS SSO supports except these:
+```
+- ap_east_1
+- eu_south_1
+- ap_southeast_3
+- af_south_1
+- me_south_1
+- il_central_1
+- me_central_1
+- eu_south_2
+- ap_south_2
+- eu_central_2
+- ap_southeast_4
+- ca_west_1
+- us_gov_east_1
+- us_gov_west_1
+```
+Those regions are not enabled by default. If you need to use a region that is not supported by the module, please let us know by creating an issue, and we will add support for it. 
 
 ## Terraform deployment example
 
@@ -273,41 +302,28 @@ data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
 
 module "aws_sso_elevator" {
   source                           = "github.com/fivexl/terraform-aws-sso-elevator.git"
-  aws_sns_topic_subscription_email = "email@gmail.com"
+  source  = "fivexl/sso-elevator/aws"
+  version = "2.0.2"
+  slack_signing_secret  = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
+  slack_bot_token       = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
+  slack_channel_id      = local.slack_channel_id
 
-  slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
-  slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
-  slack_channel_id     = "***********"
-  schedule_expression  = "cron(0 23 * * ? *)" # revoke access schedule expression
-  schedule_expression_for_check_on_inconsistency = "rate(1 hour)" 
-  build_in_docker = true
-  revoker_post_update_to_slack = true
+  s3_logging = {
+    target_bucket = module.naming_conventions.s3_access_logs_bucket_name
+    target_prefix = "sso-elevator-logs/"
+  }
 
-  # The initial wait time before the first re-notification to the approver is sent.
-  approver_renotification_initial_wait_time = 15
-  # The multiplier applied to the wait time for each subsequent notification sent to the approver.
-  # Default is 2, which means the wait time will double for each attempt.
-  approver_renotification_backoff_multiplier = 2
+  s3_bucket_partition_prefix = "sso-elevator-logs"
 
-  sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
-
-  # If you wish to use your own S3 bucket for audit_entry logs, 
-  # specify its name here:
-  s3_name_of_the_existing_bucket = "your-s3-bucket-name"
-
-  # If you do not provide a value for s3_name_of_the_existing_bucket, 
-  # the module will create a new bucket with the default name 'sso-elevator-audit-entry':
-  s3_bucket_name_for_audit_entry = "fivexl-sso-elevator"
-
-  # The default partition prefix is "logs/":
-  s3_bucket_partition_prefix     = "some_prefix/"
-
-  # MFA delete setting for the S3 bucket:
-  s3_mfa_delete                  = false
-
-  # Object lock setting for the S3 bucket:
-  s3_object_lock                 = true
-
+  s3_object_lock = true
+  s3_object_lock_configuration = {
+    rule = {
+      default_retention = {
+        mode  = "GOVERNANCE"
+        years = 3
+      }
+    }
+  }
   # The default object lock configuration is as follows:
   # {
   #  rule = {
@@ -464,7 +480,7 @@ oauth_config:
       - users:read
       # 'channels:history': This permission is needed for the app to find old messages in order to handle "discard button" events.
       - channels:history
-      # Permissions below are required if "
+      # Permissions below are required if you want to use the feature of sending direct messages to users if they are not in the channel
       - "channels:read", # View basic information about public channels in a workspace. It allows app to determine if requester is in the channel.
       - "groups:read", # View basic information about private channels that slack app has been added to. Same as above but for private channels
       - "im:write" # Allows the app to send direct messages to members of a workspace. It is used to send messages to the user if they are not in the channel.
