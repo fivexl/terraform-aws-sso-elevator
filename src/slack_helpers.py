@@ -241,11 +241,11 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
         MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
     ]
     _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client = identity_store_client,
-        identity_store_id = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
-        email = get_user(slack_client, id=requester_slack_id).email,
-        cfg = cfg
-        )
+        identity_store_client=identity_store_client,
+        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+        email=get_user(slack_client, id=requester_slack_id).email,
+        cfg=cfg,
+    )
 
     if secondary_domain_was_used:
         fields.append(

@@ -52,7 +52,6 @@ def config_dict(
     statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.statement_dict())),
     group_statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.group_statement_dict())),
     secondary_fallback_email_domains: SearchStrategy = strategies.jsonstr(st.lists(strategies.json_safe_text, max_size=10, min_size=1)),
-
 ):
     return st.fixed_dictionaries(
         {
@@ -81,10 +80,10 @@ def config_dict(
 
 
 def valid_config_dict(
-        statements_as_json: bool = True,
-        group_statements_as_json: bool = True,
-        secondary_fallback_email_domains_as_json: bool = True,
-        ):
+    statements_as_json: bool = True,
+    group_statements_as_json: bool = True,
+    secondary_fallback_email_domains_as_json: bool = True,
+):
     if statements_as_json:
         statements = json.dumps([VALID_STATEMENT_DICT])
     else:
@@ -120,7 +119,6 @@ def valid_config_dict(
         "approver_renotification_backoff_multiplier": "2",
         "max_permissions_duration_time": "24",
         "secondary_fallback_email_domains": secondary_fallback_email_domains,
-
     }
 
 
@@ -144,11 +142,13 @@ def test_config_load_environment_variables(dict_config: dict):
 )
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 @example(valid_config_dict(statements_as_json=False, group_statements_as_json=False, secondary_fallback_email_domains_as_json=False))
-@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False, secondary_fallback_email_domains_as_json=False) | {"post_update_to_slack": "x"}).xfail(
-    raises=ValidationError, reason="Invalid bool"
-)
-@example(valid_config_dict(statements_as_json=False, group_statements_as_json=False, secondary_fallback_email_domains_as_json=False) | {"send_dm_if_user_not_in_channel": "x"}).xfail(
-    raises=ValidationError, reason="Invalid bool"
-)
+@example(
+    valid_config_dict(statements_as_json=False, group_statements_as_json=False, secondary_fallback_email_domains_as_json=False)
+    | {"post_update_to_slack": "x"}
+).xfail(raises=ValidationError, reason="Invalid bool")
+@example(
+    valid_config_dict(statements_as_json=False, group_statements_as_json=False, secondary_fallback_email_domains_as_json=False)
+    | {"send_dm_if_user_not_in_channel": "x"}
+).xfail(raises=ValidationError, reason="Invalid bool")
 def test_config_init(dict_config: dict):
     config.Config(**dict_config)

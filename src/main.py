@@ -69,11 +69,11 @@ def build_initial_form_handler(
         # Try getting SSO user to check if user exist
         try:
             sso.get_user_principal_id_by_email(
-                identity_store_client = identity_store_client,
-                identity_store_id = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
-                email = slack_helpers.get_user(client, id=body.get("user", {}).get("id")).email,
-                cfg = cfg
-                )
+                identity_store_client=identity_store_client,
+                identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+                email=slack_helpers.get_user(client, id=body.get("user", {}).get("id")).email,
+                cfg=cfg,
+            )
 
         except SSOUserNotFound:
             client.chat_postMessage(
@@ -81,7 +81,7 @@ def build_initial_form_handler(
                 text=f"<@{body.get('user', {}).get('id') or 'UNKNOWN_USER'}>,"
                 "Your request for AWS permissions failed because SSO Elevator could not find your user in SSO."
                 "This often happens if your AWS SSO email differs from your Slack email."
-                "Please check the SSO Elevator logs for more details."
+                "Please check the SSO Elevator logs for more details.",
             )
             raise
 
@@ -180,10 +180,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         cache_for_dublicate_requests.clear()
         if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
             logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-            client.chat_postMessage(
-                channel=requester.id,
-                text=dm_text
-        )
+            client.chat_postMessage(channel=requester.id, text=dm_text)
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=text,
@@ -237,10 +234,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     cache_for_dublicate_requests.clear()
     if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
         logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-        client.chat_postMessage(
-            channel=requester.id,
-            text=dm_text
-    )
+        client.chat_postMessage(channel=requester.id, text=dm_text)
     return client.chat_postMessage(
         channel=payload.channel_id,
         text=text,
@@ -287,8 +281,8 @@ def handle_request_for_access_submittion(
     show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
         blocks=slack_helpers.build_approval_request_message_blocks(
-            sso_client = sso_client,
-            identity_store_client = identity_store_client,
+            sso_client=sso_client,
+            identity_store_client=identity_store_client,
             slack_client=client,
             requester_slack_id=request.requester_slack_id,
             account=account,
@@ -345,7 +339,6 @@ def handle_request_for_access_submittion(
 
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
-
     logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
     client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
     if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
@@ -354,7 +347,7 @@ def handle_request_for_access_submittion(
             channel=requester.id,
             text=f"""
             {dm_text} You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
-            """
+            """,
         )
 
     blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
@@ -389,7 +382,6 @@ def handle_request_for_access_submittion(
                 channel=requester.id,
                 text="Your request was processed, permissions granted.",
             )
-
 
 
 app.view(slack_helpers.RequestForAccessView.CALLBACK_ID)(

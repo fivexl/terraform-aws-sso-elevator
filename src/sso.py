@@ -345,31 +345,26 @@ def get_user_principal_id_by_email(
 
     try:
         logger.debug("Attempting to find user by primary email", extra={"email": email})
-        if user_id := _find_user_principal_id_by_email(
-          email, list_of_users
-        ):
+        if user_id := _find_user_principal_id_by_email(email, list_of_users):
             return user_id, False
 
-        logger.debug("User not found with primary email, trying secondary domains", extra={
-            "primary_email": email,
-            "secondary_fallback_email_domains": secondary_fallback_email_domains
-        })
+        logger.debug(
+            "User not found with primary email, trying secondary domains",
+            extra={"primary_email": email, "secondary_fallback_email_domains": secondary_fallback_email_domains},
+        )
         first_part, _ = email.split("@", 1)
         for domain in secondary_fallback_email_domains:
             secondary_domain_email = first_part + domain
 
             if user_id := _find_user_principal_id_by_email(secondary_domain_email, list_of_users):
-                logger.info("Found user using secondary domain", extra={
-                    "candidate_email": secondary_domain_email,
-                    "original_email": email
-                })
+                logger.info("Found user using secondary domain", extra={"candidate_email": secondary_domain_email, "original_email": email})
                 logger.debug("User found", extra={"user_id": user_id})
                 return user_id, True
 
-        logger.warning("User was not found in SSO", extra={
-            "original_email": email,
-            "secondary_fallback_email_domains": secondary_fallback_email_domains
-        })
+        logger.warning(
+            "User was not found in SSO",
+            extra={"original_email": email, "secondary_fallback_email_domains": secondary_fallback_email_domains},
+        )
 
         raise errors.SSOUserNotFound(
             f"User with email {email} not found in SSO, secondary_fallback_email_domains: {secondary_fallback_email_domains}"

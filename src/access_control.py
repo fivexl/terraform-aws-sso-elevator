@@ -169,10 +169,7 @@ def execute_decision(  # noqa: PLR0913
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
     sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client = identitystore_client,
-        identity_store_id = sso_instance.identity_store_id,
-        email = requester.email,
-        cfg = cfg
+        identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
     )
 
     account_assignment = sso.UserAccountAssignment(
@@ -237,10 +234,10 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         return False  # Temporary solution for testing
 
     sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client = identitystore_client,
-        identity_store_id = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
-        email = requester.email,
-        cfg = cfg
+        identity_store_client=identitystore_client,
+        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+        email=requester.email,
+        cfg=cfg,
     )
 
     if membership_id := sso.is_user_in_group(
@@ -254,11 +251,8 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         )
     else:
         membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, identitystore_client)["MembershipId"]
-        logger.info("User added to the group", extra={
-            "group_id": group.id,
-            "user_id": sso_user_principal_id,
-            "membership_id": membership_id
-            }
+        logger.info(
+            "User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
         )
 
     s3.log_operation(

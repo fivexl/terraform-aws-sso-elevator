@@ -51,8 +51,8 @@ def handle_request_for_group_access_submittion(
     show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
         blocks=slack_helpers.build_approval_request_message_blocks(
-            sso_client = sso_client,
-            identity_store_client = identity_store_client,
+            sso_client=sso_client,
+            identity_store_client=identity_store_client,
             slack_client=client,
             requester_slack_id=request.requester_slack_id,
             group=group,
@@ -116,7 +116,7 @@ def handle_request_for_group_access_submittion(
             channel=requester.id,
             text=f"""
             {dm_text} You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
-            """
+            """,
         )
 
     blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
@@ -198,10 +198,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         cache_for_dublicate_requests.clear()
         if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
             logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-            client.chat_postMessage(
-                channel=requester.id,
-                text=dm_text
-        )
+            client.chat_postMessage(channel=requester.id, text=dm_text)
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=text,
@@ -254,10 +251,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     cache_for_dublicate_requests.clear()
     if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
         logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-        client.chat_postMessage(
-            channel=requester.id,
-            text=dm_text
-    )
+        client.chat_postMessage(channel=requester.id, text=dm_text)
     return client.chat_postMessage(
         channel=payload.channel_id,
         text=text,
