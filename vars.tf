@@ -231,11 +231,17 @@ variable "max_permissions_duration_time" {
 variable "permission_duration_list_override" {
   description = <<EOT
   An explicit list of duration values to appear in the drop-down menu users use to select how long to request permissions for.
-  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half.
+  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes
+  must be between 0-59, the number of hours can be any number.
   If this variable is set, the max_permission_duration_time is ignored.
   EOT
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = alltrue([for d in var.permission_duration_list_override : can(regex("^\\d+:[0-5]\\d$", d))])
+    error_message = "Each entry in the permission_duration_list_override must be in the format hh:mm, that is, a number of hours, followed by a colon, followed by a number of minutes."
+  }
 }
 
 variable "logs_retention_in_days" {
