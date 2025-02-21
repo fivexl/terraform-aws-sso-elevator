@@ -63,6 +63,7 @@ module "access_revoker" {
     SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
     REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
     MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
+    PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
 
     APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME  = var.approver_renotification_initial_wait_time
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
