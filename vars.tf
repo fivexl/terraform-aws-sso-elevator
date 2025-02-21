@@ -137,7 +137,10 @@ variable "revoker_post_update_to_slack" {
 }
 
 variable "s3_bucket_name_for_audit_entry" {
-  description = "Unique name of the S3 bucket"
+  description = <<EOT
+  The name of the S3 bucket that will be used by the module to store logs about every access request.
+  If s3_name_of_the_existing_bucket is not provided, the module will create a new bucket with this name.
+  EOT
   type        = string
   default     = "sso-elevator-audit-entry"
 }
@@ -153,7 +156,13 @@ variable "s3_bucket_partition_prefix" {
 }
 
 variable "s3_name_of_the_existing_bucket" {
-  description = "Specify the name of an existing S3 bucket to use. If not provided, a new bucket will be created."
+  description = <<EOT
+  Name of an existing S3 bucket to use for storing SSO Elevator audit logs.
+  An audit log bucket is mandatory.
+  If you specify this variable, the module will use your existing bucket.
+  Otherwise, if you don't provide this variable, the module will create a new bucket named according to the "s3_bucket_name_for_audit_entry" variable.
+  If the module is creating an audit bucket for you, then you must provide a logging configuration via the s3_logging input variable, with at least the target_bucket key specified.
+  EOT
   type        = string
   default     = ""
 }
@@ -182,7 +191,11 @@ variable "s3_object_lock_configuration" {
 }
 
 variable "s3_logging" {
-  description = "Map containing access bucket logging configuration."
+  description = <<EOT
+  Map containing access bucket logging configuration.
+  If you are not providing s3_name_of_the_existing_bucket variable, then module will create bucket for you.
+  If the module is creating an audit bucket for you, then you must provide a logging configuration via this input variable, with at least the target_bucket key specified.
+  EOT
   type        = map(string)
   default     = {}
 }
