@@ -219,9 +219,12 @@ variable "approver_renotification_backoff_multiplier" {
 }
 
 variable "max_permissions_duration_time" {
-  description = "Maximum duration of the permissions granted by the Elevator in hours."
-  type        = number
-  default     = 24
+  description = <<EOT
+  Maximum duration (in hours) for permissions granted by Elevator. Max number - 48 hours.
+  Due to Slack's dropdown limit of 100 items, anything above 48 hours will cause issues when generating half-hour increments.
+  EOT
+  type    = number
+  default = 24
 }
 
 variable "logs_retention_in_days" {
