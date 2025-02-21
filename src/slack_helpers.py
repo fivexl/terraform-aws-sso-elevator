@@ -453,14 +453,26 @@ def get_message_from_timestamp(channel_id: str, message_ts: str, slack_client: s
 # Plain text object supports only 99 options
 # https://github.com/fivexl/terraform-aws-sso-elevator/issues/110
 def get_max_duration_block(cfg: config.Config) -> list[Option]:
-    max_increments = min(cfg.max_permissions_duration_time * 2, 99)
-    return [
-        Option(
-            text=PlainTextObject(text=f"{i // 2:02d}:{(i % 2) * 30:02d}"),
-            value=f"{i // 2:02d}:{(i % 2) * 30:02d}"
-        )
-        for i in range(1, max_increments + 1)
-    ]
+    if cfg.permission_duration_list_override:
+        elements = cfg.permission_duration_list_override
+        if len(elements) > 100
+            elements = elements[:99] + elements[-1:]
+        return [
+            Option(
+                text=PlainTextObject(text=s),
+                value=s
+            )
+            for s in elements
+        ]
+    else:
+        max_increments = min(cfg.max_permissions_duration_time * 2, 99)
+        return [
+            Option(
+                text=PlainTextObject(text=f"{i // 2:02d}:{(i % 2) * 30:02d}"),
+                value=f"{i // 2:02d}:{(i % 2) * 30:02d}"
+            )
+            for i in range(1, max_increments + 1)
+        ]
 
 
 # Group

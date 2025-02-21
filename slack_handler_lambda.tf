@@ -64,6 +64,7 @@ module "access_requester_slack_handler" {
     APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME   = var.approver_renotification_initial_wait_time
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER  = var.approver_renotification_backoff_multiplier
     MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
+    PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
     SECONDARY_FALLBACK_EMAIL_DOMAINS            = jsonencode(var.secondary_fallback_email_domains)
     SEND_DM_IF_USER_NOT_IN_CHANNEL              = var.send_dm_if_user_not_in_channel
   }
