@@ -228,6 +228,16 @@ variable "max_permissions_duration_time" {
   default     = 24
 }
 
+variable "permission_duration_list_override" {
+  description = <<EOT
+  An explicit list of duration values to appear in the drop-down menu users use to select how long to request permissions for.
+  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half.
+  If this variable is set, the max_permission_duration_time is ignored.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "logs_retention_in_days" {
   description = "The number of days you want to retain log events in the log group for both Lambda functions and API Gateway."
   type        = number

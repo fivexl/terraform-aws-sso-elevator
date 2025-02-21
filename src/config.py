@@ -94,6 +94,7 @@ class Config(BaseSettings):
     request_expiration_hours: int = 8
 
     max_permissions_duration_time: int
+    permission_duration_list_override: list
 
     good_result_emoji: str = ":large_green_circle:"
     waiting_result_emoji: str = ":large_yellow_circle:"
