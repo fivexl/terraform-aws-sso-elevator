@@ -21,7 +21,8 @@ CREATE EXTERNAL TABLE IF NOT EXISTS sso_elevator_table (
   `group_membership_id` string,
   `audit_entry_type` string,
   `version` string,
-  `sso_user_principal_id` string
+  `sso_user_principal_id` string,
+  `secondary_domain_was_used` string
 )
 PARTITIONED BY (`timestamp` string)
 ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
