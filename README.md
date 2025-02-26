@@ -18,7 +18,7 @@
   - [Sending direct messages to users feature](#sending-direct-messages-to-users-feature)
   - [API gateway feature](#api-gateway-feature)
 - [Deployment and Usage](#deployment-and-usage)
-  - [SSO delegation](#sso-delegation)
+  - [SSO Delegation](#sso-delegation)
   - [Build Process](#build-process)
   - [Terraform deployment example](#terraform-deployment-example)
   - [Slack App creation](#slack-app-creation)
@@ -173,7 +173,7 @@ in order to locate a matching AWS SSO user.
 - This mechanism should only be used in rare or critical situations where you cannot align Slack and AWS SSO domains.
 
 Example:
-- Slack email: john.doe@@old.domain
+- Slack email: john.doe@old.domain
 - AWS SSO email: john.doe@new.domain
 
 Without fallback domains, SSO Elevator cannot find the SSO user due to the domain mismatch. By setting 
@@ -211,36 +211,8 @@ To fix the Security Hub issue when migrating to API Gateway, manually delete the
 
 The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
 
-## SSO delegation
-AWS recommends delegating SSO administration to a separate “delegated SSO administrator account.” We also recommend creating a dedicated “sso-tooling” account responsible for managing access across your entire organization. The main reason for these recommendations is to reduce how much the management account has to handle, thereby limiting the blast radius in the event of a security incident.
-
-Although the module can be deployed in either the management account or the delegated SSO administrator account, we recommend deploying it in the delegated SSO administrator account.
-
-To do this, create a new AWS account (if you don’t already have one) and and delegate SSO administration to it. For more details on this process, refer to the [AWS documentation](https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin-how-to-register.html).
-
-Alternatively, you can use this Terraform snippet in your management account to delegate SSO permissions to the new account:
-
-```hcl
-resource "aws_organizations_delegated_administrator" "sso" {
-  account_id        = <<DELEGATED_ACCOUNT_ID>>
-  service_principal = "sso.amazonaws.com"
-}
-```
-This is only pre-requisite for the module to work in the delegated SSO administrator account. After this step, you can proceed with the module deployment.
-
-**Important Note:**
-
-The delegated SSO administrator account **cannot** be used to manage access to the management account. Specifically, any permission set created and managed by the management account can’t be used by the SSO tooling account. (If you create a permission set in the Management account and try to use it in the SSO account, you’ll get an “Access Denied” error.)
-
-This limitation ensures that the management account always manages access to itself, while the delegated SSO administrator account manages access to every other account in the organization. As a result, you won’t be able to use an `account_level` SSO elevator to manage access to the management account if the elevator is deployed in the delegated SSO administrator account.
-
-However, there is still a way to provide **temporary** access to the management account through SSO Elevator:
-
-1. Go to the management account and create a `ManagementAccountAccess` group and permission set (with required permissions).
-2. From the management account, assign the `ManagementAccountAccess` group and permission set to the management account.
-3. Use SSO Elevator to `/group_access` request access to this `ManagementAccountAccess` group, which will add you to the group and grant you access to the management account. (this way you don't directly use the permission set, so you don't hit the limitation and get access to the management account)
-
-With this approach, you can reduce how often you use the management account and how many resources you deploy there, while still being able to manage the entire organization and temporarily access the management account.
+## SSO Delegation
+AWS recommends delegating SSO administration to a separate “delegated SSO administrator account.” We also recommend creating a dedicated “sso-tooling” account to manage access across your entire organization. You can learn more about how to use SSO Elevator in the delegated SSO administrator account here: [SSO delegation](/docs/docs.md#sso-delegation)
 
 ## Build Process
 There are three ways to build an SSO elevator:
