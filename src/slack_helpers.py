@@ -455,7 +455,7 @@ def get_message_from_timestamp(channel_id: str, message_ts: str, slack_client: s
 def get_max_duration_block(cfg: config.Config) -> list[Option]:
     if cfg.permission_duration_list_override:
         elements = cfg.permission_duration_list_override
-        if len(elements) > 100: # noqa: PLR2004 
+        if len(elements) > 100: # noqa: PLR2004
             elements = elements[:99] + elements[-1:]
         return [
             Option(
