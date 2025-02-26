@@ -1,7 +1,7 @@
+import json
 import os
 
 import boto3
-import json
 
 
 def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
@@ -25,6 +25,7 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "approver_renotification_backoff_multiplier": "2",
         "max_permissions_duration_time": "24",
         "secondary_fallback_email_domains": json.dumps(["domen.com"]),
+        "permission_duration_list_override": json.dumps(["00:25", "01:00"]),
         "statements": json.dumps(
             [
                 {
