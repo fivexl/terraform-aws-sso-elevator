@@ -286,7 +286,10 @@ Use "secondary_fallback_email_domains" ONLY if absolutely necessary. It is best 
 consistent, verified email domains in Slack and AWS SSO. Remove these fallback entries as soon as you 
 resolve the underlying domain mismatch to minimize security exposure.
 
-Note: SSO Elevator will send message in channel if fallback domains are in use.
+Notes:
+- SSO Elevator always prioritizes the primary domain from Slack (the Slack user's email) when searching for a user in AWS SSO.
+- SSO Elevator adds a large warning message in Slack if it uses a secondary fallback domain to find a user in AWS SSO.
+- The secondary domain feature works **ONLY** for the requester, approvers in the configuration must have the same email domain as in Slack.
 EOT
 }
 

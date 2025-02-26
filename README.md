@@ -193,6 +193,11 @@ resolve the underlying domain mismatch to minimize security exposure.
 
 SSO Elevator will update request message in channel with Warning, if fallback domains are in use.
 
+Notes:
+- SSO Elevator always prioritizes the primary domain from Slack (the Slack user's email) when searching for a user in AWS SSO.
+- SSO Elevator adds a large warning message in Slack if it uses a secondary fallback domain to find a user in AWS SSO.
+- The secondary domain feature works **ONLY** for the requester, approvers in the configuration must have the same email domain as in Slack.
+
 ## Sending direct messages to users feature
 SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one except them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
 
