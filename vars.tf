@@ -238,6 +238,8 @@ variable "secondary_fallback_email_domains" {
   type        = list(string)
   default     = []
   description = <<EOT
+
+Value example: ["@new.domain", "@second.domain"], every domain name should start with "@".
 WARNING: 
 This feature is STRONGLY DISCOURAGED because it can introduce security risks and open up potential avenues for abuse.
 
@@ -249,7 +251,7 @@ in order to locate a matching AWS SSO user.
 Use Cases:
 - This mechanism should only be used in rare or critical situations where you cannot align Slack and AWS SSO domains.
 
-Example:
+Use Case Example:
 - Slack email: john.doe@old.domain
 - AWS SSO email: john.doe@new.domain
 
