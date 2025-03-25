@@ -19,6 +19,12 @@ variable "ecr_repo_name" {
   default     = "aws-sso-elevator"
 }
 
+variable "ecr_repo_tag" {
+  description = "The tag of the image in the ECR repository."
+  type        = string
+  default     = "3.0.1"
+}
+
 variable "use_pre_created_image" {
   description = "If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code."
   type        = bool
