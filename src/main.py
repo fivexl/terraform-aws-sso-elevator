@@ -1,5 +1,5 @@
-import group
 from datetime import timedelta
+from typing import Callable
 
 import boto3
 from slack_bolt import Ack, App, BoltContext
@@ -10,14 +10,12 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
+import group
 import organizations
 import schedule
 import slack_helpers
 import sso
-
-from errors import handle_errors, SSOUserNotFound
-from typing import Callable
-
+from errors import SSOUserNotFound, handle_errors
 
 logger = config.get_logger(service="main")
 
@@ -148,7 +146,9 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         logger.warning(f"Failed to get approver user info: {e}")
         return client.chat_postMessage(
             channel=payload.channel_id,
-            text=f"Unable to process this approval - approver information could not be retrieved. This may happen if the approver <@{payload.approver_slack_id}> is from a different Slack workspace.",
+            text=f"""Unable to process this approval - approver information could not be retrieved. 
+            This may happen if the approver <@{payload.approver_slack_id}> is from a different Slack workspace.
+            Please check the module configuration.""",
             thread_ts=payload.thread_ts,
         )
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
@@ -267,7 +267,7 @@ app.action(entities.ApproverAction.Discard.value)(
 
 
 @handle_errors
-def handle_request_for_access_submittion(
+def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
     body: dict,
     ack: Ack,  # noqa: ARG001
     client: WebClient,
@@ -334,15 +334,24 @@ def handle_request_for_access_submittion(
         case access_control.DecisionReason.RequiresApproval:
             approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(client, decision.approvers)
             if not approvers:
-                text = "None of the approvers from configuration could be found in Slack. Request cannot be processed. Please discard the request and check the module configuration."
-                dm_text = "Your request cannot be processed because none of the approvers from configuration could be found in Slack. Please discard the request and check the module configuration."
+                text = """
+                None of the approvers from configuration could be found in Slack.
+                Request cannot be processed. Please discard the request and check the module configuration.
+                """
+                dm_text = """
+                Your request cannot be processed because none of the approvers from configuration could be found in Slack.
+                Please discard the request and check the module configuration.
+                """
                 color_coding_emoji = cfg.bad_result_emoji
             else:
                 mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
                 text = f"{mention_approvers} there is a request waiting for the approval."
                 if approver_emails_not_found:
                     missing_emails = ", ".join(approver_emails_not_found)
-                    text += f" Note: Some approvers ({missing_emails}) could not be found in Slack. Please discard the request and check the module configuration."
+                    text += f"""
+                    Note: Some approvers ({missing_emails}) could not be found in Slack.
+                    Please discard the request and check the module configuration.
+                    """
                 dm_text = f"Your request is waiting for the approval from {mention_approvers}."
                 color_coding_emoji = cfg.waiting_result_emoji
         case access_control.DecisionReason.NoApprovers:
