@@ -332,7 +332,9 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
             color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.RequiresApproval:
-            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(client, decision.approvers) # type: ignore # noqa: PGH003
+            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(
+                client, decision.approvers # type: ignore # noqa: PGH003
+            )
             if not approvers:
                 text = """
                 None of the approvers from configuration could be found in Slack.
