@@ -384,10 +384,12 @@ def get_user(client: WebClient, id: str) -> entities.slack.User:
 
 
 def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
+    logger.info(f"Getting slack user by email: {email}")
     start = datetime.datetime.now(timezone.utc)
     timeout_seconds = 30
     try:
         r = client.users_lookupByEmail(email=email)
+        logger.info(f"Slack user found: {r}")
         return parse_user(r.data)  # type: ignore
     except slack_sdk.errors.SlackApiError as e:
         if e.response["error"] == "ratelimited":
@@ -397,6 +399,7 @@ def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
             time.sleep(3)
             return get_user_by_email(client, email)
         else:
+            logger.error(f"Error when getting slack user by email. {e}")
             raise e
     except Exception as e:
         raise e
@@ -473,6 +476,22 @@ def get_max_duration_block(cfg: config.Config) -> list[Option]:
             )
             for i in range(1, max_increments + 1)
         ]
+    
+
+def find_approvers_in_slack(client: WebClient, approver_emails: list[str]) -> tuple[list[entities.slack.User], list[str]]:
+    approvers = []
+    approver_emails_not_found = []
+    
+    for email in approver_emails:
+        try:
+            approver = get_user_by_email(client, email)
+            approvers.append(approver)
+        except Exception as e:
+            logger.warning(f"Approver with email {email} not found in Slack")
+            approver_emails_not_found.append(email)
+    
+    return approvers, approver_emails_not_found
+
 
 
 # Group

@@ -141,7 +141,16 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         return group.handle_group_button_click(body, client, context)
 
     logger.info("Button click payload", extra={"payload": payload})
-    approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
+    # Approver might be from different Slack workspace, if so, get_user will fail.
+    try:
+        approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
+    except Exception as e:
+        logger.warning(f"Failed to get approver user info: {e}")
+        return client.chat_postMessage(
+            channel=payload.channel_id,
+            text=f"Unable to process this approval - approver information could not be retrieved. This may happen if the approver <@{payload.approver_slack_id}> is from a different Slack workspace.",
+            thread_ts=payload.thread_ts,
+        )
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
@@ -323,11 +332,19 @@ def handle_request_for_access_submittion(
             dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
             color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.RequiresApproval:
-            approvers = [slack_helpers.get_user_by_email(client, email) for email in decision.approvers]
-            mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
-            text = f"{mention_approvers} there is a request waiting for the approval."
-            dm_text = f"Your request is waiting for the approval from {mention_approvers}."
-            color_coding_emoji = cfg.waiting_result_emoji
+            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(client, decision.approvers)
+            if not approvers:
+                text = "None of the approvers from configuration could be found in Slack. Request cannot be processed. Please discard the request and check the module configuration."
+                dm_text = "Your request cannot be processed because none of the approvers from configuration could be found in Slack. Please discard the request and check the module configuration."
+                color_coding_emoji = cfg.bad_result_emoji
+            else:
+                mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
+                text = f"{mention_approvers} there is a request waiting for the approval."
+                if approver_emails_not_found:
+                    missing_emails = ", ".join(approver_emails_not_found)
+                    text += f" Note: Some approvers ({missing_emails}) could not be found in Slack. Please discard the request and check the module configuration."
+                dm_text = f"Your request is waiting for the approval from {mention_approvers}."
+                color_coding_emoji = cfg.waiting_result_emoji
         case access_control.DecisionReason.NoApprovers:
             text = "Nobody can approve this request."
             dm_text = "Nobody can approve this request."
