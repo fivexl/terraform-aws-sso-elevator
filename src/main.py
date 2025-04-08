@@ -146,7 +146,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         logger.warning(f"Failed to get approver user info: {e}")
         return client.chat_postMessage(
             channel=payload.channel_id,
-            text=f"""Unable to process this approval - approver information could not be retrieved. 
+            text=f"""Unable to process this approval - approver information could not be retrieved.
             This may happen if the approver <@{payload.approver_slack_id}> is from a different Slack workspace.
             Please check the module configuration.""",
             thread_ts=payload.thread_ts,
@@ -332,7 +332,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
             color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.RequiresApproval:
-            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(client, decision.approvers)
+            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(client, decision.approvers) # type: ignore # noqa: PGH003
             if not approvers:
                 text = """
                 None of the approvers from configuration could be found in Slack.
