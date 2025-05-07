@@ -5,8 +5,9 @@ module "access_revoker" {
   function_name = var.revoker_lambda_name
   description   = "Revokes temporary permissions"
 
-  publish = true
-  timeout = 30
+  publish     = true
+  timeout     = var.lambda_timeout
+  memory_size = var.lambda_memory_size
 
   # Pull image from ecr
   package_type   = var.use_pre_created_image ? "Image" : "Zip"

@@ -5,8 +5,9 @@ module "access_requester_slack_handler" {
   function_name = var.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"
 
-  publish = true
-  timeout = 30
+  publish     = true
+  timeout     = var.lambda_timeout
+  memory_size = var.lambda_memory_size
 
   # Pull image from ecr
   package_type   = var.use_pre_created_image ? "Image" : "Zip"
