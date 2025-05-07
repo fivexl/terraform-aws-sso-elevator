@@ -321,3 +321,15 @@ Using this feature requires the following Slack app permissions: "channels:read"
 Please ensure these permissions are enabled in the Slack app configuration.
 EOT
 }
+
+variable "lambda_timeout" {
+  description = "The amount of time your Lambda Function has to run in seconds."
+  type        = number
+  default     = 30
+}
+
+variable "lambda_memory_size" {
+  description = "Amount of memory in MB your Lambda Function can use at runtime. Valid value between 128 MB to 10,240 MB (10 GB), in 64 MB increments."
+  type        = number
+  default     = 128
+}
