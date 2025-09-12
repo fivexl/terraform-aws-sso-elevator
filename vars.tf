@@ -311,6 +311,12 @@ variable "api_gateway_throttling_rate_limit" {
   default     = 1
 }
 
+variable "api_gateway_name" {
+  description = "The name of the API Gateway for SSO Elevator's access-requester Lambda"
+  type        = string
+  default     = "sso-elevator-access-requster"
+}
+
 variable "send_dm_if_user_not_in_channel" {
   type        = bool
   default     = true
