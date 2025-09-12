@@ -343,8 +343,8 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
                 identitystore_client=identitystore_client,
                 slack_client=slack_client,
             )
-            rule = schedule.get_event_brige_rule(
-                event_brige_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
+            rule = schedule.get_event_bridge_rule(
+                event_bridge_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
             )
             next_run_time_or_expression = schedule.check_rule_expression_and_get_next_run(rule)
             time_notice = ""
@@ -396,8 +396,8 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
                 identitystore_client=identity_store_client,
                 slack_client=slack_client,
             )
-            rule = schedule.get_event_brige_rule(
-                event_brige_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
+            rule = schedule.get_event_bridge_rule(
+                event_bridge_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
             )
             next_run_time_or_expression = schedule.check_rule_expression_and_get_next_run(rule)
             time_notice = ""
