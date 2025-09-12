@@ -227,7 +227,7 @@ module "http_api" {
   count         = var.create_api_gateway ? 1 : 0
   source        = "terraform-aws-modules/apigateway-v2/aws"
   version       = "5.0.0"
-  name          = "sso-elevator-access-requster"
+  name          = var.api_gateway_name
   description   = "API Gateway for SSO Elevator's access-requester Lambda, to communicate with Slack"
   protocol_type = "HTTP"
 
