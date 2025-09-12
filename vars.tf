@@ -113,15 +113,27 @@ variable "requester_lambda_name" {
 }
 
 variable "event_brige_check_on_inconsistency_rule_name" {
-  description = "value for the event bridge check on inconsistency rule name"
+  description = "DEPRECATED: Use event_bridge_check_on_inconsistency_rule_name instead. This variable contains a typo and will be removed in a future version."
   type        = string
   default     = "sso-elevator-check-on-inconsistency"
 }
 
 variable "event_brige_scheduled_revocation_rule_name" {
-  description = "value for the event bridge scheduled revocation rule name"
+  description = "DEPRECATED: Use event_bridge_scheduled_revocation_rule_name instead. This variable contains a typo and will be removed in a future version."
   type        = string
   default     = "sso-elevator-scheduled-revocation"
+}
+
+variable "event_bridge_check_on_inconsistency_rule_name" {
+  description = "value for the event bridge check on inconsistency rule name"
+  type        = string
+  default     = null
+}
+
+variable "event_bridge_scheduled_revocation_rule_name" {
+  description = "value for the event bridge scheduled revocation rule name"
+  type        = string
+  default     = null
 }
 
 variable "schedule_group_name" {

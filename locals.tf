@@ -19,6 +19,16 @@ locals {
   api_resource_path = "/access-requester"
   api_stage_name    = "default"
   full_api_url      = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
+
+  # Event Bridge rule names with fallback to deprecated variables
+  event_bridge_check_on_inconsistency_rule_name = coalesce(
+    var.event_bridge_check_on_inconsistency_rule_name,
+    var.event_brige_check_on_inconsistency_rule_name
+  )
+  event_bridge_scheduled_revocation_rule_name = coalesce(
+    var.event_bridge_scheduled_revocation_rule_name,
+    var.event_brige_scheduled_revocation_rule_name
+  )
 }
 
 resource "random_string" "random" {
