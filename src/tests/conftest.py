@@ -25,13 +25,18 @@ MOCK_GROUP_STATEMENTS = [
 ]
 
 
-def mock_get_secret(secret_name: str, transform: str = None):  # noqa: ANN201, ARG001
+def mock_get_secret(secret_name: str, transform: str = None):  # noqa: ANN201
     """Mock function for parameters.get_secret() to return test data"""
     if "statements-secret" in secret_name or secret_name == "arn:aws:secretsmanager:us-east-1:123456789012:secret:statements":
-        return MOCK_STATEMENTS
+        secret = MOCK_STATEMENTS
     elif "group-statements-secret" in secret_name or secret_name == "arn:aws:secretsmanager:us-east-1:123456789012:secret:group_statements":
-        return MOCK_GROUP_STATEMENTS
-    return None
+        secret = MOCK_GROUP_STATEMENTS
+    else:
+        return None
+    if transform == "json":
+        return secret
+    else:
+        return json.dumps(secret)
 
 
 def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
