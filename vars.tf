@@ -103,7 +103,7 @@ variable "group_config" {
 variable "use_secrets_manager_for_config" {
   description = "Whether to store config and group_config in Secrets Manager instead of environment variables."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "revoker_lambda_name" {
