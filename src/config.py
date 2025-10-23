@@ -118,11 +118,11 @@ class Config(BaseSettings):
         statements_secret_arn = values.get("statements_secret_arn")
         group_statements_secret_arn = values.get("group_statements_secret_arn")
         
-        if statements_secret_arn and not values.get("statements"):
+        if statements_secret_arn and values.get("statements") is None:
             statements_data = parameters.get_secret(statements_secret_arn, transform="json")
             values["statements"] = statements_data
         
-        if group_statements_secret_arn and not values.get("group_statements"):
+        if group_statements_secret_arn and values.get("group_statements") is None:
             group_statements_data = parameters.get_secret(group_statements_secret_arn, transform="json")
             values["group_statements"] = group_statements_data
         
