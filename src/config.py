@@ -2,6 +2,7 @@ import os
 from typing import Optional
 
 from aws_lambda_powertools import Logger
+from aws_lambda_powertools.utilities import parameters
 from pydantic import BaseSettings, root_validator
 
 import entities
@@ -80,6 +81,8 @@ class Config(BaseSettings):
 
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"
+    statements_secret_arn: Optional[str] = None
+    group_statements_secret_arn: Optional[str] = None
     statements: frozenset[Statement]
     group_statements: frozenset[GroupStatement]
 
@@ -106,6 +109,18 @@ class Config(BaseSettings):
 
     @root_validator(pre=True)
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
+        # Fetch from Secrets Manager if set
+        statements_secret_arn = values.get("statements_secret_arn")
+        group_statements_secret_arn = values.get("group_statements_secret_arn")
+        
+        if statements_secret_arn and not values.get("statements"):
+            statements_data = parameters.get_secret(statements_secret_arn, transform="json")
+            values["statements"] = statements_data
+        
+        if group_statements_secret_arn and not values.get("group_statements"):
+            group_statements_data = parameters.get_secret(group_statements_secret_arn, transform="json")
+            values["group_statements"] = group_statements_data
+        
         statements = (
             {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
             if values.get("statements") is not None
