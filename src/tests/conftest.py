@@ -1,7 +1,37 @@
 import json
 import os
+from unittest.mock import patch
 
 import boto3
+
+MOCK_STATEMENTS = [
+    {
+        "ResourceType": "Account",
+        "Resource": ["*"],
+        "PermissionSet": "*",
+        "Approvers": [
+            "email@domen.com",
+        ],
+        "AllowSelfApproval": True,
+    }
+]
+
+MOCK_GROUP_STATEMENTS = [
+    {
+        "Resource": ["11111111-2222-3333-4444-555555555555"],
+        "Approvers": ["email@domen.com"],
+        "AllowSelfApproval": True,
+    },
+]
+
+
+def mock_get_secret(secret_name: str, transform: str = None):  # noqa: ANN201, ARG001
+    """Mock function for parameters.get_secret() to return test data"""
+    if "statements-secret" in secret_name or secret_name == "arn:aws:secretsmanager:us-east-1:123456789012:secret:statements":
+        return MOCK_STATEMENTS
+    elif "group-statements-secret" in secret_name or secret_name == "arn:aws:secretsmanager:us-east-1:123456789012:secret:group_statements":
+        return MOCK_GROUP_STATEMENTS
+    return None
 
 
 def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
@@ -50,7 +80,12 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
                 },
             ]
         ),
+        "statements_secret_arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:statements",
+        "group_statements_secret_arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:group_statements",
     }
     os.environ |= mock_env
 
     boto3.setup_default_session(region_name="us-east-1")
+
+    patcher = patch("aws_lambda_powertools.utilities.parameters.get_secret", side_effect=mock_get_secret)
+    patcher.start()

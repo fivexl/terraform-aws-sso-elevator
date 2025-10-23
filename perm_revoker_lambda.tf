@@ -42,35 +42,43 @@ module "access_revoker" {
     module.sso_elevator_dependencies[0].lambda_layer_arn,
   ]
 
-  environment_variables = {
-    LOG_LEVEL = var.log_level
+  environment_variables = merge(
+    {
+      LOG_LEVEL = var.log_level
 
-    SLACK_SIGNING_SECRET = var.slack_signing_secret
-    SLACK_BOT_TOKEN      = var.slack_bot_token
-    SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = var.schedule_group_name
+      SLACK_SIGNING_SECRET = var.slack_signing_secret
+      SLACK_BOT_TOKEN      = var.slack_bot_token
+      SLACK_CHANNEL_ID     = var.slack_channel_id
+      SCHEDULE_GROUP_NAME  = var.schedule_group_name
 
-    SSO_INSTANCE_ARN            = local.sso_instance_arn
-    STATEMENTS                  = jsonencode(var.config)
-    GROUP_STATEMENTS            = jsonencode(var.group_config)
-    POWERTOOLS_LOGGER_LOG_EVENT = true
+      SSO_INSTANCE_ARN            = local.sso_instance_arn
+      POWERTOOLS_LOGGER_LOG_EVENT = true
 
-    POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
-    SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
-    REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
-    REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
-    S3_BUCKET_FOR_AUDIT_ENTRY_NAME              = local.s3_bucket_name
-    S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
-    SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
-    REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
-    MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
-    PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
+      POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
+      SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
+      REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
+      REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
+      S3_BUCKET_FOR_AUDIT_ENTRY_NAME              = local.s3_bucket_name
+      S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
+      SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
+      REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
+      MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
+      PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
 
-    APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME  = var.approver_renotification_initial_wait_time
-    APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
-    SECONDARY_FALLBACK_EMAIL_DOMAINS           = jsonencode(var.secondary_fallback_email_domains)
-    SEND_DM_IF_USER_NOT_IN_CHANNEL             = var.send_dm_if_user_not_in_channel
-  }
+      APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME  = var.approver_renotification_initial_wait_time
+      APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
+      SECONDARY_FALLBACK_EMAIL_DOMAINS           = jsonencode(var.secondary_fallback_email_domains)
+      SEND_DM_IF_USER_NOT_IN_CHANNEL             = var.send_dm_if_user_not_in_channel
+    },
+    # Use Secrets Manager if enabled otherwise fallback to passing directly
+    var.use_secrets_manager_for_config ? {
+      STATEMENTS_SECRET_ARN       = aws_secretsmanager_secret.sso_elevator_config[0].arn
+      GROUP_STATEMENTS_SECRET_ARN = aws_secretsmanager_secret.sso_elevator_group_config[0].arn
+      } : {
+      STATEMENTS       = jsonencode(var.config)
+      GROUP_STATEMENTS = jsonencode(var.group_config)
+    }
+  )
 
   allowed_triggers = {
     cron = {
@@ -171,6 +179,21 @@ data "aws_iam_policy_document" "revoker" {
     resources = ["*"]
   }
 
+  # Conditionally add permission to read configuration from Secrets Manager
+  dynamic "statement" {
+    for_each = var.use_secrets_manager_for_config ? [1] : []
+    content {
+      sid    = "AllowGetSecrets"
+      effect = "Allow"
+      actions = [
+        "secretsmanager:GetSecretValue",
+      ]
+      resources = [
+        aws_secretsmanager_secret.sso_elevator_config[0].arn,
+        aws_secretsmanager_secret.sso_elevator_group_config[0].arn,
+      ]
+    }
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_scheduled_revocation" {
