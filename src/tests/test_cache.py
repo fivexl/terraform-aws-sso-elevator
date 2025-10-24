@@ -96,6 +96,104 @@ class TestCacheConfig:
         assert config.enabled is False
 
 
+class TestValidateArn:
+    """Tests for _validate_arn function."""
+
+    def test_valid_sso_instance_arn(self):
+        """Test validation with a valid SSO instance ARN."""
+        valid_arn = "arn:aws:sso:::instance/ssoins-1111111111111111"
+        result = cache_module._validate_arn(valid_arn)
+        assert result == valid_arn
+
+    def test_valid_sso_instance_arn_with_hyphens(self):
+        """Test validation with a valid SSO instance ARN containing hyphens."""
+        valid_arn = "arn:aws:sso:::instance/ssoins-test-123-abc"
+        result = cache_module._validate_arn(valid_arn)
+        assert result == valid_arn
+
+    def test_valid_sso_instance_arn_govcloud(self):
+        """Test validation with a valid GovCloud SSO instance ARN."""
+        valid_arn = "arn:aws-us-gov:sso:::instance/ssoins-1111111111111111"
+        result = cache_module._validate_arn(valid_arn)
+        assert result == valid_arn
+
+    def test_valid_sso_instance_arn_china(self):
+        """Test validation with a valid China SSO instance ARN."""
+        valid_arn = "arn:aws-cn:sso:::instance/ssoins-1111111111111111"
+        result = cache_module._validate_arn(valid_arn)
+        assert result == valid_arn
+
+    def test_valid_sso_instance_arn_iso(self):
+        """Test validation with a valid ISO SSO instance ARN."""
+        valid_arn = "arn:aws-iso:sso:::instance/ssoins-1111111111111111"
+        result = cache_module._validate_arn(valid_arn)
+        assert result == valid_arn
+
+    def test_valid_sso_instance_arn_isob(self):
+        """Test validation with a valid ISOB SSO instance ARN."""
+        valid_arn = "arn:aws-iso-b:sso:::instance/ssoins-1111111111111111"
+        result = cache_module._validate_arn(valid_arn)
+        assert result == valid_arn
+
+    def test_valid_sso_instance_arn_future_partition(self):
+        """Test validation accepts future AWS partition formats."""
+        # Hypothetical future partition like aws-eu-gov or aws-jp
+        valid_arn = "arn:aws-future-partition:sso:::instance/ssoins-1111111111111111"
+        result = cache_module._validate_arn(valid_arn)
+        assert result == valid_arn
+
+    def test_invalid_arn_not_string(self):
+        """Test validation fails when ARN is not a string."""
+        with pytest.raises(ValueError, match="ARN must be a string"):
+            cache_module._validate_arn(123)  # type: ignore
+
+    def test_invalid_arn_wrong_partition_format(self):
+        """Test validation fails with partition that doesn't start with 'aws'."""
+        invalid_arn = "arn:azure:sso:::instance/ssoins-1111111111111111"
+        with pytest.raises(ValueError, match="Invalid SSO instance ARN format"):
+            cache_module._validate_arn(invalid_arn)
+
+    def test_invalid_arn_wrong_service(self):
+        """Test validation fails with wrong AWS service."""
+        invalid_arn = "arn:aws:s3:::bucket/mybucket"
+        with pytest.raises(ValueError, match="Invalid SSO instance ARN format"):
+            cache_module._validate_arn(invalid_arn)
+
+    def test_invalid_arn_wrong_format(self):
+        """Test validation fails with malformed ARN."""
+        invalid_arn = "not-an-arn"
+        with pytest.raises(ValueError, match="Invalid SSO instance ARN format"):
+            cache_module._validate_arn(invalid_arn)
+
+    def test_invalid_arn_with_injection_attempt(self):
+        """Test validation prevents injection attempts."""
+        injection_arn = "arn:aws:sso:::instance/test' OR '1'='1"
+        with pytest.raises(ValueError, match="Invalid SSO instance ARN format"):
+            cache_module._validate_arn(injection_arn)
+
+    def test_invalid_arn_too_long(self):
+        """Test validation fails when ARN exceeds maximum length."""
+        long_arn = "arn:aws:sso:::instance/" + "a" * 2000
+        with pytest.raises(ValueError, match="ARN exceeds maximum length"):
+            cache_module._validate_arn(long_arn)
+
+    def test_invalid_arn_empty_string(self):
+        """Test validation fails with empty string."""
+        with pytest.raises(ValueError, match="Invalid SSO instance ARN format"):
+            cache_module._validate_arn("")
+
+    def test_invalid_arn_with_special_chars(self):
+        """Test validation fails with special characters."""
+        invalid_arn = "arn:aws:sso:::instance/test$special%chars"
+        with pytest.raises(ValueError, match="Invalid SSO instance ARN format"):
+            cache_module._validate_arn(invalid_arn)
+
+    def test_invalid_arn_none(self):
+        """Test validation fails with None."""
+        with pytest.raises(ValueError, match="ARN must be a string"):
+            cache_module._validate_arn(None)  # type: ignore
+
+
 class TestGetCachedAccounts:
     """Tests for get_cached_accounts function."""
 
@@ -351,6 +449,28 @@ class TestGetCachedPermissionSets:
 
         assert result is None
 
+    def test_invalid_arn_format(self, mock_dynamodb_client, cache_config_enabled):
+        """When ARN format is invalid, should return None and not call DynamoDB."""
+        result = cache_module.get_cached_permission_sets(
+            mock_dynamodb_client,
+            cache_config_enabled,
+            "invalid-arn-format",
+        )
+
+        assert result is None
+        mock_dynamodb_client.query.assert_not_called()
+
+    def test_arn_injection_attempt(self, mock_dynamodb_client, cache_config_enabled):
+        """When ARN contains injection attempt, should return None and not call DynamoDB."""
+        result = cache_module.get_cached_permission_sets(
+            mock_dynamodb_client,
+            cache_config_enabled,
+            "arn:aws:sso:::instance/test' OR '1'='1",
+        )
+
+        assert result is None
+        mock_dynamodb_client.query.assert_not_called()
+
 
 class TestSetCachedPermissionSets:
     """Tests for set_cached_permission_sets function."""
@@ -393,6 +513,30 @@ class TestSetCachedPermissionSets:
             "arn:aws:sso:::instance/ssoins-1111111111111111",
             sample_permission_sets,
         )
+
+    def test_invalid_arn_format_on_write(self, mock_dynamodb_client, cache_config_enabled, sample_permission_sets):
+        """When ARN format is invalid during write, should not crash and not call DynamoDB."""
+        cache_module.set_cached_permission_sets(
+            mock_dynamodb_client,
+            cache_config_enabled,
+            "invalid-arn-format",
+            sample_permission_sets,
+        )
+
+        # Should not call DynamoDB due to validation failure
+        mock_dynamodb_client.put_item.assert_not_called()
+
+    def test_arn_injection_attempt_on_write(self, mock_dynamodb_client, cache_config_enabled, sample_permission_sets):
+        """When ARN contains injection attempt during write, should not crash and not call DynamoDB."""
+        cache_module.set_cached_permission_sets(
+            mock_dynamodb_client,
+            cache_config_enabled,
+            "arn:aws:sso:::instance/test' OR '1'='1",
+            sample_permission_sets,
+        )
+
+        # Should not call DynamoDB due to validation failure
+        mock_dynamodb_client.put_item.assert_not_called()
 
 
 class TestWithCacheFallback:

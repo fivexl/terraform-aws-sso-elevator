@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +18,13 @@ if TYPE_CHECKING:
 logger = config.get_logger(service="cache")
 
 T = TypeVar("T")
+
+# Regex pattern for validating AWS ARN format
+# SSO instance ARN format: arn:{partition}:sso:::instance/{instance-id}
+# Partition format: "aws" optionally followed by hyphen-separated segments (e.g., aws-us-gov, aws-cn, aws-iso-b)
+# This pattern is future-proof for new AWS partitions while preventing injection attacks
+# instance-id is alphanumeric, underscores, and hyphens
+ARN_PATTERN = re.compile(r"^arn:aws(-[\w]+)*:sso:::\w+/[\w-]+$")
 
 
 @dataclass
@@ -54,6 +62,32 @@ def _get_ttl_timestamp(ttl_minutes: int) -> int:
         Unix timestamp when the item should expire
     """
     return int(time.time()) + (ttl_minutes * 60)
+
+
+def _validate_arn(arn: str) -> str:
+    """Validate and sanitize SSO instance ARN.
+
+    Args:
+        arn: SSO instance ARN to validate
+
+    Returns:
+        Validated ARN string
+
+    Raises:
+        ValueError: If the ARN format is invalid
+    """
+    if not isinstance(arn, str):
+        raise ValueError(f"ARN must be a string, got {type(arn)}")
+
+    # Check against ARN pattern
+    if not ARN_PATTERN.match(arn):
+        raise ValueError(f"Invalid SSO instance ARN format: {arn}")
+
+    # Additional length check to prevent excessively long input
+    if len(arn) > 1024:
+        raise ValueError("ARN exceeds maximum length")
+
+    return arn
 
 
 def _is_cache_valid(item: dict[str, Any]) -> bool:
@@ -186,12 +220,15 @@ def get_cached_permission_sets(
         return None
 
     try:
+        # Validate ARN to prevent injection attacks
+        validated_arn = _validate_arn(sso_instance_arn)
+
         response = dynamodb_client.query(
             TableName=cache_config.table_name,
             KeyConditionExpression="cache_key = :cache_key AND item_id = :item_id",
             ExpressionAttributeValues={
                 ":cache_key": {"S": CacheKey.PERMISSION_SETS},
-                ":item_id": {"S": sso_instance_arn},
+                ":item_id": {"S": validated_arn},
             },
         )
 
@@ -235,6 +272,9 @@ def set_cached_permission_sets(
         return
 
     try:
+        # Validate ARN to prevent injection attacks
+        validated_arn = _validate_arn(sso_instance_arn)
+
         ttl = _get_ttl_timestamp(cache_config.ttl_minutes)
         permission_sets_data = [ps.dict() for ps in permission_sets]
 
@@ -242,7 +282,7 @@ def set_cached_permission_sets(
             TableName=cache_config.table_name,
             Item={
                 "cache_key": {"S": CacheKey.PERMISSION_SETS},
-                "item_id": {"S": sso_instance_arn},
+                "item_id": {"S": validated_arn},
                 "data": {"S": json.dumps(permission_sets_data)},
                 "ttl": {"N": str(ttl)},
                 "cached_at": {"S": datetime.now(timezone.utc).isoformat()},
