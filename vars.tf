@@ -361,7 +361,7 @@ variable "cache_table_name" {
 variable "cache_ttl_minutes" {
   description = "TTL in minutes for cached AWS accounts and permission sets. If set to 0, caching is disabled and DynamoDB table will not be created."
   type        = number
-  default     = 360
+  default     = 5760
 }
 
 variable "cache_kms_key_arn" {

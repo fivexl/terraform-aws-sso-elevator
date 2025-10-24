@@ -23,7 +23,7 @@ This implementation adds caching for AWS accounts and permission sets using Dyna
 
 2. **Variables** (`vars.tf`):
    - `cache_table_name`: Name of the DynamoDB table (default: `sso-elevator-cache`)
-   - `cache_ttl_minutes`: TTL in minutes for cached data (default: 360 = 6 hours)
+   - `cache_ttl_minutes`: TTL in minutes for cached data (default: 5760 = 4 days)
      - Set to `0` to disable caching completely (no DynamoDB table will be created)
    - `cache_kms_key_arn`: Optional ARN of a customer-managed KMS key for encryption (default: null)
      - When null, uses AWS managed encryption key (aws/dynamodb)
@@ -68,7 +68,7 @@ This implementation adds caching for AWS accounts and permission sets using Dyna
 
 4. **Updated Config** (`src/config.py`):
    - Added `cache_table_name` field (default: `sso-elevator-cache`)
-   - Added `cache_ttl_minutes` field (default: 360 = 6 hours)
+   - Added `cache_ttl_minutes` field (default: 5760 = 4 days)
 
 5. **Updated Lambda Handlers**:
    - `src/main.py`: Updated to use cached functions and pass DynamoDB client
@@ -121,7 +121,7 @@ The cache uses a two-level key structure:
 
 ### Default Configuration
 
-Caching is **enabled by default** with a 6-hour TTL:
+Caching is **enabled by default** with a 4-day TTL:
 
 ```hcl
 module "aws_sso_elevator" {
@@ -130,7 +130,7 @@ module "aws_sso_elevator" {
   # Other configuration...
   
   # These are the defaults (no need to specify):
-  # cache_ttl_minutes = 360  # 6 hours
+  # cache_ttl_minutes = 5760  # 4 days
   # cache_table_name  = "sso-elevator-cache"
   # cache_kms_key_arn = null  # Uses AWS managed key
 }
@@ -226,7 +226,7 @@ Monitor these CloudWatch metrics for the cache table:
 3. **Access Control**: IAM permissions limit cache access to Lambda functions only
 4. **Backup & Recovery**: Point-in-time recovery is enabled for backup compliance
 5. **Deletion Protection**: Table has deletion protection enabled to prevent accidental deletion
-6. **TTL**: 6-hour default TTL reduces stale data risk while improving resilience
+6. **TTL**: 4-day default TTL reduces stale data risk while improving resilience
 
 ## Performance Impact
 
@@ -236,11 +236,11 @@ Monitor these CloudWatch metrics for the cache table:
 
 ## Backward Compatibility
 
-- Existing deployments will automatically get caching enabled with default settings (6-hour TTL)
+- Existing deployments will automatically get caching enabled with default settings (4-day TTL)
 - Original non-cached functions remain available in the codebase
 - No breaking changes to module interface
 - Cache can be completely disabled by setting `cache_ttl_minutes = 0` (no DynamoDB table will be created)
-- If you upgrade from a previous version with caching, note the TTL default has changed from 60 minutes to 360 minutes
+- If you upgrade from a previous version with caching, note the TTL default has changed from 60 minutes to 5760 minutes (4 days)
 
 ## Testing Recommendations
 

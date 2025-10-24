@@ -27,7 +27,7 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "secondary_fallback_email_domains": json.dumps(["domen.com"]),
         "permission_duration_list_override": json.dumps(["00:25", "01:00"]),
         "cache_table_name": "test-cache-table",
-        "cache_ttl_minutes": "360",
+        "cache_ttl_minutes": "5760",
         "statements": json.dumps(
             [
                 {

@@ -26,6 +26,9 @@ T = TypeVar("T")
 # instance-id is alphanumeric, underscores, and hyphens
 ARN_PATTERN = re.compile(r"^arn:aws(-[\w]+)*:sso:::\w+/[\w-]+$")
 
+# Maximum ARN length to prevent excessively long input
+MAX_ARN_LENGTH = 1024
+
 
 @dataclass
 class CacheConfig:
@@ -84,7 +87,7 @@ def _validate_arn(arn: str) -> str:
         raise ValueError(f"Invalid SSO instance ARN format: {arn}")
 
     # Additional length check to prevent excessively long input
-    if len(arn) > 1024:
+    if len(arn) > MAX_ARN_LENGTH:
         raise ValueError("ARN exceeds maximum length")
 
     return arn

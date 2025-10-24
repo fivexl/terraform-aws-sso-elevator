@@ -145,7 +145,7 @@ class TestValidateArn:
     def test_invalid_arn_not_string(self):
         """Test validation fails when ARN is not a string."""
         with pytest.raises(ValueError, match="ARN must be a string"):
-            cache_module._validate_arn(123)  # type: ignore
+            cache_module._validate_arn(123)  # type: ignore[arg-type]
 
     def test_invalid_arn_wrong_partition_format(self):
         """Test validation fails with partition that doesn't start with 'aws'."""
@@ -191,7 +191,7 @@ class TestValidateArn:
     def test_invalid_arn_none(self):
         """Test validation fails with None."""
         with pytest.raises(ValueError, match="ARN must be a string"):
-            cache_module._validate_arn(None)  # type: ignore
+            cache_module._validate_arn(None)  # type: ignore[arg-type]
 
 
 class TestGetCachedAccounts:
