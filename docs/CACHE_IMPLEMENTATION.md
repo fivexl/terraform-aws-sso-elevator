@@ -100,10 +100,22 @@ The cache uses a two-level key structure:
 
 ### Error Handling
 
+**The cache is designed to be fail-safe:**
+
 - All cache operations are wrapped in try-except blocks
-- Cache failures never prevent the application from functioning
-- Warnings are logged when cache operations fail
-- DynamoDB unavailability triggers fallback to Organizations API
+- **Cache failures NEVER prevent the application from functioning**
+- Warnings are logged when cache operations fail (look for `"Failed to get cached accounts"` or `"Failed to cache accounts"`)
+- DynamoDB unavailability automatically triggers fallback to direct AWS API calls
+- Application works normally if:
+  - DynamoDB table doesn't exist
+  - Table name is misconfigured
+  - IAM permissions are missing
+  - DynamoDB service is down
+  
+**Behavior on errors:**
+- **Read errors**: Log warning, return `None`, fall back to API
+- **Write errors**: Log warning, continue without caching
+- **User experience**: Unaffected (just slightly slower without cache)
 
 ## Configuration
 
@@ -232,24 +244,90 @@ Monitor these CloudWatch metrics for the cache table:
 
 ## Testing Recommendations
 
+### Integration Testing
+
 1. **Test Cache Hit**: Submit access request → Wait < TTL → Submit another request
 2. **Test Cache Miss**: Submit access request → Wait > TTL → Submit another request
-3. **Test API Fallback**: Disable DynamoDB table → Verify requests still work
-4. **Test Cache Disabled**: Set `cache_ttl_minutes = 0` → Verify normal operation
+3. **Test API Fallback**: Disable DynamoDB table → Verify requests still work (application should log warnings but continue functioning)
+4. **Test Cache Disabled**: Set `cache_ttl_minutes = 0` → Verify normal operation (no DynamoDB calls should be made)
+5. **Test Wrong Table Name**: Temporarily set wrong `cache_table_name` → Verify application logs warnings but continues working
+6. **Test Missing Permissions**: Temporarily remove DynamoDB IAM permissions → Verify graceful fallback to API
+
+### Unit Testing
+
+Comprehensive unit tests are provided in `src/tests/test_cache.py` covering:
+
+- **Cache Configuration**:
+  - Cache enabled/disabled scenarios
+  - Configuration validation
+
+- **Get Operations (Accounts & Permission Sets)**:
+  - Cache disabled (returns None without calling DynamoDB)
+  - Cache miss (no items found)
+  - Cache hit (valid data returned)
+  - Cache expired (returns None)
+  - Table doesn't exist (graceful fallback)
+  - Wrong table name (graceful fallback)
+  - Access denied / missing IAM permissions (graceful fallback)
+  - Generic exceptions (graceful fallback)
+  - Malformed data handling
+
+- **Set Operations (Accounts & Permission Sets)**:
+  - Cache disabled (no write operations)
+  - Successful writes
+  - Table doesn't exist during write (graceful failure)
+  - Access denied during write (graceful failure)
+  - Generic exceptions during write (graceful failure)
+
+- **Cache Fallback Pattern**:
+  - Cache hit returns cached data without API call
+  - Cache miss calls API and updates cache
+  - Cache errors fall back to API
+  - Cache setter errors don't affect result
+  - API errors propagate correctly
+
+**Running tests:**
+```bash
+cd src
+pytest tests/test_cache.py -v
+```
+
+**Test coverage:**
+- All error scenarios documented in this document
+- Fail-safe behavior verification
+- No exceptions escape to users
 
 ## Troubleshooting
 
 ### "Failed to get cached accounts" warnings
 
-- Check Lambda IAM permissions include DynamoDB read access
-- Verify DynamoDB table exists and is accessible
-- Check table name matches `cache_table_name` variable
+**Important:** These warnings do not break functionality. The application will continue to work by calling AWS APIs directly.
+
+Common causes:
+- DynamoDB table doesn't exist (check if `cache_ttl_minutes` is set correctly in Terraform)
+- Wrong table name (verify `cache_table_name` matches between Terraform and Lambda environment variables)
+- Lambda IAM permissions missing DynamoDB read access
+- DynamoDB table not accessible from Lambda
+
+**How to diagnose:**
+1. Check CloudWatch Logs for the full error message
+2. Verify the table exists: `aws dynamodb describe-table --table-name sso-elevator-cache`
+3. Confirm table name environment variable: Check Lambda configuration `CACHE_TABLE_NAME`
+4. Verify IAM permissions include `dynamodb:GetItem`, `dynamodb:Query`
 
 ### "Failed to cache accounts" warnings
 
-- Check Lambda IAM permissions include DynamoDB write access
-- Verify table has capacity (shouldn't be an issue with PAY_PER_REQUEST)
-- Check CloudWatch Logs for detailed error messages
+**Important:** These warnings do not break functionality. The application will continue to work, but won't benefit from caching.
+
+Common causes:
+- DynamoDB table doesn't exist
+- Wrong table name configuration
+- Lambda IAM permissions missing DynamoDB write access
+- Table has capacity issues (rare with PAY_PER_REQUEST)
+
+**How to diagnose:**
+1. Check CloudWatch Logs for detailed error messages
+2. Verify IAM permissions include `dynamodb:PutItem`
 
 ### Stale data in cache
 

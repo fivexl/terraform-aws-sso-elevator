@@ -68,7 +68,13 @@ def _is_cache_valid(item: dict[str, Any]) -> bool:
     if "ttl" not in item:
         return False
 
-    ttl = int(item["ttl"])
+    # Handle DynamoDB type descriptor format
+    ttl_value = item["ttl"]
+    if isinstance(ttl_value, dict) and "N" in ttl_value:
+        ttl = int(ttl_value["N"])
+    else:
+        ttl = int(ttl_value)
+    
     current_time = int(time.time())
     return current_time < ttl
 
