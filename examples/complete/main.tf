@@ -42,6 +42,11 @@ module "aws_sso_elevator" {
   approver_renotification_initial_wait_time  = 15
   approver_renotification_backoff_multiplier = 2
 
+  # DynamoDB cache configuration (caching is enabled by default with 6 hour TTL)
+  # cache_table_name   = "sso-elevator-cache"  # Optional: custom DynamoDB table name
+  # cache_ttl_minutes  = 360                   # Optional: TTL for cache entries in minutes (default: 360 = 6 hours, set to 0 to disable caching)
+  # cache_kms_key_arn  = "arn:aws:kms:..."     # Optional: custom KMS key for encryption (uses AWS managed key by default)
+
   s3_bucket_partition_prefix     = "logs/"
   s3_bucket_name_for_audit_entry = "fivexl-sso-elevator"
 

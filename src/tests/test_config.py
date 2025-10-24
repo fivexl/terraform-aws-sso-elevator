@@ -52,7 +52,7 @@ def config_dict(
     statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.statement_dict())),
     group_statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.group_statement_dict())),
     secondary_fallback_email_domains: SearchStrategy = strategies.jsonstr(st.lists(strategies.json_safe_text, max_size=10, min_size=1)),
-    permission_duration_list_override: SearchStrategy = strategies.jsonstr(st.lists(strategies.json_safe_text, max_size=10, min_size=1))
+    permission_duration_list_override: SearchStrategy = strategies.jsonstr(st.lists(strategies.json_safe_text, max_size=10, min_size=1)),
 ):
     return st.fixed_dictionaries(
         {
@@ -165,7 +165,7 @@ def test_config_load_environment_variables(dict_config: dict):
         statements_as_json=False,
         group_statements_as_json=False,
         secondary_fallback_email_domains_as_json=False,
-        permission_duration_list_override_as_json=False
+        permission_duration_list_override_as_json=False,
     )
     | {"post_update_to_slack": "x"}
 ).xfail(raises=ValidationError, reason="Invalid bool")

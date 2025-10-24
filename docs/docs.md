@@ -1,6 +1,6 @@
 ## SSO Delegation
 
-The main reason to delegate SSO to another account, is to reduce a need to access management account to the minimum as well as separation of concerns. With a separate SSO management account you can granualary give access to sso management only wihtout creating overcomplex role in the management account that would limit access in the management account to SSO only.
+The main reason to delegate SSO to another account, is to reduce a need to access management account to the minimum as well as separation of concerns. With a separate SSO management account you can granualary give access to sso management only without creating overcomplex role in the management account that would limit access in the management account to SSO only.
 
 Although the module can be deployed in either the management account or the delegated SSO administrator account, we recommend deploying it in the delegated SSO administrator account.
 

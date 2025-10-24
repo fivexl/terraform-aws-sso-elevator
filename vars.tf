@@ -359,7 +359,13 @@ variable "cache_table_name" {
 }
 
 variable "cache_ttl_minutes" {
-  description = "TTL in minutes for cached AWS accounts and permission sets. If set to 0, caching is disabled."
+  description = "TTL in minutes for cached AWS accounts and permission sets. If set to 0, caching is disabled and DynamoDB table will not be created."
   type        = number
-  default     = 60
+  default     = 360
+}
+
+variable "cache_kms_key_arn" {
+  description = "ARN of the KMS key to use for DynamoDB table encryption. If not provided, uses AWS managed DynamoDB encryption key (aws/dynamodb)."
+  type        = string
+  default     = null
 }

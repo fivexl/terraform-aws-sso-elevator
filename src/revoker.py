@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 import boto3
 import slack_sdk
+from mypy_boto3_dynamodb import DynamoDBClient
 from mypy_boto3_events import EventBridgeClient
 from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_organizations import OrganizationsClient
@@ -187,9 +188,11 @@ def slack_notify_user_on_revoke(  # noqa: PLR0913
     slack_client: slack_sdk.WebClient,
 ) -> SlackResponse:
     mention = slack_helpers.create_slack_mention_by_principal_id(
-        sso_user_id=account_assignment.principal_id
-        if isinstance(account_assignment, sso.AccountAssignment)
-        else account_assignment.user_principal_id,
+        sso_user_id=(
+            account_assignment.principal_id
+            if isinstance(account_assignment, sso.AccountAssignment)
+            else account_assignment.user_principal_id
+        ),
         sso_client=sso_client,
         cfg=cfg,
         identitystore_client=identitystore_client,
@@ -319,7 +322,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
     events_client: EventBridgeClient,
-    dynamodb_client,
+    dynamodb_client: DynamoDBClient,
 ) -> None:
     account_assignments = sso.get_account_assignment_information_with_cache(sso_client, cfg, org_client, dynamodb_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
@@ -339,9 +342,11 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             account = organizations.describe_account(org_client, account_assignment.account_id)
             logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
             mention = slack_helpers.create_slack_mention_by_principal_id(
-                sso_user_id=account_assignment.principal_id
-                if isinstance(account_assignment, sso.AccountAssignment)
-                else account_assignment.user_principal_id,
+                sso_user_id=(
+                    account_assignment.principal_id
+                    if isinstance(account_assignment, sso.AccountAssignment)
+                    else account_assignment.user_principal_id
+                ),
                 sso_client=sso_client,
                 cfg=cfg,
                 identitystore_client=identitystore_client,
@@ -483,7 +488,7 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
     org_client: OrganizationsClient,
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
-    dynamodb_client,
+    dynamodb_client: DynamoDBClient,
 ) -> None:
     account_assignments = sso.get_account_assignment_information_with_cache(sso_client, cfg, org_client, dynamodb_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)

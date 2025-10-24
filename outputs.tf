@@ -15,10 +15,10 @@ output "lambda_function_url" {
 
 output "cache_dynamodb_table_name" {
   description = "The name of the DynamoDB table for caching AWS accounts and permission sets."
-  value       = aws_dynamodb_table.sso_elevator_cache.name
+  value       = var.cache_ttl_minutes > 0 ? aws_dynamodb_table.sso_elevator_cache[0].name : null
 }
 
 output "cache_dynamodb_table_arn" {
   description = "The ARN of the DynamoDB table for caching AWS accounts and permission sets."
-  value       = aws_dynamodb_table.sso_elevator_cache.arn
+  value       = var.cache_ttl_minutes > 0 ? aws_dynamodb_table.sso_elevator_cache[0].arn : null
 }

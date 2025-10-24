@@ -14,23 +14,32 @@ This implementation adds caching for AWS accounts and permission sets using Dyna
    - Range key: `item_id` (type: String) - identifies specific items (e.g., SSO instance ARN for permission sets)
    - TTL enabled on `ttl` attribute for automatic expiration
    - Billing mode: PAY_PER_REQUEST for cost efficiency
+   - **Compliance Features**:
+     - Point-in-time recovery enabled for backup compliance
+     - Deletion protection enabled to prevent accidental deletion
+     - Server-side encryption with AWS managed key by default (aws/dynamodb)
+     - Optional customer-managed KMS key support
+   - **Conditional Creation**: Table is only created when `cache_ttl_minutes > 0`
 
 2. **Variables** (`vars.tf`):
    - `cache_table_name`: Name of the DynamoDB table (default: `sso-elevator-cache`)
-   - `cache_ttl_minutes`: TTL in minutes for cached data (default: 60)
-     - Set to `0` to disable caching
-   - Both variables are passed to Lambda functions as environment variables
+   - `cache_ttl_minutes`: TTL in minutes for cached data (default: 360 = 6 hours)
+     - Set to `0` to disable caching completely (no DynamoDB table will be created)
+   - `cache_kms_key_arn`: Optional ARN of a customer-managed KMS key for encryption (default: null)
+     - When null, uses AWS managed encryption key (aws/dynamodb)
+     - When provided, uses the specified customer-managed KMS key
+   - Variables are passed to Lambda functions as environment variables
 
 3. **IAM Permissions**:
-   - Added DynamoDB permissions to both Lambda functions:
+   - DynamoDB permissions conditionally added to both Lambda functions (only when caching is enabled):
      - `dynamodb:GetItem`
      - `dynamodb:PutItem`
      - `dynamodb:Query`
      - `dynamodb:Scan`
 
 4. **Outputs** (`outputs.tf`):
-   - `cache_dynamodb_table_name`: The name of the cache DynamoDB table
-   - `cache_dynamodb_table_arn`: The ARN of the cache DynamoDB table
+   - `cache_dynamodb_table_name`: The name of the cache DynamoDB table (null if caching is disabled)
+   - `cache_dynamodb_table_arn`: The ARN of the cache DynamoDB table (null if caching is disabled)
 
 ### Application Changes
 
@@ -59,7 +68,7 @@ This implementation adds caching for AWS accounts and permission sets using Dyna
 
 4. **Updated Config** (`src/config.py`):
    - Added `cache_table_name` field (default: `sso-elevator-cache`)
-   - Added `cache_ttl_minutes` field (default: 60)
+   - Added `cache_ttl_minutes` field (default: 360 = 6 hours)
 
 5. **Updated Lambda Handlers**:
    - `src/main.py`: Updated to use cached functions and pass DynamoDB client
@@ -98,9 +107,9 @@ The cache uses a two-level key structure:
 
 ## Configuration
 
-### Enabling/Disabling Cache
+### Default Configuration
 
-To disable caching entirely, set `cache_ttl_minutes = 0`:
+Caching is **enabled by default** with a 6-hour TTL:
 
 ```hcl
 module "aws_sso_elevator" {
@@ -108,7 +117,24 @@ module "aws_sso_elevator" {
   
   # Other configuration...
   
-  cache_ttl_minutes = 0  # Disable caching
+  # These are the defaults (no need to specify):
+  # cache_ttl_minutes = 360  # 6 hours
+  # cache_table_name  = "sso-elevator-cache"
+  # cache_kms_key_arn = null  # Uses AWS managed key
+}
+```
+
+### Disabling Cache
+
+To disable caching entirely (no DynamoDB table will be created), set `cache_ttl_minutes = 0`:
+
+```hcl
+module "aws_sso_elevator" {
+  source = "path/to/module"
+  
+  # Other configuration...
+  
+  cache_ttl_minutes = 0  # Disable caching completely
 }
 ```
 
@@ -140,6 +166,20 @@ module "aws_sso_elevator" {
 }
 ```
 
+### Custom KMS Key for Encryption
+
+To use a customer-managed KMS key instead of the AWS managed key:
+
+```hcl
+module "aws_sso_elevator" {
+  source = "path/to/module"
+  
+  # Other configuration...
+  
+  cache_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+}
+```
+
 ## Monitoring
 
 ### CloudWatch Logs
@@ -167,9 +207,14 @@ Monitor these CloudWatch metrics for the cache table:
 ## Security Considerations
 
 1. **Data Sensitivity**: Cache contains account IDs, names, and permission set information
-2. **Encryption**: DynamoDB encryption at rest is recommended (enable via AWS Console or Terraform)
+2. **Encryption**: 
+   - Server-side encryption is **enabled by default** using AWS managed key (aws/dynamodb)
+   - Optional customer-managed KMS key support via `cache_kms_key_arn` variable
+   - Encryption at rest is always active
 3. **Access Control**: IAM permissions limit cache access to Lambda functions only
-4. **TTL**: Short TTL (60 minutes default) reduces stale data risk
+4. **Backup & Recovery**: Point-in-time recovery is enabled for backup compliance
+5. **Deletion Protection**: Table has deletion protection enabled to prevent accidental deletion
+6. **TTL**: 6-hour default TTL reduces stale data risk while improving resilience
 
 ## Performance Impact
 
@@ -179,10 +224,11 @@ Monitor these CloudWatch metrics for the cache table:
 
 ## Backward Compatibility
 
-- Existing deployments will automatically get caching with default settings
-- Original non-cached functions remain available
+- Existing deployments will automatically get caching enabled with default settings (6-hour TTL)
+- Original non-cached functions remain available in the codebase
 - No breaking changes to module interface
-- Cache can be disabled by setting `cache_ttl_minutes = 0`
+- Cache can be completely disabled by setting `cache_ttl_minutes = 0` (no DynamoDB table will be created)
+- If you upgrade from a previous version with caching, note the TTL default has changed from 60 minutes to 360 minutes
 
 ## Testing Recommendations
 

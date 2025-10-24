@@ -223,16 +223,19 @@ data "aws_iam_policy_document" "slack_handler" {
     ]
     resources = ["*"]
   }
-  statement {
-    sid    = "AllowDynamoDBCache"
-    effect = "Allow"
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:Query",
-      "dynamodb:Scan",
-    ]
-    resources = [aws_dynamodb_table.sso_elevator_cache.arn]
+  dynamic "statement" {
+    for_each = var.cache_ttl_minutes > 0 ? [1] : []
+    content {
+      sid    = "AllowDynamoDBCache"
+      effect = "Allow"
+      actions = [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+      ]
+      resources = [aws_dynamodb_table.sso_elevator_cache[0].arn]
+    }
   }
 }
 

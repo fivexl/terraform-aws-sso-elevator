@@ -1,13 +1,9 @@
-from typing import TYPE_CHECKING
-
+from mypy_boto3_dynamodb import DynamoDBClient
 from mypy_boto3_organizations import OrganizationsClient, type_defs
 
 import cache as cache_module
 import config
 from entities.aws import Account
-
-if TYPE_CHECKING:
-    from mypy_boto3_dynamodb import DynamoDBClient
 
 logger = config.get_logger(service="organizations")
 
