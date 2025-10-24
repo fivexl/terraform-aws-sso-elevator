@@ -647,3 +647,47 @@ class TestTTLHelpers:
         item = {}
 
         assert cache_module._is_cache_valid(item) is False
+
+    def test_get_ttl_timestamp_validates_input_type(self):
+        """Test that _get_ttl_timestamp validates input type to prevent injection."""
+        import pytest
+
+        # Test with non-numeric string
+        with pytest.raises(ValueError, match="Invalid TTL minutes value"):
+            cache_module._get_ttl_timestamp("not_a_number")  # type: ignore
+
+        # Test with None
+        with pytest.raises(ValueError, match="Invalid TTL minutes value"):
+            cache_module._get_ttl_timestamp(None)  # type: ignore
+
+    def test_get_ttl_timestamp_validates_bounds(self):
+        """Test that _get_ttl_timestamp validates bounds to prevent injection."""
+        import pytest
+
+        # Test with negative value
+        with pytest.raises(ValueError, match=f"TTL minutes must be between {cache_module.MIN_TTL_MINUTES} and {cache_module.MAX_TTL_MINUTES}"):
+            cache_module._get_ttl_timestamp(-1)
+
+        # Test with zero (should fail since minimum is 1)
+        with pytest.raises(ValueError, match=f"TTL minutes must be between {cache_module.MIN_TTL_MINUTES} and {cache_module.MAX_TTL_MINUTES}"):
+            cache_module._get_ttl_timestamp(0)
+
+        # Test with value over max (more than 1 year in minutes)
+        with pytest.raises(ValueError, match=f"TTL minutes must be between {cache_module.MIN_TTL_MINUTES} and {cache_module.MAX_TTL_MINUTES}"):
+            cache_module._get_ttl_timestamp(cache_module.MAX_TTL_MINUTES + 1)
+
+    def test_get_ttl_timestamp_with_valid_values(self):
+        """Test that _get_ttl_timestamp works with valid values."""
+        # Test with minimum valid value
+        ttl = cache_module._get_ttl_timestamp(cache_module.MIN_TTL_MINUTES)
+        assert ttl > int(time.time())
+
+        # Test with maximum valid value
+        ttl = cache_module._get_ttl_timestamp(cache_module.MAX_TTL_MINUTES)
+        assert ttl > int(time.time())
+
+        # Test with default value (5760 = 4 days)
+        ttl = cache_module._get_ttl_timestamp(5760)
+        expected = int(time.time()) + (5760 * 60)
+        # Allow 2 seconds tolerance for test execution time
+        assert abs(ttl - expected) <= 2

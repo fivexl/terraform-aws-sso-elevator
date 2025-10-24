@@ -30,6 +30,10 @@ ARN_PATTERN = re.compile(r"^arn:aws(?:-[a-z0-9]+){0,5}:sso:::\w+/[\w-]+$")
 # Maximum ARN length to prevent excessively long input
 MAX_ARN_LENGTH = 1024
 
+# TTL validation constants (in minutes)
+MIN_TTL_MINUTES = 1
+MAX_TTL_MINUTES = 525600  # 1 year in minutes
+
 
 @dataclass
 class CacheConfig:
@@ -64,8 +68,29 @@ def _get_ttl_timestamp(ttl_minutes: int) -> int:
 
     Returns:
         Unix timestamp when the item should expire
+
+    Raises:
+        ValueError: If ttl_minutes is invalid
     """
-    return int(time.time()) + (ttl_minutes * 60)
+    # Validate and sanitize input to prevent NoSQL injection
+    try:
+        validated_ttl_minutes = int(ttl_minutes)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid TTL minutes value: {ttl_minutes}") from e
+
+    # Ensure ttl_minutes is within reasonable bounds
+    # Minimum: 1 minute, Maximum: 1 year (525,600 minutes)
+    if validated_ttl_minutes < MIN_TTL_MINUTES or validated_ttl_minutes > MAX_TTL_MINUTES:
+        raise ValueError(f"TTL minutes must be between {MIN_TTL_MINUTES} and {MAX_TTL_MINUTES}, got: {validated_ttl_minutes}")
+
+    current_time = int(time.time())
+    ttl_timestamp = current_time + (validated_ttl_minutes * 60)
+
+    # Validate the calculated timestamp is reasonable
+    if ttl_timestamp <= current_time:
+        raise ValueError("Calculated TTL timestamp is not in the future")
+
+    return ttl_timestamp
 
 
 def _validate_arn(arn: str) -> str:

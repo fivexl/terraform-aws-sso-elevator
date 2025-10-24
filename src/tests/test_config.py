@@ -180,3 +180,85 @@ def test_config_load_environment_variables(dict_config: dict):
 ).xfail(raises=ValidationError, reason="Invalid bool")
 def test_config_init(dict_config: dict):
     config.Config(**dict_config)
+
+
+def test_cache_ttl_minutes_validation_rejects_invalid_types():
+    """Test that cache_ttl_minutes validation rejects invalid types to prevent NoSQL injection."""
+    import pytest
+
+    base_config = valid_config_dict()
+
+    # Test with non-numeric string - validation should reject this
+    with pytest.raises(ValidationError):
+        config.Config(**base_config | {"cache_ttl_minutes": "not_a_number"})
+
+
+def test_cache_ttl_minutes_validation_rejects_out_of_bounds():
+    """Test that cache_ttl_minutes validation rejects out-of-bounds values."""
+    import pytest
+    
+    base_config = valid_config_dict()
+    
+    # Test with negative value
+    with pytest.raises(ValidationError):
+        config.Config(**base_config | {"cache_ttl_minutes": "-1"})
+    
+    # Test with value over max (more than 1 year in minutes)
+    with pytest.raises(ValidationError):
+        config.Config(**base_config | {"cache_ttl_minutes": str(config.MAX_TTL_MINUTES + 1)})
+
+
+def test_cache_ttl_minutes_validation_accepts_valid_values():
+    """Test that cache_ttl_minutes validation accepts valid values."""
+    base_config = valid_config_dict()
+
+    # Test with 0 (disabled) - use environment variable approach
+    import os
+
+    test_config = base_config.copy()
+    test_config["cache_ttl_minutes"] = "0"
+    old_env = os.environ.copy()
+    try:
+        os.environ.clear()
+        os.environ.update(test_config)
+        cfg = config.Config()
+        assert cfg.cache_ttl_minutes == 0
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    # Test with 1 (minimum)
+    test_config = base_config.copy()
+    test_config["cache_ttl_minutes"] = "1"
+    try:
+        os.environ.clear()
+        os.environ.update(test_config)
+        cfg = config.Config()
+        assert cfg.cache_ttl_minutes == 1
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    # Test with default value (5760 = 4 days) - just use default
+    test_config = base_config.copy()
+    test_config["cache_ttl_minutes"] = "5760"
+    try:
+        os.environ.clear()
+        os.environ.update(test_config)
+        cfg = config.Config()
+        assert cfg.cache_ttl_minutes == 5760
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    # Test with maximum value (525600 = 1 year)
+    test_config = base_config.copy()
+    test_config["cache_ttl_minutes"] = str(config.MAX_TTL_MINUTES)
+    try:
+        os.environ.clear()
+        os.environ.update(test_config)
+        cfg = config.Config()
+        assert cfg.cache_ttl_minutes == config.MAX_TTL_MINUTES
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
