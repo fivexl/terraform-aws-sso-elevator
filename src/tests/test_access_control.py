@@ -36,7 +36,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -47,7 +47,7 @@ def execute_decision_info():
                                 "allow_self_approval": True,
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -71,7 +71,7 @@ def execute_decision_info():
                 approvers=frozenset(["Approver2@test.com"]),
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -82,7 +82,7 @@ def execute_decision_info():
                                 "allow_self_approval": True,
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -100,7 +100,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -120,7 +120,7 @@ def execute_decision_info():
                 reason=DecisionReason.NoApprovers,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -138,7 +138,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -147,7 +147,7 @@ def execute_decision_info():
                                 "allow_self_approval": None,
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -167,7 +167,7 @@ def execute_decision_info():
                 reason=DecisionReason.NoApprovers,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -176,7 +176,7 @@ def execute_decision_info():
                                 "allow_self_approval": False,
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -194,7 +194,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -203,7 +203,7 @@ def execute_decision_info():
                                 "allow_self_approval": None,
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -223,7 +223,7 @@ def execute_decision_info():
                 reason=DecisionReason.SelfApproval,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -241,7 +241,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -265,7 +265,7 @@ def execute_decision_info():
                 approvers=frozenset(["CTO@test.com"]),
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -286,7 +286,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -294,7 +294,7 @@ def execute_decision_info():
                                 "approval_is_not_required": None,
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -313,7 +313,7 @@ def execute_decision_info():
                 reason=DecisionReason.NoApprovers,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -321,7 +321,7 @@ def execute_decision_info():
                                 "approval_is_not_required": False,
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -338,7 +338,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -346,7 +346,7 @@ def execute_decision_info():
                                 "approval_is_not_required": None,
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -365,7 +365,7 @@ def execute_decision_info():
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -382,7 +382,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -401,7 +401,7 @@ def execute_decision_info():
                 reason=DecisionReason.NoApprovers,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -420,7 +420,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -439,7 +439,7 @@ def execute_decision_info():
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -456,7 +456,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -476,7 +476,7 @@ def execute_decision_info():
                 approvers=frozenset(["one@example.com"]),
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -493,7 +493,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -514,7 +514,7 @@ def execute_decision_info():
                 approvers=frozenset(["one@example.com"]),
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -532,7 +532,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -554,7 +554,7 @@ def execute_decision_info():
                 reason=DecisionReason.RequiresApproval,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -575,7 +575,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -595,7 +595,7 @@ def execute_decision_info():
                 reason=DecisionReason.SelfApproval,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -613,7 +613,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -632,7 +632,7 @@ def execute_decision_info():
                 based_on_statements=frozenset(
                     frozenset(
                         [
-                            Statement.parse_obj(
+                            Statement.model_validate(
                                 {
                                     "resource_type": "Account",
                                     "resource": ["*"],
@@ -649,7 +649,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -668,7 +668,7 @@ def execute_decision_info():
                 reason=DecisionReason.NoApprovers,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -685,7 +685,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["*"],
@@ -705,7 +705,7 @@ def execute_decision_info():
                 based_on_statements=frozenset(
                     frozenset(
                         [
-                            Statement.parse_obj(
+                            Statement.model_validate(
                                 {
                                     "resource_type": "Account",
                                     "resource": ["*"],
@@ -723,7 +723,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -748,7 +748,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -756,7 +756,7 @@ def execute_decision_info():
                                 "approvers": ["approver@example.com"],
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -775,7 +775,7 @@ def execute_decision_info():
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -792,7 +792,7 @@ def execute_decision_info():
             "in": {
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -800,7 +800,7 @@ def execute_decision_info():
                                 "approvers": ["approver1@example.com"],
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -820,7 +820,7 @@ def execute_decision_info():
                 approvers=frozenset(["approver1@example.com", "approver2@example.com"]),
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -828,7 +828,7 @@ def execute_decision_info():
                                 "approvers": ["approver1@example.com"],
                             }
                         ),
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -855,7 +855,7 @@ def test_cases_for_access_request_decision(request):
                 "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -875,7 +875,7 @@ def test_cases_for_access_request_decision(request):
                 permit=True,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -893,7 +893,7 @@ def test_cases_for_access_request_decision(request):
                 "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -914,7 +914,7 @@ def test_cases_for_access_request_decision(request):
                 permit=False,
                 based_on_statements=frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],
@@ -933,7 +933,7 @@ def test_cases_for_access_request_decision(request):
                 "action": entities.ApproverAction.Approve,
                 "statements": frozenset(
                     [
-                        Statement.parse_obj(
+                        Statement.model_validate(
                             {
                                 "resource_type": "Account",
                                 "resource": ["111111111111"],

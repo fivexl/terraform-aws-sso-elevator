@@ -2,7 +2,8 @@ import os
 from typing import Optional
 
 from aws_lambda_powertools import Logger
-from pydantic import BaseSettings, root_validator, validator
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import entities
 from statement import Statement, GroupStatement
@@ -31,7 +32,7 @@ def parse_statement(_dict: dict) -> Statement:
             return frozenset(v)
         return frozenset([v]) if isinstance(v, str) else v
 
-    return Statement.parse_obj(
+    return Statement.model_validate(
         {
             "permission_set": to_set_if_list_or_str(_dict["PermissionSet"]),
             "resource": to_set_if_list_or_str(_dict["Resource"]),
@@ -49,7 +50,7 @@ def parse_group_statement(_dict: dict) -> GroupStatement:
             return frozenset(v)
         return frozenset([v]) if isinstance(v, str) else v
 
-    return GroupStatement.parse_obj(
+    return GroupStatement.model_validate(
         {
             "resource": to_set_if_list_or_str(_dict["Resource"]),
             "approvers": to_set_if_list_or_str(_dict.get("Approvers", set())),
@@ -64,6 +65,8 @@ def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str
 
 
 class Config(BaseSettings):
+    model_config = SettingsConfigDict(frozen=True)
+
     schedule_policy_arn: str
     revoker_function_arn: str
     revoker_function_name: str
@@ -105,8 +108,9 @@ class Config(BaseSettings):
 
     good_result_emoji: str = ":large_green_circle:"
 
-    @validator("cache_ttl_minutes")
-    def validate_cache_ttl_minutes(cls, v):  # noqa: ANN001, ANN101, ANN201
+    @field_validator("cache_ttl_minutes")
+    @classmethod
+    def validate_cache_ttl_minutes(cls, v) -> int:  # noqa: ANN001, ANN101
         """Validate cache TTL minutes to prevent NoSQL injection.
 
         Args:
@@ -133,22 +137,28 @@ class Config(BaseSettings):
     bad_result_emoji: str = ":red_circle:"
     discarded_result_emoji: str = ":white_circle:"
 
-    class Config:
-        frozen = True
-
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
-        statements = (
-            {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
-            if values.get("statements") is not None
-            else set()
-        )
+        import json
 
-        group_statements = (
-            {parse_group_statement(st) for st in values.get("group_statements", [])}  # type: ignore # noqa: PGH003
-            if values.get("group_statements") is not None
-            else set()
-        )
+        # Parse statements - handle both JSON string and list
+        statements_raw = values.get("statements")
+        if statements_raw is not None:
+            if isinstance(statements_raw, str):
+                statements_raw = json.loads(statements_raw)
+            statements = {parse_statement(st) for st in statements_raw}  # type: ignore # noqa: PGH003
+        else:
+            statements = set()
+
+        # Parse group_statements - handle both JSON string and list
+        group_statements_raw = values.get("group_statements")
+        if group_statements_raw is not None:
+            if isinstance(group_statements_raw, str):
+                group_statements_raw = json.loads(group_statements_raw)
+            group_statements = {parse_group_statement(st) for st in group_statements_raw}  # type: ignore # noqa: PGH003
+        else:
+            group_statements = set()
 
         if not group_statements and not statements:
             logger.warning("No statements and group statements found")

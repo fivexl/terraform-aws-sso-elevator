@@ -1,15 +1,17 @@
-[tool.poetry]
+[project]
 name = "layers"
 version = "0.1.0"
 description = ""
-authors = ["EreminAnton <mobessona2@gmail.com>"]
-readme = "README.md"
-
-[tool.poetry.dependencies]
-python = "^3.10.10"
-slack-bolt = "^1.18.0"
-aws-lambda-powertools = {extras = ["parser"], version = "^2.14.1"}
+authors = [
+    {name = "EreminAnton", email = "mobessona2@gmail.com"}
+]
+requires-python = ">=3.13"
+dynamic = []
+dependencies = [
+    "slack-bolt>=1.18.0",
+    "aws-lambda-powertools[parser]>=2.14.1",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

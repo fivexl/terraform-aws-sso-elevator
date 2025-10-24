@@ -10,7 +10,7 @@ Install test dependencies (from the `src` directory):
 
 ```bash
 cd src
-pip install -r requirements.txt  # or use poetry install
+uv sync
 ```
 
 ### Run All Tests

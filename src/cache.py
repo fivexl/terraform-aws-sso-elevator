@@ -181,7 +181,7 @@ def get_cached_accounts(
                 return None
 
             accounts_data = json.loads(item["data"]["S"])
-            all_accounts.extend([Account.parse_obj(acc) for acc in accounts_data])
+            all_accounts.extend([Account.model_validate(acc) for acc in accounts_data])
 
         logger.info(f"Cache hit for accounts, found {len(all_accounts)} accounts")
         return all_accounts
@@ -272,7 +272,7 @@ def get_cached_permission_sets(
             return None
 
         permission_sets_data = json.loads(item["data"]["S"])
-        permission_sets = [PermissionSet.parse_obj(ps) for ps in permission_sets_data]
+        permission_sets = [PermissionSet.model_validate(ps) for ps in permission_sets_data]
 
         logger.info(f"Cache hit for permission sets, found {len(permission_sets)} permission sets")
         return permission_sets

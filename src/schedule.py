@@ -88,7 +88,7 @@ def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRe
         event = json.loads(jp.search("Target.Input", full_schedule))
 
         try:
-            event = Event.parse_obj(event)
+            event = Event.model_validate(event)
         except ValidationError as e:
             logger.warning("Got unexpected event", extra={"event": event, "error": e})
             continue

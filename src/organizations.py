@@ -9,7 +9,7 @@ logger = config.get_logger(service="organizations")
 
 
 def parse_account(td: type_defs.AccountTypeDef) -> Account:
-    return Account.parse_obj({"id": td.get("Id"), "name": td.get("Name")})
+    return Account.model_validate({"id": td.get("Id"), "name": td.get("Name")})
 
 
 def list_accounts(client: OrganizationsClient) -> list[Account]:

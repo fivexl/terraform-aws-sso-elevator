@@ -7,7 +7,7 @@ import jmespath as jp
 import slack_sdk.errors
 from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_sso_admin import SSOAdminClient
-from pydantic import root_validator
+from pydantic import model_validator
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import (
     ActionsBlock,
@@ -164,7 +164,7 @@ class RequestForAccessView:
         hhmm = jp.search(f"{cls.DURATION_BLOCK_ID}.{cls.DURATION_ACTION_ID}.selected_option.value", values)
         hours, minutes = map(int, hhmm.split(":"))
         duration = timedelta(hours=hours, minutes=minutes)
-        return RequestForAccess.parse_obj(
+        return RequestForAccess.model_validate(
             {
                 "permission_duration": duration,
                 "permission_set_name": jp.search(
@@ -336,10 +336,8 @@ class ButtonClickedPayload(BaseModel):
     message: dict
     request: RequestForAccess
 
-    class Config:
-        frozen = True
-
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
         message = values["message"]
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
@@ -373,7 +371,7 @@ class ButtonClickedPayload(BaseModel):
 
 
 def parse_user(user: dict) -> entities.slack.User:
-    return entities.slack.User.parse_obj(
+    return entities.slack.User.model_validate(
         {"id": jp.search("user.id", user), "email": jp.search("user.profile.email", user), "real_name": jp.search("user.real_name", user)}
     )
 
@@ -598,7 +596,7 @@ class RequestForGroupAccessView:
         hhmm = jp.search(f"{cls.DURATION_BLOCK_ID}.{cls.DURATION_ACTION_ID}.selected_option.value", values)
         hours, minutes = map(int, hhmm.split(":"))
         duration = timedelta(hours=hours, minutes=minutes)
-        return RequestForGroupAccess.parse_obj(
+        return RequestForGroupAccess.model_validate(
             {
                 "permission_duration": duration,
                 "group_id": jp.search(f"{cls.GROUP_BLOCK_ID}.{cls.GROUP_ACTION_ID}.selected_option.value", values),
@@ -616,10 +614,8 @@ class ButtonGroupClickedPayload(BaseModel):
     message: dict
     request: RequestForGroupAccess
 
-    class Config:
-        frozen = True
-
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
         message = values["message"]
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)

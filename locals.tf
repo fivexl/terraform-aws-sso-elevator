@@ -1,6 +1,6 @@
 locals {
   # Full python version is used for checking the python version before deployment in check_python_version.tf
-  full_python_version = "3.10.10"
+  full_python_version = "3.13.0"
   # Python version is used for building the docker image in slack_handler_lambda.tf/perm_revoker_lambda.tf/layers.tf
   python_version = join(".", slice(split(".", local.full_python_version), 0, 2))
 

@@ -62,10 +62,12 @@ def sample_permission_sets():
         PermissionSet(
             arn="arn:aws:sso:::permissionSet/ssoins-1111111111111111/ps-1111111111111111",
             name="AdministratorAccess",
+            description="Administrator access permission set",
         ),
         PermissionSet(
             arn="arn:aws:sso:::permissionSet/ssoins-1111111111111111/ps-2222222222222222",
             name="ReadOnlyAccess",
+            description="Read-only access permission set",
         ),
     ]
 

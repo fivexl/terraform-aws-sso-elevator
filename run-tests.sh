@@ -7,5 +7,5 @@ pre-commit run black -a
 pre-commit run codespell -a
 
 cd src
-poetry install --no-root
-LOG_LEVEL=DEBUG poetry run pytest -q $1
+uv sync --all-extras
+LOG_LEVEL=DEBUG uv run pytest -q $1
