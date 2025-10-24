@@ -4,10 +4,15 @@ repos:
   rev: v1.77.2
   hooks:
     - id: terraform_fmt
+      exclude: ^(tests|src/tests)/
     - id: terraform_tflint
+      exclude: ^(tests|src/tests)/
     - id: terraform_validate
+      exclude: ^(tests|src/tests)/
     - id: terraform_docs
+      exclude: ^(tests|src/tests)/
     - id: terraform_tfsec
+      exclude: ^(tests|src/tests)/
 # Python
 -   repo: local
     hooks:
