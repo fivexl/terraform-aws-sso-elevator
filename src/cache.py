@@ -34,6 +34,13 @@ MAX_ARN_LENGTH = 1024
 MIN_TTL_MINUTES = 1
 MAX_TTL_MINUTES = 525600  # 1 year in minutes
 
+# Maximum size for serialized data to prevent excessively large payloads (in bytes)
+MAX_DATA_SIZE = 400 * 1024  # DynamoDB item size limit is 400KB
+
+# Pattern for validating DynamoDB table names
+# DynamoDB table names must be 3-255 characters, contain only alphanumeric, underscore, hyphen, and period
+TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{3,255}$")
+
 
 @dataclass
 class CacheConfig:
@@ -119,6 +126,62 @@ def _validate_arn(arn: str) -> str:
     return arn
 
 
+def _validate_table_name(table_name: str) -> str:
+    """Validate DynamoDB table name to prevent injection attacks.
+
+    Args:
+        table_name: Table name to validate
+
+    Returns:
+        Validated table name
+
+    Raises:
+        ValueError: If the table name format is invalid
+    """
+    if not isinstance(table_name, str):
+        raise ValueError(f"Table name must be a string, got {type(table_name)}")
+
+    # Check against table name pattern
+    if not TABLE_NAME_PATTERN.match(table_name):
+        raise ValueError(f"Invalid DynamoDB table name format: {table_name}")
+
+    return table_name
+
+
+def _sanitize_json_data(data: list[dict[str, Any]]) -> str:
+    """Sanitize and validate data before storing in DynamoDB.
+
+    This function ensures that the data being stored is safe and doesn't
+    contain any potentially malicious content.
+
+    Args:
+        data: List of dictionaries to serialize
+
+    Returns:
+        JSON string of the sanitized data
+
+    Raises:
+        ValueError: If the data is invalid or too large
+    """
+    if not isinstance(data, list):
+        raise ValueError(f"Data must be a list, got {type(data)}")
+
+    # Serialize to JSON to ensure data is JSON-serializable
+    # This also provides a layer of sanitization as json.dumps will only
+    # serialize safe data types (str, int, float, bool, None, list, dict)
+    try:
+        serialized = json.dumps(data)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Data contains non-serializable content: {e}") from e
+
+    # Validate size to prevent excessively large payloads
+    data_size = len(serialized.encode("utf-8"))
+    if data_size > MAX_DATA_SIZE:
+        raise ValueError(f"Data size ({data_size} bytes) exceeds maximum allowed size ({MAX_DATA_SIZE} bytes)")
+
+    return serialized
+
+
 def _is_cache_valid(item: dict[str, Any]) -> bool:
     """Check if a cached item is still valid.
 
@@ -160,8 +223,11 @@ def get_cached_accounts(
         return None
 
     try:
+        # Validate table name to prevent injection attacks
+        validated_table_name = _validate_table_name(cache_config.table_name)
+
         response = dynamodb_client.query(
-            TableName=cache_config.table_name,
+            TableName=validated_table_name,
             KeyConditionExpression="cache_key = :cache_key",
             ExpressionAttributeValues={
                 ":cache_key": {"S": CacheKey.ACCOUNTS},
@@ -202,22 +268,33 @@ def set_cached_accounts(
         dynamodb_client: DynamoDB client
         cache_config: Cache configuration
         accounts: List of accounts to cache
+
+    Note:
+        Validation errors are logged but do not raise exceptions to maintain
+        graceful degradation when caching fails.
     """
     if not cache_config.enabled:
         logger.debug("Cache is disabled, skipping cache write")
         return
 
     try:
-        ttl = _get_ttl_timestamp(cache_config.ttl_minutes)
-        accounts_data = [account.dict() for account in accounts]
+        # Validate table name to prevent injection attacks
+        validated_table_name = _validate_table_name(cache_config.table_name)
 
-        # Store all accounts in a single item
+        # Validate and sanitize TTL
+        ttl = _get_ttl_timestamp(cache_config.ttl_minutes)
+
+        # Convert accounts to dictionaries and sanitize the data
+        accounts_data = [account.dict() for account in accounts]
+        sanitized_data = _sanitize_json_data(accounts_data)
+
+        # Store all accounts in a single item with validated and sanitized inputs
         dynamodb_client.put_item(
-            TableName=cache_config.table_name,
+            TableName=validated_table_name,
             Item={
                 "cache_key": {"S": CacheKey.ACCOUNTS},
                 "item_id": {"S": "all"},
-                "data": {"S": json.dumps(accounts_data)},
+                "data": {"S": sanitized_data},
                 "ttl": {"N": str(ttl)},
                 "cached_at": {"S": datetime.now(timezone.utc).isoformat()},
             },
@@ -225,6 +302,9 @@ def set_cached_accounts(
 
         logger.info(f"Cached {len(accounts)} accounts with TTL {cache_config.ttl_minutes} minutes")
 
+    except ValueError as e:
+        # Log validation errors but don't raise to maintain graceful degradation
+        logger.warning(f"Validation failed when caching accounts: {e}", extra={"error": str(e)})
     except Exception as e:
         logger.warning(f"Failed to cache accounts: {e}", extra={"error": str(e)})
 
@@ -249,11 +329,14 @@ def get_cached_permission_sets(
         return None
 
     try:
+        # Validate table name to prevent injection attacks
+        validated_table_name = _validate_table_name(cache_config.table_name)
+
         # Validate ARN to prevent injection attacks
         validated_arn = _validate_arn(sso_instance_arn)
 
         response = dynamodb_client.query(
-            TableName=cache_config.table_name,
+            TableName=validated_table_name,
             KeyConditionExpression="cache_key = :cache_key AND item_id = :item_id",
             ExpressionAttributeValues={
                 ":cache_key": {"S": CacheKey.PERMISSION_SETS},
@@ -295,24 +378,36 @@ def set_cached_permission_sets(
         cache_config: Cache configuration
         sso_instance_arn: SSO instance ARN (used as part of cache key)
         permission_sets: List of permission sets to cache
+
+    Note:
+        Validation errors are logged but do not raise exceptions to maintain
+        graceful degradation when caching fails.
     """
     if not cache_config.enabled:
         logger.debug("Cache is disabled, skipping cache write")
         return
 
     try:
+        # Validate table name to prevent injection attacks
+        validated_table_name = _validate_table_name(cache_config.table_name)
+
         # Validate ARN to prevent injection attacks
         validated_arn = _validate_arn(sso_instance_arn)
 
+        # Validate and sanitize TTL
         ttl = _get_ttl_timestamp(cache_config.ttl_minutes)
-        permission_sets_data = [ps.dict() for ps in permission_sets]
 
+        # Convert permission sets to dictionaries and sanitize the data
+        permission_sets_data = [ps.dict() for ps in permission_sets]
+        sanitized_data = _sanitize_json_data(permission_sets_data)
+
+        # Store permission sets with validated and sanitized inputs
         dynamodb_client.put_item(
-            TableName=cache_config.table_name,
+            TableName=validated_table_name,
             Item={
                 "cache_key": {"S": CacheKey.PERMISSION_SETS},
                 "item_id": {"S": validated_arn},
-                "data": {"S": json.dumps(permission_sets_data)},
+                "data": {"S": sanitized_data},
                 "ttl": {"N": str(ttl)},
                 "cached_at": {"S": datetime.now(timezone.utc).isoformat()},
             },
@@ -320,6 +415,9 @@ def set_cached_permission_sets(
 
         logger.info(f"Cached {len(permission_sets)} permission sets with TTL {cache_config.ttl_minutes} minutes")
 
+    except ValueError as e:
+        # Log validation errors but don't raise to maintain graceful degradation
+        logger.warning(f"Validation failed when caching permission sets: {e}", extra={"error": str(e)})
     except Exception as e:
         logger.warning(f"Failed to cache permission sets: {e}", extra={"error": str(e)})
 
