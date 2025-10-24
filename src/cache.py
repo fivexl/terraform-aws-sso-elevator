@@ -24,7 +24,8 @@ T = TypeVar("T")
 # Partition format: "aws" optionally followed by hyphen-separated segments (e.g., aws-us-gov, aws-cn, aws-iso-b)
 # This pattern is future-proof for new AWS partitions while preventing injection attacks
 # instance-id is alphanumeric, underscores, and hyphens
-ARN_PATTERN = re.compile(r"^arn:aws(-[\w]+)*:sso:::\w+/[\w-]+$")
+# Limited to max 5 partition segments to prevent catastrophic backtracking while being future-proof
+ARN_PATTERN = re.compile(r"^arn:aws(?:-[a-z0-9]+){0,5}:sso:::\w+/[\w-]+$")
 
 # Maximum ARN length to prevent excessively long input
 MAX_ARN_LENGTH = 1024
