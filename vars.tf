@@ -351,3 +351,21 @@ variable "lambda_memory_size" {
   type        = number
   default     = 256
 }
+
+variable "cache_table_name" {
+  description = "Name of the DynamoDB table for caching AWS accounts and permission sets"
+  type        = string
+  default     = "sso-elevator-cache"
+}
+
+variable "cache_ttl_minutes" {
+  description = "TTL in minutes for cached AWS accounts and permission sets. If set to 0, caching is disabled and DynamoDB table will not be created."
+  type        = number
+  default     = 360
+}
+
+variable "cache_kms_key_arn" {
+  description = "ARN of the KMS key to use for DynamoDB table encryption. If not provided, uses AWS managed DynamoDB encryption key (aws/dynamodb)."
+  type        = string
+  default     = null
+}

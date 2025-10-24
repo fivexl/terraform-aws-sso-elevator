@@ -6,12 +6,14 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, Optional, TypeVar
 
+import cache as cache_module
 import config
 import entities
 import errors
 import organizations
 
 if TYPE_CHECKING:
+    from mypy_boto3_dynamodb import DynamoDBClient
     from mypy_boto3_identitystore import IdentityStoreClient
     from mypy_boto3_identitystore import type_defs as idc_type_defs
     from mypy_boto3_organizations import OrganizationsClient
@@ -307,6 +309,38 @@ def list_permission_sets(client: SSOAdminClient, sso_instance_arn: str) -> Gener
         yield describe_permission_set(client, sso_instance_arn, permission_set_arn)
 
 
+def list_permission_sets_with_cache(
+    sso_client: SSOAdminClient,
+    dynamodb_client: DynamoDBClient,
+    sso_instance_arn: str,
+    cfg: config.Config,
+) -> list[entities.aws.PermissionSet]:
+    """List all permission sets with cache fallback.
+
+    This function attempts to get permission sets from cache first. If cache is
+    unavailable or expired, it falls back to the SSO Admin API and updates the cache.
+
+    Args:
+        sso_client: SSO Admin client
+        dynamodb_client: DynamoDB client for cache
+        sso_instance_arn: SSO instance ARN
+        cfg: Application configuration
+
+    Returns:
+        List of all permission sets
+    """
+    cache_config = cache_module.CacheConfig.from_config(cfg)
+
+    return cache_module.with_cache_fallback(
+        cache_getter=lambda: cache_module.get_cached_permission_sets(dynamodb_client, cache_config, sso_instance_arn),
+        api_getter=lambda: list(list_permission_sets(sso_client, sso_instance_arn)),
+        cache_setter=lambda permission_sets: cache_module.set_cached_permission_sets(
+            dynamodb_client, cache_config, sso_instance_arn, permission_sets
+        ),
+        resource_name="permission_sets",
+    )
+
+
 def list_users(client: IdentityStoreClient, identity_store_id: str) -> dict:
     paginator = client.get_paginator("list_users")
     r = {"Users": []}
@@ -392,11 +426,64 @@ def get_permission_sets_from_config(client: SSOAdminClient, cfg: config.Config) 
     return permission_sets
 
 
+def get_permission_sets_from_config_with_cache(
+    sso_client: SSOAdminClient,
+    dynamodb_client: DynamoDBClient,
+    cfg: config.Config,
+) -> list[PermissionSet]:
+    """Get permission sets from config with cache fallback.
+
+    This function attempts to get permission sets from cache first. If cache is
+    unavailable or expired, it falls back to the SSO Admin API and updates the cache.
+
+    Args:
+        sso_client: SSO Admin client
+        dynamodb_client: DynamoDB client for cache
+        cfg: Application configuration
+
+    Returns:
+        List of permission sets based on config
+    """
+    all_permission_sets = list_permission_sets_with_cache(sso_client, dynamodb_client, cfg.sso_instance_arn, cfg)
+
+    if "*" in cfg.permission_sets:
+        return all_permission_sets
+    else:
+        return [ps for ps in all_permission_sets if ps.name in cfg.permission_sets]
+
+
 def get_account_assignment_information(
     sso_client: SSOAdminClient, cfg: config.Config, org_client: OrganizationsClient
 ) -> list[AccountAssignment]:
     accounts = organizations.get_accounts_from_config(org_client, cfg)
     permission_sets = get_permission_sets_from_config(sso_client, cfg)
+    return list_user_account_assignments(
+        sso_client,
+        cfg.sso_instance_arn,
+        [a.id for a in accounts],
+        [ps.arn for ps in permission_sets],
+    )
+
+
+def get_account_assignment_information_with_cache(
+    sso_client: SSOAdminClient,
+    cfg: config.Config,
+    org_client: OrganizationsClient,
+    dynamodb_client: DynamoDBClient,
+) -> list[AccountAssignment]:
+    """Get account assignment information with cache fallback.
+
+    Args:
+        sso_client: SSO Admin client
+        cfg: Application configuration
+        org_client: Organizations client
+        dynamodb_client: DynamoDB client for cache
+
+    Returns:
+        List of account assignments
+    """
+    accounts = organizations.get_accounts_from_config_with_cache(org_client, dynamodb_client, cfg)
+    permission_sets = get_permission_sets_from_config_with_cache(sso_client, dynamodb_client, cfg)
     return list_user_account_assignments(
         sso_client,
         cfg.sso_instance_arn,

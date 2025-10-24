@@ -35,7 +35,7 @@ def handle_request_for_group_access_submittion(
     client: WebClient,
     context: BoltContext,  # noqa: ARG001
 ) -> SlackResponse | None:
-    logger.info("Handling request for access submittion")
+    logger.info("Handling request for access submission")
     request = slack_helpers.RequestForGroupAccessView.parse(body)
     logger.info("View submitted", extra={"view": request})
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)

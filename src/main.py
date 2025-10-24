@@ -24,6 +24,7 @@ schedule_client = session.client("scheduler")
 org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
 identity_store_client = session.client("identitystore")
+dynamodb_client = session.client("dynamodb")
 
 cfg = config.get_config()
 app = App(
@@ -108,8 +109,8 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
     logger.info("Loading select options for view (accounts and permission sets)")
     logger.debug("Request body", extra={"body": body})
 
-    accounts = organizations.get_accounts_from_config(client=org_client, cfg=cfg)
-    permission_sets = sso.get_permission_sets_from_config(client=sso_client, cfg=cfg)
+    accounts = organizations.get_accounts_from_config_with_cache(org_client=org_client, dynamodb_client=dynamodb_client, cfg=cfg)
+    permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, dynamodb_client=dynamodb_client, cfg=cfg)
     trigger_id = body["trigger_id"]
 
     view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
@@ -273,7 +274,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
     client: WebClient,
     context: BoltContext,  # noqa: ARG001
 ) -> SlackResponse | None:
-    logger.info("Handling request for access submittion")
+    logger.info("Handling request for access submission")
     request = slack_helpers.RequestForAccessView.parse(body)
     logger.info("View submitted", extra={"view": request})
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)
@@ -333,7 +334,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.RequiresApproval:
             approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(
-                client, decision.approvers # type: ignore # noqa: PGH003
+                client, decision.approvers  # type: ignore # noqa: PGH003
             )
             if not approvers:
                 text = """

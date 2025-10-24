@@ -96,6 +96,9 @@ class Config(BaseSettings):
     max_permissions_duration_time: int
     permission_duration_list_override: list
 
+    cache_table_name: str = "sso-elevator-cache"
+    cache_ttl_minutes: int = 360
+
     good_result_emoji: str = ":large_green_circle:"
     waiting_result_emoji: str = ":large_yellow_circle:"
     bad_result_emoji: str = ":red_circle:"
