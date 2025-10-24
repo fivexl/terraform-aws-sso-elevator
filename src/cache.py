@@ -74,7 +74,7 @@ def _is_cache_valid(item: dict[str, Any]) -> bool:
         ttl = int(ttl_value["N"])
     else:
         ttl = int(ttl_value)
-    
+
     current_time = int(time.time())
     return current_time < ttl
 

@@ -11,7 +11,7 @@ Tests cover all error handling scenarios including:
 
 import json
 import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock
 
 import pytest
 from botocore.exceptions import ClientError
@@ -102,16 +102,16 @@ class TestGetCachedAccounts:
     def test_cache_disabled_returns_none(self, mock_dynamodb_client, cache_config_disabled):
         """When cache is disabled, should return None without calling DynamoDB."""
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_disabled)
-        
+
         assert result is None
         mock_dynamodb_client.query.assert_not_called()
 
     def test_cache_miss_no_items(self, mock_dynamodb_client, cache_config_enabled):
         """When no items found in cache, should return None."""
         mock_dynamodb_client.query.return_value = {"Items": []}
-        
+
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_enabled)
-        
+
         assert result is None
         mock_dynamodb_client.query.assert_called_once()
 
@@ -119,7 +119,7 @@ class TestGetCachedAccounts:
         """When cache has valid data, should return accounts."""
         future_ttl = int(time.time()) + 3600  # 1 hour in future
         accounts_data = [acc.dict() for acc in sample_accounts]
-        
+
         mock_dynamodb_client.query.return_value = {
             "Items": [
                 {
@@ -130,9 +130,9 @@ class TestGetCachedAccounts:
                 }
             ]
         }
-        
+
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_enabled)
-        
+
         assert result is not None
         assert len(result) == 2
         assert result[0].id == "111111111111"
@@ -142,7 +142,7 @@ class TestGetCachedAccounts:
         """When cache data is expired, should return None."""
         past_ttl = int(time.time()) - 3600  # 1 hour in past
         accounts_data = [acc.dict() for acc in sample_accounts]
-        
+
         mock_dynamodb_client.query.return_value = {
             "Items": [
                 {
@@ -153,9 +153,9 @@ class TestGetCachedAccounts:
                 }
             ]
         }
-        
+
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_enabled)
-        
+
         assert result is None
 
     def test_table_does_not_exist(self, mock_dynamodb_client, cache_config_enabled):
@@ -164,9 +164,9 @@ class TestGetCachedAccounts:
             {"Error": {"Code": "ResourceNotFoundException", "Message": "Table not found"}},
             "Query"
         )
-        
+
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_enabled)
-        
+
         assert result is None
 
     def test_wrong_table_name(self, mock_dynamodb_client, cache_config_enabled):
@@ -175,9 +175,9 @@ class TestGetCachedAccounts:
             {"Error": {"Code": "ResourceNotFoundException", "Message": "Table not found"}},
             "Query"
         )
-        
+
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_enabled)
-        
+
         assert result is None
 
     def test_access_denied(self, mock_dynamodb_client, cache_config_enabled):
@@ -186,23 +186,23 @@ class TestGetCachedAccounts:
             {"Error": {"Code": "AccessDeniedException", "Message": "Access denied"}},
             "Query"
         )
-        
+
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_enabled)
-        
+
         assert result is None
 
     def test_generic_exception(self, mock_dynamodb_client, cache_config_enabled):
         """When any exception occurs, should return None and not crash."""
         mock_dynamodb_client.query.side_effect = Exception("Something went wrong")
-        
+
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_enabled)
-        
+
         assert result is None
 
     def test_malformed_data(self, mock_dynamodb_client, cache_config_enabled):
         """When data is malformed, should return None and not crash."""
         future_ttl = int(time.time()) + 3600
-        
+
         mock_dynamodb_client.query.return_value = {
             "Items": [
                 {
@@ -213,9 +213,9 @@ class TestGetCachedAccounts:
                 }
             ]
         }
-        
+
         result = cache_module.get_cached_accounts(mock_dynamodb_client, cache_config_enabled)
-        
+
         assert result is None
 
 
@@ -225,13 +225,13 @@ class TestSetCachedAccounts:
     def test_cache_disabled_no_write(self, mock_dynamodb_client, cache_config_disabled, sample_accounts):
         """When cache is disabled, should not write to DynamoDB."""
         cache_module.set_cached_accounts(mock_dynamodb_client, cache_config_disabled, sample_accounts)
-        
+
         mock_dynamodb_client.put_item.assert_not_called()
 
     def test_successful_write(self, mock_dynamodb_client, cache_config_enabled, sample_accounts):
         """When cache is enabled, should write accounts to DynamoDB."""
         cache_module.set_cached_accounts(mock_dynamodb_client, cache_config_enabled, sample_accounts)
-        
+
         mock_dynamodb_client.put_item.assert_called_once()
         call_args = mock_dynamodb_client.put_item.call_args[1]
         assert call_args["TableName"] == "test-cache-table"
@@ -244,7 +244,7 @@ class TestSetCachedAccounts:
             {"Error": {"Code": "ResourceNotFoundException", "Message": "Table not found"}},
             "PutItem"
         )
-        
+
         # Should not raise exception
         cache_module.set_cached_accounts(mock_dynamodb_client, cache_config_enabled, sample_accounts)
 
@@ -254,14 +254,14 @@ class TestSetCachedAccounts:
             {"Error": {"Code": "AccessDeniedException", "Message": "Access denied"}},
             "PutItem"
         )
-        
+
         # Should not raise exception
         cache_module.set_cached_accounts(mock_dynamodb_client, cache_config_enabled, sample_accounts)
 
     def test_generic_exception_on_write(self, mock_dynamodb_client, cache_config_enabled, sample_accounts):
         """When any exception occurs during write, should not crash."""
         mock_dynamodb_client.put_item.side_effect = Exception("Something went wrong")
-        
+
         # Should not raise exception
         cache_module.set_cached_accounts(mock_dynamodb_client, cache_config_enabled, sample_accounts)
 
@@ -276,27 +276,27 @@ class TestGetCachedPermissionSets:
             cache_config_disabled,
             "arn:aws:sso:::instance/ssoins-1111111111111111",
         )
-        
+
         assert result is None
         mock_dynamodb_client.query.assert_not_called()
 
     def test_cache_miss_no_items(self, mock_dynamodb_client, cache_config_enabled):
         """When no items found in cache, should return None."""
         mock_dynamodb_client.query.return_value = {"Items": []}
-        
+
         result = cache_module.get_cached_permission_sets(
             mock_dynamodb_client,
             cache_config_enabled,
             "arn:aws:sso:::instance/ssoins-1111111111111111",
         )
-        
+
         assert result is None
 
     def test_cache_hit_valid_data(self, mock_dynamodb_client, cache_config_enabled, sample_permission_sets):
         """When cache has valid data, should return permission sets."""
         future_ttl = int(time.time()) + 3600
         ps_data = [ps.dict() for ps in sample_permission_sets]
-        
+
         mock_dynamodb_client.query.return_value = {
             "Items": [
                 {
@@ -307,13 +307,13 @@ class TestGetCachedPermissionSets:
                 }
             ]
         }
-        
+
         result = cache_module.get_cached_permission_sets(
             mock_dynamodb_client,
             cache_config_enabled,
             "arn:aws:sso:::instance/ssoins-1111111111111111",
         )
-        
+
         assert result is not None
         assert len(result) == 2
         assert result[0].name == "AdministratorAccess"
@@ -322,7 +322,7 @@ class TestGetCachedPermissionSets:
         """When cache data is expired, should return None."""
         past_ttl = int(time.time()) - 3600
         ps_data = [ps.dict() for ps in sample_permission_sets]
-        
+
         mock_dynamodb_client.query.return_value = {
             "Items": [
                 {
@@ -333,13 +333,13 @@ class TestGetCachedPermissionSets:
                 }
             ]
         }
-        
+
         result = cache_module.get_cached_permission_sets(
             mock_dynamodb_client,
             cache_config_enabled,
             "arn:aws:sso:::instance/ssoins-1111111111111111",
         )
-        
+
         assert result is None
 
     def test_table_does_not_exist(self, mock_dynamodb_client, cache_config_enabled):
@@ -348,13 +348,13 @@ class TestGetCachedPermissionSets:
             {"Error": {"Code": "ResourceNotFoundException", "Message": "Table not found"}},
             "Query"
         )
-        
+
         result = cache_module.get_cached_permission_sets(
             mock_dynamodb_client,
             cache_config_enabled,
             "arn:aws:sso:::instance/ssoins-1111111111111111",
         )
-        
+
         assert result is None
 
 
@@ -371,7 +371,7 @@ class TestSetCachedPermissionSets:
             "arn:aws:sso:::instance/ssoins-1111111111111111",
             sample_permission_sets,
         )
-        
+
         mock_dynamodb_client.put_item.assert_not_called()
 
     def test_successful_write(self, mock_dynamodb_client, cache_config_enabled, sample_permission_sets):
@@ -382,7 +382,7 @@ class TestSetCachedPermissionSets:
             "arn:aws:sso:::instance/ssoins-1111111111111111",
             sample_permission_sets,
         )
-        
+
         mock_dynamodb_client.put_item.assert_called_once()
         call_args = mock_dynamodb_client.put_item.call_args[1]
         assert call_args["TableName"] == "test-cache-table"
@@ -396,7 +396,7 @@ class TestSetCachedPermissionSets:
             {"Error": {"Code": "ResourceNotFoundException", "Message": "Table not found"}},
             "PutItem"
         )
-        
+
         # Should not raise exception
         cache_module.set_cached_permission_sets(
             mock_dynamodb_client,
@@ -415,11 +415,11 @@ class TestWithCacheFallback:
         cache_getter = Mock(return_value=cached_data)
         api_getter = Mock()
         cache_setter = Mock()
-        
+
         result = cache_module.with_cache_fallback(
             cache_getter, api_getter, cache_setter, "accounts"
         )
-        
+
         assert result == cached_data
         cache_getter.assert_called_once()
         api_getter.assert_not_called()
@@ -431,11 +431,11 @@ class TestWithCacheFallback:
         cache_getter = Mock(return_value=None)
         api_getter = Mock(return_value=api_data)
         cache_setter = Mock()
-        
+
         result = cache_module.with_cache_fallback(
             cache_getter, api_getter, cache_setter, "accounts"
         )
-        
+
         assert result == api_data
         cache_getter.assert_called_once()
         api_getter.assert_called_once()
@@ -447,11 +447,11 @@ class TestWithCacheFallback:
         cache_getter = Mock(side_effect=Exception("Cache error"))
         api_getter = Mock(return_value=api_data)
         cache_setter = Mock()
-        
+
         result = cache_module.with_cache_fallback(
             cache_getter, api_getter, cache_setter, "accounts"
         )
-        
+
         assert result == api_data
         api_getter.assert_called_once()
 
@@ -461,11 +461,11 @@ class TestWithCacheFallback:
         cache_getter = Mock(return_value=None)
         api_getter = Mock(return_value=api_data)
         cache_setter = Mock(side_effect=Exception("Cache write error"))
-        
+
         result = cache_module.with_cache_fallback(
             cache_getter, api_getter, cache_setter, "accounts"
         )
-        
+
         assert result == api_data
         api_getter.assert_called_once()
 
@@ -474,7 +474,7 @@ class TestWithCacheFallback:
         cache_getter = Mock(return_value=None)
         api_getter = Mock(side_effect=Exception("API error"))
         cache_setter = Mock()
-        
+
         with pytest.raises(Exception, match="API error"):
             cache_module.with_cache_fallback(
                 cache_getter, api_getter, cache_setter, "accounts"
@@ -497,11 +497,11 @@ class TestTTLHelpers:
         """Test TTL timestamp calculation."""
         ttl_minutes = 60
         before_time = int(time.time()) + (ttl_minutes * 60)
-        
+
         ttl = cache_module._get_ttl_timestamp(ttl_minutes)
-        
+
         after_time = int(time.time()) + (ttl_minutes * 60)
-        
+
         # TTL should be between before_time and after_time
         assert before_time <= ttl <= after_time
 
@@ -509,19 +509,19 @@ class TestTTLHelpers:
         """Test cache validity check for valid cache."""
         future_ttl = int(time.time()) + 3600
         item = {"ttl": str(future_ttl)}
-        
+
         assert cache_module._is_cache_valid(item) is True
 
     def test_is_cache_valid_returns_false_for_expired_cache(self):
         """Test cache validity check for expired cache."""
         past_ttl = int(time.time()) - 3600
         item = {"ttl": str(past_ttl)}
-        
+
         assert cache_module._is_cache_valid(item) is False
 
     def test_is_cache_valid_returns_false_for_missing_ttl(self):
         """Test cache validity check when TTL is missing."""
         item = {}
-        
+
         assert cache_module._is_cache_valid(item) is False
 
