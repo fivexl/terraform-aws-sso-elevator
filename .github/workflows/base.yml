@@ -31,7 +31,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install Poetry
-        run: pip3 install poetry
+        run: pip3 install poetry pre-commit
 
       - name: Run tests
         run: bash run-tests.sh

@@ -16,22 +16,22 @@ s3: S3Client = boto3.client("s3")
 
 @dataclass
 class AuditEntry:
-    reason: Literal["scheduled_revocation"] | Literal["automated_revocation"] | str
-    operation_type: Literal["grant"] | Literal["revoke"]
+    reason: str
+    operation_type: Literal["grant", "revoke"]
     permission_duration: Literal["NA"] | timedelta
-    sso_user_principal_id: Literal["NA"] | str
-    audit_entry_type: Literal["group"] | Literal["account"]
+    sso_user_principal_id: str
+    audit_entry_type: Literal["group", "account"]
     version = 1
-    role_name: Literal["NA"] | str = "NA"
-    account_id: Literal["NA"] | str = "NA"
-    requester_slack_id: Literal["NA"] | str = "NA"
-    requester_email: Literal["NA"] | str = "NA"
-    request_id: Literal["NA"] | str = "NA"
-    approver_slack_id: Literal["NA"] | str = "NA"
-    approver_email: Literal["NA"] | str = "NA"
-    group_name: Literal["NA"] | str = "NA"
-    group_id: Literal["NA"] | str = "NA"
-    group_membership_id: Literal["NA"] | str = "NA"
+    role_name: str = "NA"
+    account_id: str = "NA"
+    requester_slack_id: str = "NA"
+    requester_email: str = "NA"
+    request_id: str = "NA"
+    approver_slack_id: str = "NA"
+    approver_email: str = "NA"
+    group_name: str = "NA"
+    group_id: str = "NA"
+    group_membership_id: str = "NA"
     secondary_domain_was_used: bool = False
 
 

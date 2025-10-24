@@ -10,7 +10,6 @@ import config
 
 from . import strategies
 
-# ruff: noqa
 VALID_STATEMENT_DICT = {
     "ResourceType": "Account",
     "Resource": ["111111111111"],
@@ -33,8 +32,8 @@ def test_parse_statement(
 ):
     try:
         config.parse_statement(dict_statement)
-    except ValidationError:
-        assert False
+    except ValidationError as e:
+        raise AssertionError("Statement parsing failed unexpectedly") from e
 
 
 @given(strategies.group_statement_dict())
@@ -44,15 +43,19 @@ def test_parse_statement(
 def test_parse_group_statement(dict_group_statement: dict):
     try:
         config.parse_group_statement(dict_group_statement)
-    except ValidationError:
-        assert False
+    except ValidationError as e:
+        raise AssertionError("Group statement parsing failed unexpectedly") from e
 
 
 def config_dict(
-    statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.statement_dict())),
-    group_statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.group_statement_dict())),
-    secondary_fallback_email_domains: SearchStrategy = strategies.jsonstr(st.lists(strategies.json_safe_text, max_size=10, min_size=1)),
-    permission_duration_list_override: SearchStrategy = strategies.jsonstr(st.lists(strategies.json_safe_text, max_size=10, min_size=1)),
+    statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.statement_dict())),  # noqa: B008
+    group_statements: SearchStrategy = strategies.jsonstr(st.lists(strategies.group_statement_dict())),  # noqa: B008
+    secondary_fallback_email_domains: SearchStrategy = strategies.jsonstr(  # noqa: B008
+        st.lists(strategies.json_safe_text, max_size=10, min_size=1)  # noqa: B008
+    ),
+    permission_duration_list_override: SearchStrategy = strategies.jsonstr(  # noqa: B008
+        st.lists(strategies.json_safe_text, max_size=10, min_size=1)  # noqa: B008
+    ),
 ):
     return st.fixed_dictionaries(
         {
@@ -139,8 +142,10 @@ def valid_config_dict(
 @example(valid_config_dict() | {"send_dm_if_user_not_in_channel": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 def test_config_load_environment_variables(dict_config: dict):
-    os.environ = dict_config
-    config.Config()  # type: ignore
+    os.environ.clear()  # noqa: B003
+    # Convert all values to strings as os.environ expects
+    os.environ.update({k: str(v) for k, v in dict_config.items()})
+    config.Config()  # type: ignore[call-arg]
 
 
 @given(
@@ -196,13 +201,13 @@ def test_cache_ttl_minutes_validation_rejects_invalid_types():
 def test_cache_ttl_minutes_validation_rejects_out_of_bounds():
     """Test that cache_ttl_minutes validation rejects out-of-bounds values."""
     import pytest
-    
+
     base_config = valid_config_dict()
-    
+
     # Test with negative value
     with pytest.raises(ValidationError):
         config.Config(**base_config | {"cache_ttl_minutes": "-1"})
-    
+
     # Test with value over max (more than 1 year in minutes)
     with pytest.raises(ValidationError):
         config.Config(**base_config | {"cache_ttl_minutes": str(config.MAX_TTL_MINUTES + 1)})
