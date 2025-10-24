@@ -3,6 +3,9 @@ name: Update review branch
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   review:
     name: Review
