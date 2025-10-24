@@ -24,6 +24,7 @@ schedule_client = session.client("scheduler")
 org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
 identity_store_client = session.client("identitystore")
+dynamodb_client = session.client("dynamodb")
 
 cfg = config.get_config()
 app = App(
@@ -108,8 +109,8 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
     logger.info("Loading select options for view (accounts and permission sets)")
     logger.debug("Request body", extra={"body": body})
 
-    accounts = organizations.get_accounts_from_config(client=org_client, cfg=cfg)
-    permission_sets = sso.get_permission_sets_from_config(client=sso_client, cfg=cfg)
+    accounts = organizations.get_accounts_from_config_with_cache(org_client=org_client, dynamodb_client=dynamodb_client, cfg=cfg)
+    permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, dynamodb_client=dynamodb_client, cfg=cfg)
     trigger_id = body["trigger_id"]
 
     view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)

@@ -70,6 +70,8 @@ module "access_revoker" {
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
     SECONDARY_FALLBACK_EMAIL_DOMAINS           = jsonencode(var.secondary_fallback_email_domains)
     SEND_DM_IF_USER_NOT_IN_CHANNEL             = var.send_dm_if_user_not_in_channel
+    CACHE_TABLE_NAME                           = var.cache_table_name
+    CACHE_TTL_MINUTES                          = var.cache_ttl_minutes
   }
 
   allowed_triggers = {
@@ -169,6 +171,17 @@ data "aws_iam_policy_document" "revoker" {
       "identitystore:DeleteGroupMembership"
     ]
     resources = ["*"]
+  }
+  statement {
+    sid    = "AllowDynamoDBCache"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+    ]
+    resources = [aws_dynamodb_table.sso_elevator_cache.arn]
   }
 }
 
