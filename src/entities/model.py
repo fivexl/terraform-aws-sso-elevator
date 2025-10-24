@@ -3,24 +3,22 @@ import enum
 from typing import FrozenSet
 
 from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict
 
 
 class BaseModel(PydanticBaseModel):
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
     def dict(self, *args, **kwargs) -> dict:  # noqa: ANN101, ANN003, ANN002
         """Converts instance to dict representation of it. Workaround for https://github.com/pydantic/pydantic/issues/1090"""
-        cp = super().copy()
-        cp.Config.frozen = False
-        for field_name in cp.__fields__.keys():
-            attr = cp.__getattribute__(field_name)
+        # In Pydantic v2, use model_dump instead
+        result = self.model_dump(*args, **kwargs)
+        # Convert frozensets to lists for JSON serialization
+        for field_name in self.__class__.model_fields.keys():
+            attr = getattr(self, field_name)
             if isinstance(attr, FrozenSet):
-                cp.__setattr__(field_name, list(attr))
-
-        cp.Config.frozen = True
-        # frozendict.frozendict(?)
-        return PydanticBaseModel.dict(cp, *args, **kwargs)
+                result[field_name] = list(attr)
+        return result
 
 
 def json_default(o: object) -> str | dict:

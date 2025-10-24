@@ -23,9 +23,8 @@ module "access_requester_slack_handler" {
   docker_file     = var.use_pre_created_image ? null : "${path.module}/src/docker/Dockerfile"
   source_path = var.use_pre_created_image ? [] : [
     {
-      path             = "${path.module}/src/"
-      pip_requirements = "${path.module}/src/deploy_requirements.txt"
-      artifacts_dir    = "${path.root}/builds/"
+      path          = "${path.module}/src/"
+      artifacts_dir = "${path.root}/builds/"
       patterns = [
         "!.venv/.*",
         "!.vscode/.*",
@@ -34,6 +33,8 @@ module "access_requester_slack_handler" {
         "!tools/.*",
         "!.hypothesis/.*",
         "!.pytest_cache/.*",
+        "!uv.lock",
+        "!pyproject.toml",
       ]
     }
   ]

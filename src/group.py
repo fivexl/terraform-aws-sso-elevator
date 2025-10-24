@@ -159,7 +159,7 @@ cache_for_dublicate_requests = {}
 @handle_errors
 def handle_group_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # type: ignore # noqa: PGH003 ARG001
     logger.info("Handling button click")
-    payload = slack_helpers.ButtonGroupClickedPayload.parse_obj(body)
+    payload = slack_helpers.ButtonGroupClickedPayload.model_validate(body)
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)

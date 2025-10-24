@@ -37,26 +37,3 @@ repos:
     -   id: codespell
         types_or: [python, rst, markdown, cython, c, terraform]
         additional_dependencies: [tomli]
--   repo: local
-    hooks:
-        # This pre-commit hook is used to automatically generate a deploy_requirements.txt file from the current Poetry dependencies.
-    -   id: poetry-export-deploy-requirements-src
-        name: Export dependencies with Poetry for src
-        entry: bash -c 'cd src && poetry export -f requirements.txt --output deploy_requirements.txt && git diff --exit-code deploy_requirements.txt || git add deploy_requirements.txt'
-        language: system
-        files: src/pyproject.toml$
-        pass_filenames: false
-        # This pre-commit hook also generates a deploy_requirements.txt file for layer deployments.
-    -   id: poetry-export-deploy-requirements-layer
-        name: Export dependencies with Poetry for layer
-        entry: bash -c 'cd layer && poetry export -f requirements.txt --output deploy_requirements.txt && git diff --exit-code deploy_requirements.txt || git add deploy_requirements.txt'
-        language: system
-        files: layer/pyproject.toml$
-        pass_filenames: false
-        # Generate requirements.txt for git-ci
-    -   id: poetry-export-git-ci-requirements
-        name: Export dependencies with Poetry for git-ci
-        entry: bash -c 'cd src && poetry export --with dev  -f requirements.txt --output requirements.txt && git diff --exit-code requirements.txt || git add requirements.txt'
-        language: system
-        files: src/pyproject.toml$
-        pass_filenames: false

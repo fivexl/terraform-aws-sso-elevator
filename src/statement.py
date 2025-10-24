@@ -1,7 +1,7 @@
 from enum import Enum
-from typing import FrozenSet, Union
+from typing import Annotated, FrozenSet, Union
 
-from pydantic import ConstrainedStr, EmailStr, Field
+from pydantic import EmailStr, Field
 
 from entities import BaseModel
 
@@ -11,20 +11,11 @@ class ResourceType(str, Enum):
     OU = "OU"
 
 
-class AWSAccountId(ConstrainedStr):
-    regex = r"^\d{12}$"
-
-
-class AWSOUName(ConstrainedStr):
-    regex = r"^[\s\S]{1,128}$"
-
-
-class PermissionSetName(ConstrainedStr):
-    regex = r"^[\w+=,.@-]{1,32}$"
-
-
-class WildCard(ConstrainedStr):
-    regex = r"^\*$"
+# Pydantic v2: Use Annotated with Field for constrained strings
+AWSAccountId = Annotated[str, Field(pattern=r"^\d{12}$")]
+AWSOUName = Annotated[str, Field(pattern=r"^[\s\S]{1,128}$")]
+PermissionSetName = Annotated[str, Field(pattern=r"^[\w+=,.@-]{1,32}$")]
+WildCard = Annotated[str, Field(pattern=r"^\*$")]
 
 
 class BaseStatement(BaseModel):
@@ -36,7 +27,7 @@ class BaseStatement(BaseModel):
 
 
 class Statement(BaseStatement):
-    resource_type: ResourceType = Field(ResourceType.Account, const=True)
+    resource_type: ResourceType = Field(default=ResourceType.Account, frozen=True)
     resource: FrozenSet[Union[AWSAccountId, WildCard]]
 
     def affects(self, account_id: str, permission_set_name: str) -> bool:  # noqa: ANN101
@@ -50,12 +41,13 @@ def get_affected_statements(statements: FrozenSet[Statement], account_id: str, p
 
 
 class OUStatement(BaseStatement):
-    resource_type: ResourceType = Field(ResourceType.OU, const=True)
+    resource_type: ResourceType = Field(default=ResourceType.OU, frozen=True)
     resource: FrozenSet[Union[AWSOUName, WildCard]]
 
 
-class AWSSSOGroupID(ConstrainedStr):
-    regex = r"^([0-9a-f]{10}-)?[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$"
+AWSSSOGroupID = Annotated[
+    str, Field(pattern=r"^([0-9a-f]{10}-)?[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$")
+]
 
 
 class GroupStatement(BaseModel):

@@ -1,7 +1,7 @@
 from datetime import timedelta
-from typing import Literal
+from typing import Literal, Union
 
-from pydantic import Field, root_validator
+from pydantic import model_validator, RootModel
 
 import entities
 import sso
@@ -28,9 +28,10 @@ class ScheduledGroupRevokeEvent(BaseModel):
     action: Literal["event_bridge_group_revoke"]
     revoke_event: GroupRevokeEvent
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
-        values["revoke_event"] = GroupRevokeEvent.parse_raw(values["revoke_event"])
+        values["revoke_event"] = GroupRevokeEvent.model_validate_json(values["revoke_event"])
         return values
 
 
@@ -38,9 +39,10 @@ class ScheduledRevokeEvent(BaseModel):
     action: Literal["event_bridge_revoke"]
     revoke_event: RevokeEvent
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
-        values["revoke_event"] = RevokeEvent.parse_raw(values["revoke_event"])
+        values["revoke_event"] = RevokeEvent.model_validate_json(values["revoke_event"])
         return values
 
 
@@ -67,12 +69,13 @@ class ApproverNotificationEvent(BaseModel):
     time_to_wait_in_seconds: float
 
 
-class Event(BaseModel):
-    __root__: (
-        ScheduledRevokeEvent
-        | DiscardButtonsEvent
-        | CheckOnInconsistency
-        | SSOElevatorScheduledRevocation
-        | ApproverNotificationEvent
-        | ScheduledGroupRevokeEvent
-    ) = Field(..., discriminator="action")
+Event = RootModel[
+    Union[
+        ScheduledRevokeEvent,
+        DiscardButtonsEvent,
+        CheckOnInconsistency,
+        SSOElevatorScheduledRevocation,
+        ApproverNotificationEvent,
+        ScheduledGroupRevokeEvent,
+    ]
+]

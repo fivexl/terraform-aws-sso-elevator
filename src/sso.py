@@ -275,7 +275,7 @@ def list_user_account_assignments(
 
 def parse_permission_set(td: type_defs.DescribePermissionSetResponseTypeDef) -> entities.aws.PermissionSet:
     ps = td.get("PermissionSet", {})
-    return entities.aws.PermissionSet.parse_obj(
+    return entities.aws.PermissionSet.model_validate(
         {
             "name": ps.get("Name"),
             "arn": ps.get("PermissionSetArn"),
