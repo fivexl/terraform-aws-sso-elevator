@@ -54,8 +54,7 @@ module "config_bucket" {
       }
     }
   ]
-
-  logging = {}
+  logging = var.s3_logging
 
   tags = var.tags
 }
