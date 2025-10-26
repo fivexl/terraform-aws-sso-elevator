@@ -42,7 +42,7 @@ slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
     try:
-        parsed_event = Event.model_validate(event).__root__
+        parsed_event = Event.model_validate(event).root
     except ValidationError as e:
         logger.warning("Got unexpected event:", extra={"event": event, "exception": e})
         raise e

@@ -31,7 +31,8 @@ class ScheduledGroupRevokeEvent(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
-        values["revoke_event"] = GroupRevokeEvent.model_validate_json(values["revoke_event"])
+        if "revoke_event" in values and isinstance(values["revoke_event"], str):
+            values["revoke_event"] = GroupRevokeEvent.model_validate_json(values["revoke_event"])
         return values
 
 
@@ -42,7 +43,8 @@ class ScheduledRevokeEvent(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
-        values["revoke_event"] = RevokeEvent.model_validate_json(values["revoke_event"])
+        if "revoke_event" in values and isinstance(values["revoke_event"], str):
+            values["revoke_event"] = RevokeEvent.model_validate_json(values["revoke_event"])
         return values
 
 
