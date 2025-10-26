@@ -20,6 +20,11 @@ class BaseModel(PydanticBaseModel):
                 result[field_name] = list(attr)
         return result
 
+    def json(self, *args, **kwargs) -> str:  # noqa: ANN101, ANN003, ANN002
+        """Converts instance to JSON string. Compatibility wrapper for Pydantic v2."""
+        # In Pydantic v2, use model_dump_json instead
+        return self.model_dump_json(*args, **kwargs)
+
 
 def json_default(o: object) -> str | dict:
     if isinstance(o, PydanticBaseModel):

@@ -93,10 +93,10 @@ def get_scheduled_events(client: EventBridgeSchedulerClient) -> list[ScheduledRe
             logger.warning("Got unexpected event", extra={"event": event, "error": e})
             continue
 
-        if isinstance(event.__root__, ScheduledRevokeEvent):
-            scheduled_revoke_events.append(event.__root__)
-        elif isinstance(event.__root__, ScheduledGroupRevokeEvent):
-            scheduled_revoke_events.append(event.__root__)
+        if isinstance(event.root, ScheduledRevokeEvent):
+            scheduled_revoke_events.append(event.root)
+        elif isinstance(event.root, ScheduledGroupRevokeEvent):
+            scheduled_revoke_events.append(event.root)
     logger.debug("Scheduled revoke events", extra={"scheduled_revoke_events": scheduled_revoke_events})
     return scheduled_revoke_events
 
