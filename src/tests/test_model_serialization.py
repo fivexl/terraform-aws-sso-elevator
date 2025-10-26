@@ -1,8 +1,5 @@
 """Tests for model serialization, particularly handling frozensets with nested Pydantic models."""
 
-import pytest
-from pydantic import EmailStr
-
 from access_control import AccessRequestDecision, ApproveRequestDecision, DecisionReason
 from statement import Statement, GroupStatement
 

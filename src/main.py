@@ -39,16 +39,19 @@ def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
     return slack_handler.handle(event, context)
 
 
-trigger_view_map = {}
+user_view_map = {}
 # To update the view, it is necessary to know the view_id. It is returned when the view is opened.
 # But shortcut 'request_for_access' handled by two functions. The first one opens the view and the second one updates it.
-# So we need to store the view_id somewhere. Since the trigger_id is unique for each request,
-# and available in both functions, we can use it as a key. The value is the view_id.
+# So we need to store the view_id somewhere. We use user_id + callback_id as the key since:
+# - It's available in both handler functions
+# - It persists across Lambda invocations within the same container
+# - It's unique per user per request type
+# - A user can only have one active modal of each type at a time
 #
-# NOTE: This in-memory map has limitations in AWS Lambda:
+# NOTE: This in-memory map still has limitations in AWS Lambda:
 # - Lambda containers can be recycled between invocations, causing the map to be empty
-# - For production use, consider using DynamoDB or ElastiCache to persist the mapping
-# - Current implementation has a fallback that opens a new view if the mapping is lost
+# - For production use with high traffic, consider using DynamoDB or ElastiCache
+# - Current implementation gracefully handles missing view_id by opening a new view
 
 
 def build_initial_form_handler(
@@ -93,8 +96,16 @@ def build_initial_form_handler(
         logger.info(f"Showing initial form for {view_class.__name__}")
         logger.debug("Request body", extra={"body": body})
         trigger_id = body["trigger_id"]
+        user_id = body.get("user", {}).get("id")
+        callback_id = view_class.CALLBACK_ID
+
         response = client.views_open(trigger_id=trigger_id, view=view_class.build())
-        trigger_view_map[trigger_id] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
+
+        # Store view_id using user_id + callback_id as key for persistence across Lambda invocations
+        view_key = f"{user_id}:{callback_id}"
+        user_view_map[view_key] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
+        logger.debug(f"Stored view_id for key: {view_key}")
+
         return response
 
     return show_initial_form_for_request
@@ -105,19 +116,24 @@ def load_select_options_for_group_access_request(client: WebClient, body: dict) 
     logger.debug("Request body", extra={"body": body})
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     groups = sso.get_groups_from_config(sso_instance.identity_store_id, identity_store_client, cfg)
-    trigger_id = body["trigger_id"]
 
-    view_id = trigger_view_map.get(trigger_id)
+    user_id = body.get("user", {}).get("id")
+    callback_id = slack_helpers.RequestForGroupAccessView.CALLBACK_ID
+    view_key = f"{user_id}:{callback_id}"
+
+    view_id = user_view_map.get(view_key)
     if not view_id:
         logger.warning(
-            f"View ID not found for trigger_id: {trigger_id}. "
+            f"View ID not found for key: {view_key}. "
             "This happens when Lambda container is recycled between shortcut invocations. "
             "Opening a new view as fallback."
         )
         # Fallback: open a new view with the data already loaded
+        trigger_id = body["trigger_id"]
         view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
         return client.views_open(trigger_id=trigger_id, view=view)
 
+    logger.debug(f"Updating view with view_id from key: {view_key}")
     view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
     return client.views_update(view_id=view_id, view=view)
 
@@ -128,21 +144,26 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
 
     accounts = organizations.get_accounts_from_config_with_cache(org_client=org_client, s3_client=s3_client, cfg=cfg)
     permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
-    trigger_id = body["trigger_id"]
 
-    view_id = trigger_view_map.get(trigger_id)
+    user_id = body.get("user", {}).get("id")
+    callback_id = slack_helpers.RequestForAccessView.CALLBACK_ID
+    view_key = f"{user_id}:{callback_id}"
+
+    view_id = user_view_map.get(view_key)
     if not view_id:
         logger.warning(
-            f"View ID not found for trigger_id: {trigger_id}. "
+            f"View ID not found for key: {view_key}. "
             "This happens when Lambda container is recycled between shortcut invocations. "
             "Opening a new view as fallback."
         )
         # Fallback: open a new view with the data already loaded
+        trigger_id = body["trigger_id"]
         view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(
             accounts=accounts, permission_sets=permission_sets
         )
         return client.views_open(trigger_id=trigger_id, view=view)
 
+    logger.debug(f"Updating view with view_id from key: {view_key}")
     view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
     return client.views_update(view_id=view_id, view=view)
 
