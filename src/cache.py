@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -289,8 +290,27 @@ def set_cached_permission_sets(
         logger.warning(f"Failed to cache permission sets: {e}", extra={"error": str(e)})
 
 
+def _compute_data_hash(data: T) -> str:
+    """Compute SHA256 hash of data for comparison.
+
+    Args:
+        data: Data to hash (list of Account or PermissionSet objects)
+
+    Returns:
+        Hex string of SHA256 hash
+    """
+    try:
+        # Convert to JSON string with sorted keys for consistent hashing
+        json_str = json.dumps([item.dict() if hasattr(item, "dict") else item for item in data], sort_keys=True)
+        return hashlib.sha256(json_str.encode("utf-8")).hexdigest()
+    except Exception as e:
+        logger.warning(f"Failed to compute hash: {e}")
+        # Return a random value to force cache update on error
+        return ""
+
+
 def _compare_data(api_data: T, cached_data: T, compare_func: Optional[Callable[[T, T], bool]]) -> bool:
-    """Compare API data with cached data.
+    """Compare API data with cached data using hash comparison.
 
     Args:
         api_data: Data from API
@@ -303,11 +323,11 @@ def _compare_data(api_data: T, cached_data: T, compare_func: Optional[Callable[[
     if compare_func:
         return compare_func(api_data, cached_data)
 
-    # Default comparison: convert to JSON and compare
+    # Default comparison: compute and compare hashes
     try:
-        api_json = json.dumps([item.dict() if hasattr(item, "dict") else item for item in api_data], sort_keys=True)
-        cache_json = json.dumps([item.dict() if hasattr(item, "dict") else item for item in cached_data], sort_keys=True)
-        return api_json == cache_json
+        api_hash = _compute_data_hash(api_data)
+        cache_hash = _compute_data_hash(cached_data)
+        return api_hash == cache_hash and api_hash != ""
     except Exception:
         # If comparison fails, assume data is different
         return False

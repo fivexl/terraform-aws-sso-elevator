@@ -34,33 +34,34 @@ The implementation uses a resilient caching strategy:
 
 1. **S3 Bucket** (`s3.tf`):
    - Uses the same `fivexl/account-baseline/aws//modules/s3_baseline` module as the audit bucket
-   - Bucket name: Configurable via `cache_bucket_name` variable (default: `sso-elevator-cache`)
+   - Bucket name: Configurable via `config_bucket_name` variable (default: `sso-elevator-config`)
    - Cache structure:
      - `accounts.json` - stores all accounts
      - `permission_sets/<arn_hash>.json` - stores permission sets per SSO instance
    - No TTL metadata - cache is kept indefinitely
    - **Security Features**:
-     - Server-side encryption enabled (AES256 by default, KMS optional via `cache_kms_key_arn`)
+     - Server-side encryption enabled (AES256 by default, KMS optional via `config_bucket_kms_key_arn`)
      - Public access blocked (via s3_baseline module)
      - Versioning enabled
      - Lifecycle policy to clean up old versions after 7 days
-   - **Conditional Creation**: Bucket is only created when `cache_enabled = true`
+   - **Note**: The bucket is always created (not conditional) as it's intended for future config storage even when caching is disabled
 
 2. **Variables** (`vars.tf`):
-   - `cache_bucket_name`: Name of the S3 bucket (default: `sso-elevator-cache`)
+   - `config_bucket_name`: Name of the S3 bucket (default: `sso-elevator-config`)
    - `cache_enabled`: Enable/disable caching (default: `true`)
-   - `cache_kms_key_arn`: Optional ARN of a customer-managed KMS key for encryption (default: null)
+   - `config_bucket_kms_key_arn`: Optional ARN of a customer-managed KMS key for encryption (default: null)
    - Variables are passed to Lambda functions as environment variables
 
 3. **IAM Permissions**:
-   - S3 permissions conditionally added to both Lambda functions (only when caching is enabled):
+   - S3 permissions added to the requester Lambda function:
      - `s3:GetObject`
      - `s3:PutObject`
      - `s3:ListBucket`
+   - Note: The revoker Lambda does NOT use cache and does not have these permissions
 
 4. **Outputs** (`outputs.tf`):
-   - `cache_s3_bucket_name`: The name of the cache S3 bucket (null if caching is disabled)
-   - `cache_s3_bucket_arn`: The ARN of the cache S3 bucket (null if caching is disabled)
+   - `config_s3_bucket_name`: The name of the config S3 bucket
+   - `config_s3_bucket_arn`: The ARN of the config S3 bucket
 
 ### Application Changes
 
@@ -84,13 +85,13 @@ The implementation uses a resilient caching strategy:
    - Uses parallel API/cache calls with automatic cache updates
 
 4. **Updated Config** (`src/config.py`):
-   - `cache_bucket_name`: S3 bucket name (default: `sso-elevator-cache`)
+   - `config_bucket_name`: S3 bucket name (default: `sso-elevator-config`)
    - `cache_enabled`: Boolean flag to enable/disable caching (default: `True`)
    - Removed `cache_ttl_minutes` field
 
 5. **Updated Lambda Handlers**:
-   - `src/main.py`: Updated to use S3 client instead of DynamoDB client
-   - `src/revoker.py`: Updated to use S3 client for account assignments
+   - `src/main.py`: Updated to use S3 cache for accounts and permission sets
+   - `src/revoker.py`: Does NOT use cache - always fetches fresh data from AWS APIs for accuracy
 
 ## Cache Behavior
 
@@ -167,15 +168,15 @@ module "aws_sso_elevator" {
   # Other configuration...
   
   # These are the defaults (no need to specify):
-  # cache_enabled     = true
-  # cache_bucket_name = "sso-elevator-cache"
-  # cache_kms_key_arn = null  # Uses AES256 encryption
+  # cache_enabled          = true
+  # config_bucket_name     = "sso-elevator-config"
+  # config_bucket_kms_key_arn = null  # Uses AES256 encryption
 }
 ```
 
 ### Disabling Cache
 
-To disable caching entirely (no S3 bucket will be created):
+To disable caching (S3 bucket will still be created for future config storage):
 
 ```hcl
 module "aws_sso_elevator" {
@@ -183,7 +184,7 @@ module "aws_sso_elevator" {
   
   # Other configuration...
   
-  cache_enabled = false  # Disable caching completely
+  cache_enabled = false  # Disable caching (bucket still created for future use)
 }
 ```
 
@@ -197,7 +198,7 @@ module "aws_sso_elevator" {
   
   # Other configuration...
   
-  cache_bucket_name = "my-custom-sso-elevator-cache"
+  config_bucket_name = "my-custom-sso-elevator-config"
 }
 ```
 
@@ -211,7 +212,7 @@ module "aws_sso_elevator" {
   
   # Other configuration...
   
-  cache_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+  config_bucket_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
 }
 ```
 
@@ -291,14 +292,14 @@ If you're migrating from the TTL-based cache:
 **Important:** These warnings do not break functionality. The application will continue to work using API data.
 
 Common causes:
-- S3 bucket doesn't exist (check if `cache_enabled` is set correctly in Terraform)
-- Wrong bucket name (verify `cache_bucket_name` matches between Terraform and Lambda environment variables)
+- S3 bucket doesn't exist (check Terraform deployment)
+- Wrong bucket name (verify `config_bucket_name` matches between Terraform and Lambda environment variables)
 - Lambda IAM permissions missing S3 read access
 
 **How to diagnose:**
 1. Check CloudWatch Logs for the full error message
-2. Verify the bucket exists: `aws s3 ls s3://sso-elevator-cache`
-3. Confirm bucket name environment variable: Check Lambda configuration `CACHE_BUCKET_NAME`
+2. Verify the bucket exists: `aws s3 ls s3://sso-elevator-config-<random-suffix>`
+3. Confirm bucket name environment variable: Check Lambda configuration `CONFIG_BUCKET_NAME`
 4. Verify IAM permissions include `s3:GetObject`, `s3:ListBucket`
 
 ### "Failed to cache accounts" warnings
