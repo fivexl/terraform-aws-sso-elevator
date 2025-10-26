@@ -15,16 +15,18 @@ ENV UV_LINK_MODE=copy
 # Bundle the layer dependencies (powertools) first
 RUN --mount=from=uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=layer/uv.lock,target=layer-uv.lock \
-    --mount=type=bind,source=layer/pyproject.toml,target=layer-pyproject.toml \
-    uv export --frozen --no-emit-workspace --no-dev --no-editable -o layer-requirements.txt && \
-    uv pip install --python-platform linux --target "${LAMBDA_TASK_ROOT}" -r layer-requirements.txt
+    --mount=type=bind,source=layer/uv.lock,target=/tmp/layer/uv.lock \
+    --mount=type=bind,source=layer/pyproject.toml,target=/tmp/layer/pyproject.toml \
+    cd /tmp/layer && \
+    uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt && \
+    uv pip install --python-platform linux --target "${LAMBDA_TASK_ROOT}" -r requirements.txt
 
 # Bundle the source dependencies into the Lambda task root
 RUN --mount=from=uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=src/uv.lock,target=uv.lock \
-    --mount=type=bind,source=src/pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=src/uv.lock,target=/tmp/src/uv.lock \
+    --mount=type=bind,source=src/pyproject.toml,target=/tmp/src/pyproject.toml \
+    cd /tmp/src && \
     uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt && \
     uv pip install --python-platform linux --target "${LAMBDA_TASK_ROOT}" -r requirements.txt
 
