@@ -2,15 +2,11 @@ import os
 from typing import Optional
 
 from aws_lambda_powertools import Logger
-from pydantic import field_validator, model_validator
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import entities
 from statement import Statement, GroupStatement
-
-# TTL validation constants (in minutes)
-MIN_TTL_MINUTES = 0  # 0 means disabled
-MAX_TTL_MINUTES = 525600  # 1 year in minutes
 
 
 def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Logger:
@@ -103,35 +99,10 @@ class Config(BaseSettings):
     max_permissions_duration_time: int
     permission_duration_list_override: list
 
-    cache_table_name: str = "sso-elevator-cache"
-    cache_ttl_minutes: int = 5760  # 4 days
+    config_bucket_name: str = "sso-elevator-config"
+    cache_enabled: bool = True
 
     good_result_emoji: str = ":large_green_circle:"
-
-    @field_validator("cache_ttl_minutes")
-    @classmethod
-    def validate_cache_ttl_minutes(cls, v) -> int:  # noqa: ANN001, ANN101
-        """Validate cache TTL minutes to prevent NoSQL injection.
-
-        Args:
-            v: The cache TTL minutes value
-
-        Returns:
-            Validated integer value
-
-        Raises:
-            ValueError: If the value is invalid or out of reasonable bounds
-        """
-        try:
-            ttl_int = int(v)
-        except (TypeError, ValueError) as e:
-            raise ValueError(f"cache_ttl_minutes must be a valid integer, got: {v}") from e
-
-        # Allow 0 (disabled) or values between 1 and 525600 (1 year in minutes)
-        if ttl_int < MIN_TTL_MINUTES or ttl_int > MAX_TTL_MINUTES:
-            raise ValueError(f"cache_ttl_minutes must be between {MIN_TTL_MINUTES} and {MAX_TTL_MINUTES} (1 year), got: {ttl_int}")
-
-        return ttl_int
 
     waiting_result_emoji: str = ":large_yellow_circle:"
     bad_result_emoji: str = ":red_circle:"

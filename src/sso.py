@@ -13,10 +13,10 @@ import errors
 import organizations
 
 if TYPE_CHECKING:
-    from mypy_boto3_dynamodb import DynamoDBClient
     from mypy_boto3_identitystore import IdentityStoreClient
     from mypy_boto3_identitystore import type_defs as idc_type_defs
     from mypy_boto3_organizations import OrganizationsClient
+    from mypy_boto3_s3 import S3Client
     from mypy_boto3_sso_admin import SSOAdminClient, type_defs
 
     from entities.aws import PermissionSet
@@ -311,18 +311,19 @@ def list_permission_sets(client: SSOAdminClient, sso_instance_arn: str) -> Gener
 
 def list_permission_sets_with_cache(
     sso_client: SSOAdminClient,
-    dynamodb_client: DynamoDBClient,
+    s3_client: S3Client,
     sso_instance_arn: str,
     cfg: config.Config,
 ) -> list[entities.aws.PermissionSet]:
-    """List all permission sets with cache fallback.
+    """List all permission sets with cache resilience.
 
-    This function attempts to get permission sets from cache first. If cache is
-    unavailable or expired, it falls back to the SSO Admin API and updates the cache.
+    This function calls both the SSO Admin API and S3 cache in parallel.
+    If the API call succeeds, it compares with cached data and updates if different.
+    If the API call fails, it falls back to cached data.
 
     Args:
         sso_client: SSO Admin client
-        dynamodb_client: DynamoDB client for cache
+        s3_client: S3 client for cache
         sso_instance_arn: SSO instance ARN
         cfg: Application configuration
 
@@ -331,11 +332,11 @@ def list_permission_sets_with_cache(
     """
     cache_config = cache_module.CacheConfig.from_config(cfg)
 
-    return cache_module.with_cache_fallback(
-        cache_getter=lambda: cache_module.get_cached_permission_sets(dynamodb_client, cache_config, sso_instance_arn),
+    return cache_module.with_cache_resilience(
+        cache_getter=lambda: cache_module.get_cached_permission_sets(s3_client, cache_config, sso_instance_arn),
         api_getter=lambda: list(list_permission_sets(sso_client, sso_instance_arn)),
         cache_setter=lambda permission_sets: cache_module.set_cached_permission_sets(
-            dynamodb_client, cache_config, sso_instance_arn, permission_sets
+            s3_client, cache_config, sso_instance_arn, permission_sets
         ),
         resource_name="permission_sets",
     )
@@ -428,23 +429,24 @@ def get_permission_sets_from_config(client: SSOAdminClient, cfg: config.Config) 
 
 def get_permission_sets_from_config_with_cache(
     sso_client: SSOAdminClient,
-    dynamodb_client: DynamoDBClient,
+    s3_client: S3Client,
     cfg: config.Config,
 ) -> list[PermissionSet]:
-    """Get permission sets from config with cache fallback.
+    """Get permission sets from config with cache resilience.
 
-    This function attempts to get permission sets from cache first. If cache is
-    unavailable or expired, it falls back to the SSO Admin API and updates the cache.
+    This function calls both the SSO Admin API and S3 cache in parallel.
+    If the API call succeeds, it compares with cached data and updates if different.
+    If the API call fails, it falls back to cached data.
 
     Args:
         sso_client: SSO Admin client
-        dynamodb_client: DynamoDB client for cache
+        s3_client: S3 client for cache
         cfg: Application configuration
 
     Returns:
         List of permission sets based on config
     """
-    all_permission_sets = list_permission_sets_with_cache(sso_client, dynamodb_client, cfg.sso_instance_arn, cfg)
+    all_permission_sets = list_permission_sets_with_cache(sso_client, s3_client, cfg.sso_instance_arn, cfg)
 
     if "*" in cfg.permission_sets:
         return all_permission_sets
@@ -469,7 +471,7 @@ def get_account_assignment_information_with_cache(
     sso_client: SSOAdminClient,
     cfg: config.Config,
     org_client: OrganizationsClient,
-    dynamodb_client: DynamoDBClient,
+    s3_client: S3Client,
 ) -> list[AccountAssignment]:
     """Get account assignment information with cache fallback.
 
@@ -477,13 +479,13 @@ def get_account_assignment_information_with_cache(
         sso_client: SSO Admin client
         cfg: Application configuration
         org_client: Organizations client
-        dynamodb_client: DynamoDB client for cache
+        s3_client: S3 client for cache
 
     Returns:
         List of account assignments
     """
-    accounts = organizations.get_accounts_from_config_with_cache(org_client, dynamodb_client, cfg)
-    permission_sets = get_permission_sets_from_config_with_cache(sso_client, dynamodb_client, cfg)
+    accounts = organizations.get_accounts_from_config_with_cache(org_client, s3_client, cfg)
+    permission_sets = get_permission_sets_from_config_with_cache(sso_client, s3_client, cfg)
     return list_user_account_assignments(
         sso_client,
         cfg.sso_instance_arn,

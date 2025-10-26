@@ -2,101 +2,138 @@
 
 ## Overview
 
-This implementation adds caching for AWS accounts and permission sets using DynamoDB to improve resilience during AWS service outages. If the AWS Organizations API or SSO Admin API becomes unavailable, SSO Elevator will automatically fall back to cached data.
+This implementation adds caching for AWS accounts and permission sets using S3 to improve resilience during AWS service outages. The cache uses a parallel API/cache call strategy with automatic cache updates when data changes.
+
+## Caching Strategy
+
+### Parallel API and Cache Calls
+
+The implementation uses a resilient caching strategy:
+
+1. **Parallel Execution**: Both AWS API and S3 cache are called simultaneously using ThreadPoolExecutor
+2. **API Success Path**: 
+   - If API call succeeds, compare the result with cached data
+   - If data differs, update the cache automatically
+   - Return the fresh API data
+3. **API Failure Path**:
+   - If API call fails but cache has data, return cached data as fallback
+   - Log warning about using cached data
+4. **Both Fail Path**:
+   - If both API and cache fail, raise an exception
+
+### Benefits
+
+- **No TTL Management**: Cache is kept indefinitely and updated automatically when data changes
+- **Maximum Resilience**: Always tries API first, falls back to cache on failure
+- **Automatic Updates**: Cache stays fresh without manual intervention
+- **Parallel Performance**: API and cache calls don't block each other
 
 ## Implementation Details
 
 ### Infrastructure Changes
 
-1. **DynamoDB Table** (`dynamodb.tf`):
-   - Table name: Configurable via `cache_table_name` variable (default: `sso-elevator-cache`)
-   - Hash key: `cache_key` (type: String) - identifies the type of cached data (accounts or permission_sets)
-   - Range key: `item_id` (type: String) - identifies specific items (e.g., SSO instance ARN for permission sets)
-   - TTL enabled on `ttl` attribute for automatic expiration
-   - Billing mode: PAY_PER_REQUEST for cost efficiency
-   - **Compliance Features**:
-     - Point-in-time recovery enabled for backup compliance
-     - Deletion protection enabled to prevent accidental deletion
-     - Server-side encryption with AWS managed key by default (aws/dynamodb)
-     - Optional customer-managed KMS key support
-   - **Conditional Creation**: Table is only created when `cache_ttl_minutes > 0`
+1. **S3 Bucket** (`s3.tf`):
+   - Uses the same `fivexl/account-baseline/aws//modules/s3_baseline` module as the audit bucket
+   - Bucket name: Configurable via `config_bucket_name` variable (default: `sso-elevator-config`)
+   - Cache structure:
+     - `accounts.json` - stores all accounts
+     - `permission_sets/<arn_hash>.json` - stores permission sets per SSO instance
+   - No TTL metadata - cache is kept indefinitely
+   - **Security Features**:
+     - Server-side encryption enabled (AES256 by default, KMS optional via `config_bucket_kms_key_arn`)
+     - Public access blocked (via s3_baseline module)
+     - Versioning enabled
+     - Lifecycle policy to clean up old versions after 7 days
+   - **Note**: The bucket is always created (not conditional) as it's intended for future config storage even when caching is disabled
 
 2. **Variables** (`vars.tf`):
-   - `cache_table_name`: Name of the DynamoDB table (default: `sso-elevator-cache`)
-   - `cache_ttl_minutes`: TTL in minutes for cached data (default: 5760 = 4 days)
-     - Set to `0` to disable caching completely (no DynamoDB table will be created)
-   - `cache_kms_key_arn`: Optional ARN of a customer-managed KMS key for encryption (default: null)
-     - When null, uses AWS managed encryption key (aws/dynamodb)
-     - When provided, uses the specified customer-managed KMS key
+   - `config_bucket_name`: Name of the S3 bucket (default: `sso-elevator-config`)
+   - `cache_enabled`: Enable/disable caching (default: `true`)
+   - `config_bucket_kms_key_arn`: Optional ARN of a customer-managed KMS key for encryption (default: null)
    - Variables are passed to Lambda functions as environment variables
 
 3. **IAM Permissions**:
-   - DynamoDB permissions conditionally added to both Lambda functions (only when caching is enabled):
-     - `dynamodb:GetItem`
-     - `dynamodb:PutItem`
-     - `dynamodb:Query`
-     - `dynamodb:Scan`
+   - S3 permissions added to the requester Lambda function:
+     - `s3:GetObject`
+     - `s3:PutObject`
+     - `s3:ListBucket`
+   - Note: The revoker Lambda does NOT use cache and does not have these permissions
 
 4. **Outputs** (`outputs.tf`):
-   - `cache_dynamodb_table_name`: The name of the cache DynamoDB table (null if caching is disabled)
-   - `cache_dynamodb_table_arn`: The ARN of the cache DynamoDB table (null if caching is disabled)
+   - `config_s3_bucket_name`: The name of the config S3 bucket
+   - `config_s3_bucket_arn`: The ARN of the config S3 bucket
 
 ### Application Changes
 
-1. **New Cache Module** (`src/cache.py`):
-   - `CacheConfig`: Configuration class for cache settings
-   - `get_cached_accounts()`: Retrieve cached accounts from DynamoDB
-   - `set_cached_accounts()`: Store accounts in DynamoDB cache
+1. **Updated Cache Module** (`src/cache.py`):
+   - `CacheConfig`: Configuration class for cache settings (no TTL field)
+   - `get_cached_accounts()`: Retrieve cached accounts from S3
+   - `set_cached_accounts()`: Store accounts in S3 cache
    - `get_cached_permission_sets()`: Retrieve cached permission sets
    - `set_cached_permission_sets()`: Store permission sets in cache
-   - `with_cache_fallback()`: Generic function for cache-first, API-fallback pattern
+   - `with_cache_resilience()`: New function implementing parallel API/cache strategy with automatic updates
 
 2. **Updated Organizations Module** (`src/organizations.py`):
-   - `list_accounts_with_cache()`: Lists accounts with cache fallback
-   - `get_accounts_from_config_with_cache()`: Gets filtered accounts with cache fallback
-   - Fallback behavior:
-     1. Try to get accounts from cache
-     2. If cache miss or expired, call Organizations API
-     3. Update cache with fresh data from API
-     4. Return accounts to caller
+   - `list_accounts_with_cache()`: Lists accounts with cache resilience
+   - `get_accounts_from_config_with_cache()`: Gets filtered accounts with cache resilience
+   - Uses parallel API/cache calls with automatic cache updates
 
 3. **Updated SSO Module** (`src/sso.py`):
-   - `list_permission_sets_with_cache()`: Lists permission sets with cache fallback
-   - `get_permission_sets_from_config_with_cache()`: Gets filtered permission sets with cache
+   - `list_permission_sets_with_cache()`: Lists permission sets with cache resilience
+   - `get_permission_sets_from_config_with_cache()`: Gets filtered permission sets with cache resilience
    - `get_account_assignment_information_with_cache()`: Combined function for both cached data
-   - Same fallback behavior as organizations module
+   - Uses parallel API/cache calls with automatic cache updates
 
 4. **Updated Config** (`src/config.py`):
-   - Added `cache_table_name` field (default: `sso-elevator-cache`)
-   - Added `cache_ttl_minutes` field (default: 5760 = 4 days)
+   - `config_bucket_name`: S3 bucket name (default: `sso-elevator-config`)
+   - `cache_enabled`: Boolean flag to enable/disable caching (default: `True`)
+   - Removed `cache_ttl_minutes` field
 
 5. **Updated Lambda Handlers**:
-   - `src/main.py`: Updated to use cached functions and pass DynamoDB client
-   - `src/revoker.py`: Updated to use cached functions for account assignments
+   - `src/main.py`: Updated to use S3 cache for accounts and permission sets
+   - `src/revoker.py`: Does NOT use cache - always fetches fresh data from AWS APIs for accuracy
 
 ## Cache Behavior
 
 ### Cache Key Structure
 
-The cache uses a two-level key structure:
+The cache uses S3 object keys:
 
 1. **Accounts Cache**:
-   - `cache_key`: `"accounts"`
-   - `item_id`: `"all"`
-   - Stores all accounts in a single item
+   - Key: `accounts.json`
+   - Stores all accounts in a single JSON file
 
 2. **Permission Sets Cache**:
-   - `cache_key`: `"permission_sets"`
-   - `item_id`: SSO instance ARN
+   - Key: `permission_sets/<arn_hash>.json`
    - Stores all permission sets for a specific SSO instance
+   - ARN is hashed (colons and slashes replaced with underscores) for safe file naming
 
 ### Cache Lifecycle
 
-1. **First Request**: Cache miss → API call → Cache update → Return data
-2. **Subsequent Requests**: Cache hit (if within TTL) → Return cached data
-3. **After TTL Expiry**: Cache expired → API call → Cache update → Return data
-4. **API Unavailable**: Use cached data even if expired (resilience feature)
-5. **Cache Unavailable**: Fall back to direct API calls
+1. **First Request**: 
+   - API and cache called in parallel
+   - Cache miss (no data)
+   - API succeeds → Store in cache → Return API data
+
+2. **Subsequent Requests (Data Unchanged)**:
+   - API and cache called in parallel
+   - Both succeed
+   - Data matches → No cache update → Return API data
+
+3. **Subsequent Requests (Data Changed)**:
+   - API and cache called in parallel
+   - Both succeed
+   - Data differs → Update cache → Return API data
+
+4. **API Unavailable**:
+   - API and cache called in parallel
+   - API fails, cache succeeds
+   - Return cached data (logged as fallback)
+
+5. **Cache Unavailable**:
+   - API and cache called in parallel
+   - Cache fails, API succeeds
+   - Store in cache → Return API data
 
 ### Error Handling
 
@@ -104,24 +141,25 @@ The cache uses a two-level key structure:
 
 - All cache operations are wrapped in try-except blocks
 - **Cache failures NEVER prevent the application from functioning**
-- Warnings are logged when cache operations fail (look for `"Failed to get cached accounts"` or `"Failed to cache accounts"`)
-- DynamoDB unavailability automatically triggers fallback to direct AWS API calls
+- Warnings are logged when cache operations fail
+- S3 unavailability automatically triggers fallback to direct AWS API calls
 - Application works normally if:
-  - DynamoDB table doesn't exist
-  - Table name is misconfigured
+  - S3 bucket doesn't exist
+  - Bucket name is misconfigured
   - IAM permissions are missing
-  - DynamoDB service is down
+  - S3 service is down
   
 **Behavior on errors:**
-- **Read errors**: Log warning, return `None`, fall back to API
-- **Write errors**: Log warning, continue without caching
-- **User experience**: Unaffected (just slightly slower without cache)
+- **Cache read errors**: Log warning, continue with API data only
+- **Cache write errors**: Log warning, return API data without caching
+- **API errors with cache available**: Log warning, return cached data
+- **Both fail**: Raise exception (application cannot function)
 
 ## Configuration
 
 ### Default Configuration
 
-Caching is **enabled by default** with a 4-day TTL:
+Caching is **enabled by default**:
 
 ```hcl
 module "aws_sso_elevator" {
@@ -130,15 +168,15 @@ module "aws_sso_elevator" {
   # Other configuration...
   
   # These are the defaults (no need to specify):
-  # cache_ttl_minutes = 5760  # 4 days
-  # cache_table_name  = "sso-elevator-cache"
-  # cache_kms_key_arn = null  # Uses AWS managed key
+  # cache_enabled          = true
+  # config_bucket_name     = "sso-elevator-config"
+  # config_bucket_kms_key_arn = null  # Uses AES256 encryption
 }
 ```
 
 ### Disabling Cache
 
-To disable caching entirely (no DynamoDB table will be created), set `cache_ttl_minutes = 0`:
+To disable caching (S3 bucket will still be created for future config storage):
 
 ```hcl
 module "aws_sso_elevator" {
@@ -146,27 +184,13 @@ module "aws_sso_elevator" {
   
   # Other configuration...
   
-  cache_ttl_minutes = 0  # Disable caching completely
+  cache_enabled = false  # Disable caching (bucket still created for future use)
 }
 ```
 
-### Adjusting TTL
+### Custom Bucket Name
 
-To adjust cache duration (e.g., 2 hours):
-
-```hcl
-module "aws_sso_elevator" {
-  source = "path/to/module"
-  
-  # Other configuration...
-  
-  cache_ttl_minutes = 120  # 2 hours
-}
-```
-
-### Custom Table Name
-
-To use a custom DynamoDB table name:
+To use a custom S3 bucket name:
 
 ```hcl
 module "aws_sso_elevator" {
@@ -174,13 +198,13 @@ module "aws_sso_elevator" {
   
   # Other configuration...
   
-  cache_table_name = "my-custom-sso-elevator-cache"
+  config_bucket_name = "my-custom-sso-elevator-config"
 }
 ```
 
 ### Custom KMS Key for Encryption
 
-To use a customer-managed KMS key instead of the AWS managed key:
+To use a customer-managed KMS key instead of AES256:
 
 ```hcl
 module "aws_sso_elevator" {
@@ -188,7 +212,7 @@ module "aws_sso_elevator" {
   
   # Other configuration...
   
-  cache_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+  config_bucket_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
 }
 ```
 
@@ -198,148 +222,106 @@ module "aws_sso_elevator" {
 
 Cache operations are logged with the following patterns:
 
-- `"Cache hit for accounts"`: Accounts retrieved from cache
+- `"Retrieved X accounts from cache"`: Accounts retrieved from cache
 - `"Cache miss for accounts"`: No cached accounts found
-- `"Cache expired for accounts"`: Cached data past TTL
-- `"Cache hit for permission sets"`: Permission sets retrieved from cache
-- `"Cache miss for permission sets"`: No cached permission sets found
+- `"Successfully fetched accounts from API"`: API call succeeded
+- `"API call failed for accounts"`: API call failed
+- `"API data differs from cache"`: Cache will be updated
+- `"API data matches cache"`: No cache update needed
+- `"API failed for accounts, using cached data as fallback"`: Using cache due to API failure
 - `"Failed to get cached accounts"`: Error reading from cache
 - `"Failed to cache accounts"`: Error writing to cache
-- `"Fetching accounts from API"`: Falling back to Organizations API
-- `"Using cached accounts"`: Successfully using cached data
 
-### DynamoDB Metrics
+### S3 Metrics
 
-Monitor these CloudWatch metrics for the cache table:
+Monitor these CloudWatch metrics for the cache bucket:
 
-- `ConsumedReadCapacityUnits`: Cache read activity
-- `ConsumedWriteCapacityUnits`: Cache write activity
-- `UserErrors`: Failed operations (permissions issues)
+- `NumberOfObjects`: Number of cached items
+- `BucketSizeBytes`: Total cache size
+- `AllRequests`: Cache read/write activity
 
 ## Security Considerations
 
 1. **Data Sensitivity**: Cache contains account IDs, names, and permission set information
 2. **Encryption**: 
-   - Server-side encryption is **enabled by default** using AWS managed key (aws/dynamodb)
+   - Server-side encryption is **enabled by default** using AES256
    - Optional customer-managed KMS key support via `cache_kms_key_arn` variable
    - Encryption at rest is always active
 3. **Access Control**: IAM permissions limit cache access to Lambda functions only
-4. **Backup & Recovery**: Point-in-time recovery is enabled for backup compliance
-5. **Deletion Protection**: Table has deletion protection enabled to prevent accidental deletion
-6. **TTL**: 4-day default TTL reduces stale data risk while improving resilience
+4. **Public Access**: All public access is blocked by default
+5. **Versioning**: Enabled to protect against accidental overwrites
+6. **No Expiration**: Cache is kept indefinitely and updated automatically when data changes
 
 ## Performance Impact
 
-- **Cache Hit**: ~10-50ms (DynamoDB read latency)
-- **Cache Miss + API Call**: Same as before + cache write overhead (~5-10ms)
-- **Cost**: DynamoDB charges apply (~$0.25 per million read/write requests)
+- **Parallel Calls**: API and cache calls execute simultaneously (~50-100ms for cache)
+- **Cache Hit + API Success**: Same latency as API-only (cache runs in parallel)
+- **API Failure with Cache**: ~50-100ms (S3 GetObject latency)
+- **Cost**: S3 charges apply (~$0.005 per 1,000 GET requests, ~$0.005 per 1,000 PUT requests)
 
 ## Backward Compatibility
 
-- Existing deployments will automatically get caching enabled with default settings (4-day TTL)
-- Original non-cached functions remain available in the codebase
-- No breaking changes to module interface
-- Cache can be completely disabled by setting `cache_ttl_minutes = 0` (no DynamoDB table will be created)
-- If you upgrade from a previous version with caching, note the TTL default has changed from 60 minutes to 5760 minutes (4 days)
+- Existing deployments will need to update their Terraform configuration
+- The variable `cache_ttl_minutes` has been removed and replaced with `cache_enabled`
+- Cache behavior has changed from TTL-based to automatic update-based
+- No data migration is needed as the cache will refresh automatically
+
+## Migration from TTL-Based Cache
+
+If you're migrating from the TTL-based cache:
+
+1. Update your Terraform configuration to remove `cache_ttl_minutes` and use `cache_enabled` instead
+2. Apply the Terraform changes
+3. The cache will continue to work with the new strategy
+4. No manual intervention needed
 
 ## Testing Recommendations
 
 ### Integration Testing
 
-1. **Test Cache Hit**: Submit access request → Wait < TTL → Submit another request
-2. **Test Cache Miss**: Submit access request → Wait > TTL → Submit another request
-3. **Test API Fallback**: Disable DynamoDB table → Verify requests still work (application should log warnings but continue functioning)
-4. **Test Cache Disabled**: Set `cache_ttl_minutes = 0` → Verify normal operation (no DynamoDB calls should be made)
-5. **Test Wrong Table Name**: Temporarily set wrong `cache_table_name` → Verify application logs warnings but continues working
-6. **Test Missing Permissions**: Temporarily remove DynamoDB IAM permissions → Verify graceful fallback to API
-
-### Unit Testing
-
-Comprehensive unit tests are provided in `src/tests/test_cache.py` covering:
-
-- **Cache Configuration**:
-  - Cache enabled/disabled scenarios
-  - Configuration validation
-
-- **Get Operations (Accounts & Permission Sets)**:
-  - Cache disabled (returns None without calling DynamoDB)
-  - Cache miss (no items found)
-  - Cache hit (valid data returned)
-  - Cache expired (returns None)
-  - Table doesn't exist (graceful fallback)
-  - Wrong table name (graceful fallback)
-  - Access denied / missing IAM permissions (graceful fallback)
-  - Generic exceptions (graceful fallback)
-  - Malformed data handling
-
-- **Set Operations (Accounts & Permission Sets)**:
-  - Cache disabled (no write operations)
-  - Successful writes
-  - Table doesn't exist during write (graceful failure)
-  - Access denied during write (graceful failure)
-  - Generic exceptions during write (graceful failure)
-
-- **Cache Fallback Pattern**:
-  - Cache hit returns cached data without API call
-  - Cache miss calls API and updates cache
-  - Cache errors fall back to API
-  - Cache setter errors don't affect result
-  - API errors propagate correctly
-
-**Running tests:**
-```bash
-cd src
-pytest tests/test_cache.py -v
-```
-
-**Test coverage:**
-- All error scenarios documented in this document
-- Fail-safe behavior verification
-- No exceptions escape to users
+1. **Test Normal Operation**: Submit access request → Verify both API and cache are called
+2. **Test Cache Update**: Change AWS data → Submit request → Verify cache is updated
+3. **Test API Fallback**: Temporarily block API access → Verify cached data is used
+4. **Test Cache Disabled**: Set `cache_enabled = false` → Verify normal operation (no S3 calls)
+5. **Test Missing Permissions**: Temporarily remove S3 IAM permissions → Verify graceful fallback to API
 
 ## Troubleshooting
 
 ### "Failed to get cached accounts" warnings
 
-**Important:** These warnings do not break functionality. The application will continue to work by calling AWS APIs directly.
+**Important:** These warnings do not break functionality. The application will continue to work using API data.
 
 Common causes:
-- DynamoDB table doesn't exist (check if `cache_ttl_minutes` is set correctly in Terraform)
-- Wrong table name (verify `cache_table_name` matches between Terraform and Lambda environment variables)
-- Lambda IAM permissions missing DynamoDB read access
-- DynamoDB table not accessible from Lambda
+- S3 bucket doesn't exist (check Terraform deployment)
+- Wrong bucket name (verify `config_bucket_name` matches between Terraform and Lambda environment variables)
+- Lambda IAM permissions missing S3 read access
 
 **How to diagnose:**
 1. Check CloudWatch Logs for the full error message
-2. Verify the table exists: `aws dynamodb describe-table --table-name sso-elevator-cache`
-3. Confirm table name environment variable: Check Lambda configuration `CACHE_TABLE_NAME`
-4. Verify IAM permissions include `dynamodb:GetItem`, `dynamodb:Query`
+2. Verify the bucket exists: `aws s3 ls s3://sso-elevator-config-<random-suffix>`
+3. Confirm bucket name environment variable: Check Lambda configuration `CONFIG_BUCKET_NAME`
+4. Verify IAM permissions include `s3:GetObject`, `s3:ListBucket`
 
 ### "Failed to cache accounts" warnings
 
-**Important:** These warnings do not break functionality. The application will continue to work, but won't benefit from caching.
+**Important:** These warnings do not break functionality. The application will continue to work with API data.
 
 Common causes:
-- DynamoDB table doesn't exist
-- Wrong table name configuration
-- Lambda IAM permissions missing DynamoDB write access
-- Table has capacity issues (rare with PAY_PER_REQUEST)
+- S3 bucket doesn't exist
+- Wrong bucket name configuration
+- Lambda IAM permissions missing S3 write access
 
 **How to diagnose:**
 1. Check CloudWatch Logs for detailed error messages
-2. Verify IAM permissions include `dynamodb:PutItem`
+2. Verify IAM permissions include `s3:PutObject`
 
-### Stale data in cache
+### "API failed, using cached data as fallback"
 
-- Reduce `cache_ttl_minutes` value
-- Manually clear cache by deleting items from DynamoDB table
-- Disable and re-enable caching to force refresh
+This is expected behavior when AWS APIs are unavailable. The application is working correctly by using cached data.
 
-## Migration from Non-Cached Version
+### Cache not updating
 
-No special migration steps required. Simply:
-
-1. Apply Terraform changes
-2. Module will create DynamoDB table
-3. Cache will populate on next access request
-4. Monitor CloudWatch Logs for cache activity
+If you notice the cache isn't updating when AWS data changes:
+1. Check CloudWatch Logs for cache write errors
+2. Verify S3 permissions include `s3:PutObject`
+3. Check if data comparison is working correctly (logs will show "API data differs from cache")

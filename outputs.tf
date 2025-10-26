@@ -13,12 +13,12 @@ output "lambda_function_url" {
   value       = var.create_lambda_url ? module.access_requester_slack_handler.lambda_function_url : null
 }
 
-output "cache_dynamodb_table_name" {
-  description = "The name of the DynamoDB table for caching AWS accounts and permission sets."
-  value       = var.cache_ttl_minutes > 0 ? aws_dynamodb_table.sso_elevator_cache[0].name : null
+output "config_s3_bucket_name" {
+  description = "The name of the S3 bucket for storing configuration and cache data."
+  value       = module.config_bucket.s3_bucket_id
 }
 
-output "cache_dynamodb_table_arn" {
-  description = "The ARN of the DynamoDB table for caching AWS accounts and permission sets."
-  value       = var.cache_ttl_minutes > 0 ? aws_dynamodb_table.sso_elevator_cache[0].arn : null
+output "config_s3_bucket_arn" {
+  description = "The ARN of the S3 bucket for storing configuration and cache data."
+  value       = module.config_bucket.s3_bucket_arn
 }

@@ -352,20 +352,20 @@ variable "lambda_memory_size" {
   default     = 256
 }
 
-variable "cache_table_name" {
-  description = "Name of the DynamoDB table for caching AWS accounts and permission sets"
+variable "config_bucket_name" {
+  description = "Name of the S3 bucket for storing configuration and cache data (accounts, permission sets, and future config files)"
   type        = string
-  default     = "sso-elevator-cache"
+  default     = "sso-elevator-config"
 }
 
-variable "cache_ttl_minutes" {
-  description = "TTL in minutes for cached AWS accounts and permission sets. If set to 0, caching is disabled and DynamoDB table will not be created."
-  type        = number
-  default     = 5760
+variable "cache_enabled" {
+  description = "Enable caching of AWS accounts and permission sets in S3. If set to false, caching is disabled but the S3 bucket will still be created for future config storage."
+  type        = bool
+  default     = true
 }
 
-variable "cache_kms_key_arn" {
-  description = "ARN of the KMS key to use for DynamoDB table encryption. If not provided, uses AWS managed DynamoDB encryption key (aws/dynamodb)."
+variable "config_bucket_kms_key_arn" {
+  description = "ARN of the KMS key to use for config S3 bucket encryption. If not provided, uses AES256 encryption."
   type        = string
   default     = null
 }

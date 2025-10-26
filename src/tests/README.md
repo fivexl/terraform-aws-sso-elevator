@@ -70,9 +70,9 @@ This will generate an HTML coverage report in `htmlcov/index.html`.
 
 The cache tests specifically verify:
 
-✅ **Cache disabled** - No DynamoDB calls when `cache_ttl_minutes = 0`  
-✅ **Table doesn't exist** - Graceful fallback to API  
-✅ **Wrong table name** - Graceful fallback to API  
+✅ **Cache disabled** - No S3 calls when `cache_enabled = false`  
+✅ **Bucket doesn't exist** - Graceful fallback to API  
+✅ **Wrong bucket name** - Graceful fallback to API  
 ✅ **Missing IAM permissions** - Graceful fallback to API  
 ✅ **Cache hit** - Returns cached data without API call  
 ✅ **Cache miss** - Calls API and updates cache  
