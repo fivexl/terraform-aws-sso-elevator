@@ -44,6 +44,11 @@ trigger_view_map = {}
 # But shortcut 'request_for_access' handled by two functions. The first one opens the view and the second one updates it.
 # So we need to store the view_id somewhere. Since the trigger_id is unique for each request,
 # and available in both functions, we can use it as a key. The value is the view_id.
+#
+# NOTE: This in-memory map has limitations in AWS Lambda:
+# - Lambda containers can be recycled between invocations, causing the map to be empty
+# - For production use, consider using DynamoDB or ElastiCache to persist the mapping
+# - Current implementation has a fallback that opens a new view if the mapping is lost
 
 
 def build_initial_form_handler(
@@ -102,8 +107,19 @@ def load_select_options_for_group_access_request(client: WebClient, body: dict) 
     groups = sso.get_groups_from_config(sso_instance.identity_store_id, identity_store_client, cfg)
     trigger_id = body["trigger_id"]
 
+    view_id = trigger_view_map.get(trigger_id)
+    if not view_id:
+        logger.warning(
+            f"View ID not found for trigger_id: {trigger_id}. "
+            "This happens when Lambda container is recycled between shortcut invocations. "
+            "Opening a new view as fallback."
+        )
+        # Fallback: open a new view with the data already loaded
+        view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
+        return client.views_open(trigger_id=trigger_id, view=view)
+
     view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
-    return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
+    return client.views_update(view_id=view_id, view=view)
 
 
 def load_select_options_for_account_access_request(client: WebClient, body: dict) -> SlackResponse:
@@ -114,8 +130,21 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
     permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
     trigger_id = body["trigger_id"]
 
+    view_id = trigger_view_map.get(trigger_id)
+    if not view_id:
+        logger.warning(
+            f"View ID not found for trigger_id: {trigger_id}. "
+            "This happens when Lambda container is recycled between shortcut invocations. "
+            "Opening a new view as fallback."
+        )
+        # Fallback: open a new view with the data already loaded
+        view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(
+            accounts=accounts, permission_sets=permission_sets
+        )
+        return client.views_open(trigger_id=trigger_id, view=view)
+
     view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
-    return client.views_update(view_id=trigger_view_map[trigger_id], view=view)
+    return client.views_update(view_id=view_id, view=view)
 
 
 app.shortcut("request_for_access")(
