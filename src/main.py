@@ -235,7 +235,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         approver_email=approver.email,
         requester_email=requester.email,
     )
-    logger.info("Decision on request was made", extra={"decision": decision})
+    logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
     if not decision.permit:
         cache_for_dublicate_requests.clear()
@@ -314,7 +314,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         permission_set_name=request.permission_set_name,
         requester_email=requester.email,
     )
-    logger.info("Decision on request was made", extra={"decision": decision})
+    logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
     account = organizations.describe_account(org_client, request.account_id)
 

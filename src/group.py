@@ -213,7 +213,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         requester_email=requester.email,
     )
 
-    logger.info("Decision on request was made", extra={"decision": decision})
+    logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
     if not decision.permit:
         cache_for_dublicate_requests.clear()
