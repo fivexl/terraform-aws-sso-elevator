@@ -15,6 +15,10 @@ locals {
   s3_bucket_name                 = var.s3_name_of_the_existing_bucket != "" ? var.s3_name_of_the_existing_bucket : local.s3_bucket_name_for_audit_entry
   s3_bucket_arn                  = "arn:aws:s3:::${local.s3_bucket_name}"
 
+  # In case of default value for var.config_bucket_name, we append a random string to the bucket name to make it unique.
+  # In case of non-default value for var.config_bucket_name, we use the value as is and expect the name is unique.
+  config_bucket_name = var.config_bucket_name != "sso-elevator-config" ? var.config_bucket_name : "sso-elevator-config-${random_string.random.result}"
+
   # HTTP API configuration
   api_resource_path = "/access-requester"
   api_stage_name    = "default"

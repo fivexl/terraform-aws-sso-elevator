@@ -71,8 +71,8 @@ module "access_revoker" {
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
     SECONDARY_FALLBACK_EMAIL_DOMAINS           = jsonencode(var.secondary_fallback_email_domains)
     SEND_DM_IF_USER_NOT_IN_CHANNEL             = var.send_dm_if_user_not_in_channel
-    CACHE_TABLE_NAME                           = var.cache_table_name
-    CACHE_TTL_MINUTES                          = var.cache_ttl_minutes
+    CONFIG_BUCKET_NAME                         = local.config_bucket_name
+    CACHE_ENABLED                              = var.cache_enabled
   }
 
   allowed_triggers = {
@@ -173,19 +173,18 @@ data "aws_iam_policy_document" "revoker" {
     ]
     resources = ["*"]
   }
-  dynamic "statement" {
-    for_each = var.cache_ttl_minutes > 0 ? [1] : []
-    content {
-      sid    = "AllowDynamoDBCache"
-      effect = "Allow"
-      actions = [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:Query",
-        "dynamodb:Scan",
-      ]
-      resources = [aws_dynamodb_table.sso_elevator_cache[0].arn]
-    }
+  statement {
+    sid    = "AllowS3Config"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListBucket",
+    ]
+    resources = [
+      module.config_bucket.s3_bucket_arn,
+      "${module.config_bucket.s3_bucket_arn}/*"
+    ]
   }
 }
 

@@ -15,3 +15,47 @@ module "audit_bucket" {
   object_lock_configuration = var.s3_object_lock ? var.s3_object_lock_configuration : null
   logging                   = var.s3_logging
 }
+
+module "config_bucket" {
+  source  = "fivexl/account-baseline/aws//modules/s3_baseline"
+  version = "1.5.0"
+
+  bucket_name = local.config_bucket_name
+
+  versioning = {
+    enabled    = true
+    mfa_delete = false
+  }
+
+  object_lock_enabled = false
+
+  server_side_encryption_configuration = var.config_bucket_kms_key_arn != null ? {
+    rule = {
+      apply_server_side_encryption_by_default = {
+        sse_algorithm     = "aws:kms"
+        kms_master_key_id = var.config_bucket_kms_key_arn
+      }
+    }
+    } : {
+    rule = {
+      apply_server_side_encryption_by_default = {
+        sse_algorithm = "AES256"
+      }
+    }
+  }
+
+  lifecycle_rule = [
+    {
+      id      = "expire-old-versions"
+      enabled = true
+
+      noncurrent_version_expiration = {
+        noncurrent_days = 7
+      }
+    }
+  ]
+
+  logging = {}
+
+  tags = var.tags
+}

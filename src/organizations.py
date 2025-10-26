@@ -1,5 +1,5 @@
-from mypy_boto3_dynamodb import DynamoDBClient
 from mypy_boto3_organizations import OrganizationsClient, type_defs
+from mypy_boto3_s3 import S3Client
 
 import cache as cache_module
 import config
@@ -22,17 +22,18 @@ def list_accounts(client: OrganizationsClient) -> list[Account]:
 
 def list_accounts_with_cache(
     org_client: OrganizationsClient,
-    dynamodb_client: DynamoDBClient,
+    s3_client: S3Client,
     cfg: config.Config,
 ) -> list[Account]:
-    """List all accounts with cache fallback.
+    """List all accounts with cache resilience.
 
-    This function attempts to get accounts from cache first. If cache is unavailable
-    or expired, it falls back to the Organizations API and updates the cache.
+    This function calls both the Organizations API and S3 cache in parallel.
+    If the API call succeeds, it compares with cached data and updates if different.
+    If the API call fails, it falls back to cached data.
 
     Args:
         org_client: Organizations client
-        dynamodb_client: DynamoDB client for cache
+        s3_client: S3 client for cache
         cfg: Application configuration
 
     Returns:
@@ -40,10 +41,10 @@ def list_accounts_with_cache(
     """
     cache_config = cache_module.CacheConfig.from_config(cfg)
 
-    return cache_module.with_cache_fallback(
-        cache_getter=lambda: cache_module.get_cached_accounts(dynamodb_client, cache_config),
+    return cache_module.with_cache_resilience(
+        cache_getter=lambda: cache_module.get_cached_accounts(s3_client, cache_config),
         api_getter=lambda: list_accounts(org_client),
-        cache_setter=lambda accounts: cache_module.set_cached_accounts(dynamodb_client, cache_config, accounts),
+        cache_setter=lambda accounts: cache_module.set_cached_accounts(s3_client, cache_config, accounts),
         resource_name="accounts",
     )
 
@@ -63,23 +64,24 @@ def get_accounts_from_config(client: OrganizationsClient, cfg: config.Config) ->
 
 def get_accounts_from_config_with_cache(
     org_client: OrganizationsClient,
-    dynamodb_client: DynamoDBClient,
+    s3_client: S3Client,
     cfg: config.Config,
 ) -> list[Account]:
-    """Get accounts from config with cache fallback.
+    """Get accounts from config with cache resilience.
 
-    This function attempts to get accounts from cache first. If cache is unavailable
-    or expired, it falls back to the Organizations API and updates the cache.
+    This function calls both the Organizations API and S3 cache in parallel.
+    If the API call succeeds, it compares with cached data and updates if different.
+    If the API call fails, it falls back to cached data.
 
     Args:
         org_client: Organizations client
-        dynamodb_client: DynamoDB client for cache
+        s3_client: S3 client for cache
         cfg: Application configuration
 
     Returns:
         List of accounts based on config
     """
-    all_accounts = list_accounts_with_cache(org_client, dynamodb_client, cfg)
+    all_accounts = list_accounts_with_cache(org_client, s3_client, cfg)
 
     if "*" in cfg.accounts:
         return all_accounts
