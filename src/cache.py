@@ -192,6 +192,7 @@ def set_cached_accounts(
             Key=CacheKey.ACCOUNTS,
             Body=sanitized_data.encode("utf-8"),
             ContentType="application/json",
+            ServerSideEncryption="AES256",
         )
 
         logger.info(f"Cached {len(accounts)} accounts")
@@ -280,6 +281,7 @@ def set_cached_permission_sets(
             Key=key,
             Body=sanitized_data.encode("utf-8"),
             ContentType="application/json",
+            ServerSideEncryption="AES256",
         )
 
         logger.info(f"Cached {len(permission_sets)} permission sets")
