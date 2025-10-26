@@ -590,7 +590,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.2.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.0.267" },
-    { name = "slack-bolt", marker = "extra == 'dev'", specifier = ">=1.17.0" },
+    { name = "slack-bolt", marker = "extra == 'dev'", specifier = ">=1.26.0" },
 ]
 provides-extras = ["dev"]
 

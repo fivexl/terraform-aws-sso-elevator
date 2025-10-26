@@ -50,7 +50,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", extras = ["parser"], specifier = ">=2.14.1" },
-    { name = "slack-bolt", specifier = ">=1.18.0" },
+    { name = "slack-bolt", specifier = ">=1.26.0" },
 ]
 
 [[package]]

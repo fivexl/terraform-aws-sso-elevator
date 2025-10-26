@@ -19,7 +19,7 @@ dev = [
     "black>=24.3.0",
     "aws-lambda-powertools[parser]>=2.14.1",
     "boto3>=1.26.97",
-    "slack-bolt>=1.17.0",
+    "slack-bolt>=1.26.0",
     "hypothesis[ghostwriter]>=6.71.0",
     "ruff>=0.0.267",
 ]

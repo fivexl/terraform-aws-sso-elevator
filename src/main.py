@@ -29,7 +29,8 @@ s3_client = session.client("s3")
 cfg = config.get_config()
 app = App(
     process_before_response=True,
-    logger=config.get_logger(service="slack", level=cfg.slack_app_log_level),  # type: ignore # noqa: PGH003
+    # Logger removed to avoid pickle errors with lazy listeners in Lambda
+    # Slack Bolt will use its own default logger instead
 )
 
 
