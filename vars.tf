@@ -22,7 +22,7 @@ variable "ecr_repo_name" {
 variable "ecr_repo_tag" {
   description = "The tag of the image in the ECR repository."
   type        = string
-  default     = "3.0.3"
+  default     = "3.1.0"
 }
 
 variable "use_pre_created_image" {
