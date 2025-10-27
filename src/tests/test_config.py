@@ -1,6 +1,8 @@
 import json
 import os
+from unittest.mock import MagicMock
 
+import pytest
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
@@ -188,3 +190,131 @@ def test_config_init(dict_config: dict):
 
 
 # TTL validation tests removed - cache no longer uses TTL
+
+
+def test_load_approval_config_from_s3_success(mock_s3_client, mock_s3_approval_config):
+    """Test successful S3 retrieval and JSON parsing."""
+    result = config.load_approval_config_from_s3(mock_s3_client, "test-bucket", "config/approval-config.json")
+
+    assert result == mock_s3_approval_config
+    mock_s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="config/approval-config.json")
+
+
+def test_load_approval_config_from_s3_no_such_key(mock_s3_client):
+    """Test S3 NoSuchKey error handling."""
+    mock_s3_client.get_object.side_effect = mock_s3_client.exceptions.NoSuchKey("Key not found")
+
+    with pytest.raises(mock_s3_client.exceptions.NoSuchKey):
+        config.load_approval_config_from_s3(mock_s3_client, "test-bucket", "config/missing.json")
+
+
+def test_load_approval_config_from_s3_no_such_bucket(mock_s3_client):
+    """Test S3 NoSuchBucket error handling."""
+    mock_s3_client.get_object.side_effect = mock_s3_client.exceptions.NoSuchBucket("Bucket not found")
+
+    with pytest.raises(mock_s3_client.exceptions.NoSuchBucket):
+        config.load_approval_config_from_s3(mock_s3_client, "missing-bucket", "config/approval-config.json")
+
+
+def test_load_approval_config_from_s3_invalid_json(mock_s3_client):
+    """Test invalid JSON error handling."""
+    mock_response = {"Body": MagicMock(read=lambda: b"invalid json {{")}
+    mock_s3_client.get_object.return_value = mock_response
+
+    with pytest.raises(json.JSONDecodeError):
+        config.load_approval_config_from_s3(mock_s3_client, "test-bucket", "config/approval-config.json")
+
+
+def test_load_approval_config_from_s3_missing_keys(mock_s3_client):
+    """Test missing keys in JSON structure - should default to empty lists."""
+    incomplete_config = {"statements": []}
+    mock_response = {"Body": MagicMock(read=lambda: json.dumps(incomplete_config).encode("utf-8"))}
+    mock_s3_client.get_object.return_value = mock_response
+
+    result = config.load_approval_config_from_s3(mock_s3_client, "test-bucket", "config/approval-config.json")
+
+    assert result["statements"] == []
+    assert result["group_statements"] == []
+
+
+def test_config_with_s3_loaded_configuration(mock_s3_client, monkeypatch):
+    """Test Config class initialization with S3-loaded configuration."""
+    import boto3
+
+    monkeypatch.setattr(boto3, "client", lambda service: mock_s3_client if service == "s3" else MagicMock())
+
+    config_dict = valid_config_dict(
+        secondary_fallback_email_domains_as_json=False,
+        permission_duration_list_override_as_json=False,
+    )
+    config_dict["config_s3_key"] = "config/approval-config.json"
+    config_dict["config_bucket_name"] = "test-bucket"
+    # Remove statements and group_statements as they should come from S3
+    del config_dict["statements"]
+    del config_dict["group_statements"]
+
+    cfg = config.Config(**config_dict)
+
+    assert len(cfg.statements) > 0
+    assert len(cfg.group_statements) > 0
+    mock_s3_client.get_object.assert_called_once()
+
+
+def test_config_statement_parsing_with_s3(mock_s3_client, monkeypatch):
+    """Verify statement parsing still works correctly with S3-loaded data."""
+    import boto3
+
+    s3_config = {
+        "statements": [VALID_STATEMENT_DICT],
+        "group_statements": [VALID_GROUP_STATEMENT_DICT],
+    }
+    mock_response = {"Body": MagicMock(read=lambda: json.dumps(s3_config).encode("utf-8"))}
+    mock_s3_client.get_object.return_value = mock_response
+
+    monkeypatch.setattr(boto3, "client", lambda service: mock_s3_client if service == "s3" else MagicMock())
+
+    config_dict = valid_config_dict(
+        secondary_fallback_email_domains_as_json=False,
+        permission_duration_list_override_as_json=False,
+    )
+    config_dict["config_s3_key"] = "config/approval-config.json"
+    del config_dict["statements"]
+    del config_dict["group_statements"]
+
+    cfg = config.Config(**config_dict)
+
+    # Verify statements were parsed correctly
+    assert len(cfg.statements) == 1
+    statement = list(cfg.statements)[0]
+    assert "AdministratorAccess" in statement.permission_set
+    assert "111111111111" in statement.resource
+
+
+def test_config_group_statement_parsing_with_s3(mock_s3_client, monkeypatch):
+    """Verify group_statement parsing still works correctly with S3-loaded data."""
+    import boto3
+
+    s3_config = {
+        "statements": [VALID_STATEMENT_DICT],
+        "group_statements": [VALID_GROUP_STATEMENT_DICT],
+    }
+    mock_response = {"Body": MagicMock(read=lambda: json.dumps(s3_config).encode("utf-8"))}
+    mock_s3_client.get_object.return_value = mock_response
+
+    monkeypatch.setattr(boto3, "client", lambda service: mock_s3_client if service == "s3" else MagicMock())
+
+    config_dict = valid_config_dict(
+        secondary_fallback_email_domains_as_json=False,
+        permission_duration_list_override_as_json=False,
+    )
+    config_dict["config_s3_key"] = "config/approval-config.json"
+    del config_dict["statements"]
+    del config_dict["group_statements"]
+
+    cfg = config.Config(**config_dict)
+
+    # Verify group_statements were parsed correctly
+    assert len(cfg.group_statements) == 1
+    group_statement = list(cfg.group_statements)[0]
+    assert "11e111e1-e111-11ee-e111-1e11e1ee11e1" in group_statement.resource
+    assert group_statement.allow_self_approval is True

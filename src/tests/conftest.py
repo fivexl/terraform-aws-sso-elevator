@@ -1,7 +1,9 @@
 import json
 import os
+from unittest.mock import MagicMock
 
 import boto3
+import pytest
 
 
 def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
@@ -54,3 +56,37 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
     os.environ |= mock_env
 
     boto3.setup_default_session(region_name="us-east-1")
+
+
+@pytest.fixture
+def mock_s3_approval_config():
+    """Returns a mock S3 client that returns approval configuration."""
+    return {
+        "statements": [
+            {
+                "ResourceType": "Account",
+                "Resource": ["111111111111"],
+                "PermissionSet": "AdministratorAccess",
+                "Approvers": "example@gmail.com",
+            }
+        ],
+        "group_statements": [
+            {
+                "Resource": ["11e111e1-e111-11ee-e111-1e11e1ee11e1"],
+                "Approvers": "example@gmail.com",
+                "AllowSelfApproval": True,
+            }
+        ],
+    }
+
+
+@pytest.fixture
+def mock_s3_client(mock_s3_approval_config):
+    """Returns a mock S3 client that returns approval configuration."""
+    mock_client = MagicMock()
+    mock_response = {"Body": MagicMock(read=lambda: json.dumps(mock_s3_approval_config).encode("utf-8"))}
+    mock_client.get_object.return_value = mock_response
+    mock_client.exceptions = MagicMock()
+    mock_client.exceptions.NoSuchKey = type("NoSuchKey", (Exception,), {})
+    mock_client.exceptions.NoSuchBucket = type("NoSuchBucket", (Exception,), {})
+    return mock_client

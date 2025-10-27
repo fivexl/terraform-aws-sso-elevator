@@ -45,13 +45,13 @@
     - Ensure accounts, permission_sets, and groups are still derived from parsed statements
     - _Requirements: 2.4, 2.5, 4.2, 4.3_
 
-- [ ] 4. Update tests to mock S3 configuration loading
-  - [ ] 4.1 Update test fixtures in src/tests/conftest.py
+- [x] 4. Update tests to mock S3 configuration loading
+  - [x] 4.1 Update test fixtures in src/tests/conftest.py
     - Add S3 mock fixture that returns approval configuration
     - Update existing config fixtures to use mocked S3 client
     - _Requirements: 5.1_
   
-  - [ ] 4.2 Add unit tests for load_approval_config_from_s3 function
+  - [x] 4.2 Add unit tests for load_approval_config_from_s3 function
     - Test successful S3 retrieval and JSON parsing
     - Test S3 NoSuchKey error handling
     - Test S3 AccessDenied error handling
@@ -59,7 +59,7 @@
     - Test missing keys in JSON structure
     - _Requirements: 5.1, 5.2_
   
-  - [ ] 4.3 Update existing config tests
+  - [x] 4.3 Update existing config tests
     - Ensure Config class tests work with S3-loaded configuration
     - Verify statement parsing still works correctly
     - Verify group_statement parsing still works correctly
