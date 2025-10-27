@@ -126,12 +126,6 @@ class Config(BaseSettings):
             group_statements_data = parameters.get_secret(group_statements_secret_arn, transform="json")
             values["group_statements"] = group_statements_data
         
-        statements = (
-            {parse_statement(st) for st in values.get("statements", [])}  # type: ignore # noqa: PGH003
-            if values.get("statements") is not None
-            else set()
-        )
-
         # Parse statements - handle both JSON string and list
         statements_raw = values.get("statements")
         if statements_raw is not None:
