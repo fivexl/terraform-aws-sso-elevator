@@ -58,3 +58,16 @@ module "config_bucket" {
 
   tags = var.tags
 }
+
+resource "aws_s3_object" "approval_config" {
+  bucket = module.config_bucket.s3_bucket_id
+  key    = "config/approval-config.json"
+  content = jsonencode({
+    statements       = var.config
+    group_statements = var.group_config
+  })
+  content_type = "application/json"
+
+  server_side_encryption = var.config_bucket_kms_key_arn != null ? "aws:kms" : "AES256"
+  kms_key_id             = var.config_bucket_kms_key_arn
+}

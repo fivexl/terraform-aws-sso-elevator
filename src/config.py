@@ -1,7 +1,9 @@
+import json
 import os
 from typing import Optional
 
 from aws_lambda_powertools import Logger
+from mypy_boto3_s3 import S3Client
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,6 +22,50 @@ def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Lo
 
 
 logger = get_logger(service="config")
+
+
+def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: str) -> dict:
+    """
+    Load approval configuration from S3.
+
+    Args:
+        s3_client: Boto3 S3 client
+        bucket_name: Name of the S3 bucket
+        s3_key: Key of the S3 object containing configuration
+
+    Returns:
+        Dictionary with 'statements' and 'group_statements' keys
+
+    Raises:
+        Exception: If S3 retrieval or JSON parsing fails
+    """
+    try:
+        logger.info(f"Loading approval config from s3://{bucket_name}/{s3_key}")
+        response = s3_client.get_object(Bucket=bucket_name, Key=s3_key)
+        content = response["Body"].read().decode("utf-8")
+        config_data = json.loads(content)
+
+        if "statements" not in config_data or "group_statements" not in config_data:
+            logger.warning(f"Missing required keys in S3 config. Found keys: {list(config_data.keys())}")
+            # Default to empty lists if keys are missing
+            config_data.setdefault("statements", [])
+            config_data.setdefault("group_statements", [])
+
+        logger.info("Successfully loaded approval config from S3")
+        return config_data
+
+    except s3_client.exceptions.NoSuchKey:
+        logger.error(f"S3 object not found: s3://{bucket_name}/{s3_key}")
+        raise
+    except s3_client.exceptions.NoSuchBucket:
+        logger.error(f"S3 bucket not found: {bucket_name}")
+        raise
+    except Exception as e:
+        logger.error(
+            f"Failed to load approval config from S3: {e}",
+            exc_info=True,
+        )
+        raise
 
 
 def parse_statement(_dict: dict) -> Statement:
@@ -100,6 +146,7 @@ class Config(BaseSettings):
     permission_duration_list_override: list
 
     config_bucket_name: str = "sso-elevator-config"
+    config_s3_key: str = ""
     cache_enabled: bool = True
 
     good_result_emoji: str = ":large_green_circle:"
@@ -111,22 +158,34 @@ class Config(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
-        import json
+        import boto3
 
-        # Parse statements - handle both JSON string and list
-        statements_raw = values.get("statements")
-        if statements_raw is not None:
-            if isinstance(statements_raw, str):
+        config_s3_key = values.get("config_s3_key", "")
+
+        # Load from S3 if config_s3_key is provided
+        if config_s3_key:
+            s3_client = boto3.client("s3")
+            config_bucket_name = values.get("config_bucket_name", "sso-elevator-config")
+            config_data = load_approval_config_from_s3(s3_client, config_bucket_name, config_s3_key)
+            statements_raw = config_data.get("statements")
+            group_statements_raw = config_data.get("group_statements")
+        else:
+            # Fallback to environment variables
+            statements_raw = values.get("statements")
+            if statements_raw is not None and isinstance(statements_raw, str):
                 statements_raw = json.loads(statements_raw)
+            group_statements_raw = values.get("group_statements")
+            if group_statements_raw is not None and isinstance(group_statements_raw, str):
+                group_statements_raw = json.loads(group_statements_raw)
+
+        # Parse statements
+        if statements_raw is not None:
             statements = {parse_statement(st) for st in statements_raw}  # type: ignore # noqa: PGH003
         else:
             statements = set()
 
-        # Parse group_statements - handle both JSON string and list
-        group_statements_raw = values.get("group_statements")
+        # Parse group_statements
         if group_statements_raw is not None:
-            if isinstance(group_statements_raw, str):
-                group_statements_raw = json.loads(group_statements_raw)
             group_statements = {parse_group_statement(st) for st in group_statements_raw}  # type: ignore # noqa: PGH003
         else:
             group_statements = set()

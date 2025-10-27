@@ -52,8 +52,6 @@ module "access_requester_slack_handler" {
 
 
     SSO_INSTANCE_ARN                            = local.sso_instance_arn
-    STATEMENTS                                  = jsonencode(var.config)
-    GROUP_STATEMENTS                            = jsonencode(var.group_config)
     POWERTOOLS_LOGGER_LOG_EVENT                 = true
     SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
     REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
@@ -69,6 +67,7 @@ module "access_requester_slack_handler" {
     SECONDARY_FALLBACK_EMAIL_DOMAINS            = jsonencode(var.secondary_fallback_email_domains)
     SEND_DM_IF_USER_NOT_IN_CHANNEL              = var.send_dm_if_user_not_in_channel
     CONFIG_BUCKET_NAME                          = local.config_bucket_name
+    CONFIG_S3_KEY                               = "config/approval-config.json"
     CACHE_ENABLED                               = var.cache_enabled
   }
 

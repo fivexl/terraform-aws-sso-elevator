@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "name": "Export Requirements.txt",
+  "description": "Monitors dependency files (pyproject.toml, uv.lock) and automatically exports requirements.txt using 'uv export' command to keep Docker build process synchronized with current dependencies",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "src/pyproject.toml",
+      "src/uv.lock",
+      "layer/pyproject.toml",
+      "layer/uv.lock"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Dependencies have changed in the project. Please export the requirements.txt file using the 'uv export' command (as configured in the pre-commit hooks) to ensure the Docker build process remains in sync. Check both src/ and layer/ directories for pyproject.toml and uv.lock changes, and update their corresponding requirements.txt files accordingly."
+  }
+}
