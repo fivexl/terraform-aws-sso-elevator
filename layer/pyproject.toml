@@ -3,7 +3,7 @@ name = "layers"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "EreminAnton", email = "mobessona2@gmail.com"}
+    {name = "FivexL Consuling Services", email = "open.source@fivexl.io"}
 ]
 requires-python = ">=3.13"
 dynamic = []
