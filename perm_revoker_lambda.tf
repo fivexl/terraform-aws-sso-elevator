@@ -51,8 +51,6 @@ module "access_revoker" {
     SCHEDULE_GROUP_NAME  = var.schedule_group_name
 
     SSO_INSTANCE_ARN            = local.sso_instance_arn
-    STATEMENTS                  = jsonencode(var.config)
-    GROUP_STATEMENTS            = jsonencode(var.group_config)
     POWERTOOLS_LOGGER_LOG_EVENT = true
 
     POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
@@ -65,6 +63,7 @@ module "access_revoker" {
     REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
     MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
     PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
+    CONFIG_S3_KEY                               = "config/approval-config.json"
 
     APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME  = var.approver_renotification_initial_wait_time
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
