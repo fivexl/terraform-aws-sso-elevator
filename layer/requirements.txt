@@ -1,0 +1,2 @@
+slack-bolt>=1.26.0
+aws-lambda-powertools[parser]>=2.14.1

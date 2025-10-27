@@ -10,11 +10,9 @@ module "sso_elevator_dependencies" {
   compatible_runtimes = ["python3.13"]
   build_in_docker     = true
   runtime             = "python${local.python_version}"
-  docker_image        = "lambda/python:${local.python_version}"
-  docker_file         = "${path.module}/src/docker/Dockerfile.layer"
   source_path = [{
-    path          = "${path.module}/layer"
-    patterns      = ["!python/.venv/.*"]
-    prefix_in_zip = "python"
+    path             = "${path.module}/layer"
+    pip_requirements = "${path.module}/layer/requirements.txt"
+    prefix_in_zip    = "python"
   }]
 }

@@ -19,12 +19,11 @@ module "access_requester_slack_handler" {
   handler         = var.use_pre_created_image ? "" : "main.lambda_handler"
   runtime         = var.use_pre_created_image ? "" : "python${local.python_version}"
   build_in_docker = var.use_pre_created_image ? false : true
-  docker_image    = var.use_pre_created_image ? null : "lambda/python:${local.python_version}"
-  docker_file     = var.use_pre_created_image ? null : "${path.module}/src/docker/Dockerfile"
   source_path = var.use_pre_created_image ? [] : [
     {
-      path          = "${path.module}/src/"
-      artifacts_dir = "${path.root}/builds/"
+      path             = "${path.module}/src/"
+      artifacts_dir    = "${path.root}/builds/"
+      pip_requirements = "${path.module}/src/requirements.txt"
       patterns = [
         "!.venv/.*",
         "!.vscode/.*",

@@ -26,6 +26,20 @@ repos:
         require_serial: true
         types_or: [python, pyi]
         additional_dependencies: [black==25.1.0]
+    -   id: uv-export-src
+        name: uv export src requirements
+        description: "Export src/requirements.txt from pyproject.toml"
+        entry: bash -c 'cd src && uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt'
+        language: system
+        files: ^src/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+    -   id: uv-export-layer
+        name: uv export layer requirements
+        description: "Export layer/requirements.txt from pyproject.toml"
+        entry: bash -c 'cd layer && uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt'
+        language: system
+        files: ^layer/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
 -   repo: https://github.com/charliermarsh/ruff-pre-commit
     rev: v0.11.0
     hooks:
