@@ -63,6 +63,7 @@ module "access_revoker" {
     REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
     MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
     PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
+    CONFIG_BUCKET_NAME                          = local.config_bucket_name
     CONFIG_S3_KEY                               = "config/approval-config.json"
 
     APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME  = var.approver_renotification_initial_wait_time
@@ -168,6 +169,18 @@ data "aws_iam_policy_document" "revoker" {
       "identitystore:DeleteGroupMembership"
     ]
     resources = ["*"]
+  }
+  statement {
+    sid    = "AllowS3Config"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:ListBucket",
+    ]
+    resources = [
+      module.config_bucket.s3_bucket_arn,
+      "${module.config_bucket.s3_bucket_arn}/*"
+    ]
   }
 
 }
