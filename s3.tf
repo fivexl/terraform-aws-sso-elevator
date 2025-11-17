@@ -1,7 +1,7 @@
 module "audit_bucket" {
   count   = var.s3_name_of_the_existing_bucket == "" ? 1 : 0
   source  = "fivexl/account-baseline/aws//modules/s3_baseline"
-  version = "1.5.0"
+  version = "2.0.0"
 
   bucket_name = local.s3_bucket_name
 
@@ -18,7 +18,7 @@ module "audit_bucket" {
 
 module "config_bucket" {
   source  = "fivexl/account-baseline/aws//modules/s3_baseline"
-  version = "1.5.0"
+  version = "2.0.0"
 
   bucket_name = local.config_bucket_name
 
