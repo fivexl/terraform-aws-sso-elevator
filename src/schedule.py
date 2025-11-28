@@ -150,6 +150,7 @@ def schedule_revoke_event(
     )
     logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
     return schedule_client.create_schedule(
+        ActionAfterCompletion="DELETE",
         FlexibleTimeWindow={"Mode": "OFF"},
         Name=schedule_name,
         GroupName=cfg.schedule_group_name,
@@ -187,6 +188,7 @@ def schedule_group_revoke_event(
     get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, group_assignment)
     logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
     return schedule_client.create_schedule(
+        ActionAfterCompletion="DELETE",
         FlexibleTimeWindow={"Mode": "OFF"},
         Name=schedule_name,
         GroupName=cfg.schedule_group_name,
@@ -227,6 +229,7 @@ def schedule_discard_buttons_event(
         },
     )
     return schedule_client.create_schedule(
+        ActionAfterCompletion="DELETE",
         FlexibleTimeWindow={"Mode": "OFF"},
         Name=schedule_name,
         GroupName=cfg.schedule_group_name,
@@ -270,6 +273,7 @@ def schedule_approver_notification_event(
         },
     )
     return schedule_client.create_schedule(
+        ActionAfterCompletion="DELETE",
         FlexibleTimeWindow={"Mode": "OFF"},
         Name=schedule_name,
         GroupName=cfg.schedule_group_name,
