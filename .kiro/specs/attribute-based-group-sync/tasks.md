@@ -145,16 +145,16 @@
   - **Property 7: Managed group processing completeness**
   - **Validates: Requirements 10.2, 10.3**
 
-- [ ] 12. Implement cache updates
+- [x] 12. Implement cache updates
   - Update cache after successful sync operations
   - Respect cache TTL settings
   - _Requirements: 9.4, 9.5_
 
-- [ ] 12.1 Write property test for cache update on success
+- [x] 12.1 Write property test for cache update on success
   - **Property 21: Cache update on success**
   - **Validates: Requirements 9.4**
 
-- [ ] 12.2 Write property test for cache TTL respect
+- [x] 12.2 Write property test for cache TTL respect
   - **Property 22: Cache TTL respect**
   - **Validates: Requirements 9.5**
 
