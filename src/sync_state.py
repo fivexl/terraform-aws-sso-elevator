@@ -133,12 +133,24 @@ class SyncStateManager:
             group_name = state.group_name
             rule = self._mapper.get_rule_for_group(group_id)
 
+            # Log the rule configuration for this group
+            if rule:
+                rule_conditions = [(c.attribute_name, c.expected_value) for c in rule.conditions]
+                logger.info(f"Processing group '{group_name}' (id={group_id}) with rule conditions: {rule_conditions}")
+            else:
+                logger.warning(f"No rule found for managed group '{group_name}' (id={group_id})")
+
             # Compute desired members for this group
             desired_members: set[str] = set()
             for user in users:
+                logger.debug(f"Evaluating user '{user.email}' (id={user.user_id}) with attributes: {user.attributes}")
                 target_groups = self._mapper.get_target_groups_for_user(user.attributes)
                 if group_id in target_groups:
                     desired_members.add(user.user_id)
+                    logger.debug(f"User '{user.email}' matches rules for group '{group_name}'")
+
+            # Log summary for this group
+            logger.info(f"Group '{group_name}': current_members={len(state.current_members)}, desired_members={len(desired_members)}")
 
             # Find users to add (in desired but not in current)
             users_to_add = desired_members - state.current_members
@@ -146,6 +158,13 @@ class SyncStateManager:
                 user = users_by_id.get(user_id)
                 if user:
                     matched_attrs = self._get_matched_attributes(user.attributes, rule)
+                    expected_attrs = self._get_expected_attributes(rule) if rule else None
+                    logger.info(
+                        f"ADD action: user '{user.email}' to group '{group_name}' - "
+                        f"user_attributes={user.attributes}, "
+                        f"rule_expected={expected_attrs}, "
+                        f"matched_attributes={matched_attrs}"
+                    )
                     actions.append(
                         SyncAction(
                             action_type="add",
@@ -163,6 +182,7 @@ class SyncStateManager:
             for user_id in manual_assignments:
                 user = users_by_id.get(user_id)
                 if user:
+                    expected_attrs = self._get_expected_attributes(rule) if rule else None
                     # Determine action based on policy
                     if self._manual_assignment_policy == "remove":
                         action_type: Literal["add", "remove", "warn"] = "remove"
@@ -171,7 +191,12 @@ class SyncStateManager:
                         action_type = "warn"
                         reason = f"User does not match attribute rules for group '{group_name}' (manual assignment detected)"
 
-                    expected_attrs = self._get_expected_attributes(rule) if rule else None
+                    logger.info(
+                        f"{action_type.upper()} action: user '{user.email}' in group '{group_name}' - "
+                        f"user_attributes={user.attributes}, "
+                        f"rule_expected={expected_attrs}, "
+                        f"policy={self._manual_assignment_policy}"
+                    )
                     actions.append(
                         SyncAction(
                             action_type=action_type,

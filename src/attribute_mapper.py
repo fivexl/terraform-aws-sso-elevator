@@ -6,6 +6,10 @@ configured mapping rules to determine group membership.
 
 from dataclasses import dataclass
 
+from config import get_logger
+
+logger = get_logger(service="attribute_mapper")
+
 
 @dataclass(frozen=True)
 class AttributeCondition:
@@ -56,7 +60,20 @@ class AttributeMappingRule:
         """
         if not self.conditions:
             return False
-        return all(condition.matches(user_attributes) for condition in self.conditions)
+
+        all_match = True
+        for condition in self.conditions:
+            actual_value = user_attributes.get(condition.attribute_name)
+            condition_matches = actual_value == condition.expected_value
+            if not condition_matches:
+                all_match = False
+                logger.debug(
+                    f"Condition mismatch for group '{self.group_name}': "
+                    f"attribute '{condition.attribute_name}' - "
+                    f"expected '{condition.expected_value}', got '{actual_value}'"
+                )
+
+        return all_match
 
 
 class AttributeMapper:
@@ -88,7 +105,18 @@ class AttributeMapper:
         Returns:
             Set of group IDs that the user should be a member of.
         """
-        return {rule.group_id for rule in self._rules if rule.matches(user_attributes)}
+        matching_groups: set[str] = set()
+
+        for rule in self._rules:
+            if rule.matches(user_attributes):
+                matching_groups.add(rule.group_id)
+                logger.debug(
+                    f"User matches rule for group '{rule.group_name}': "
+                    f"user_attributes={user_attributes}, "
+                    f"rule_conditions={[(c.attribute_name, c.expected_value) for c in rule.conditions]}"
+                )
+
+        return matching_groups
 
     def get_rule_for_group(self, group_id: str) -> AttributeMappingRule | None:
         """Get the mapping rule for a specific group.
