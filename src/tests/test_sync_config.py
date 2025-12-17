@@ -15,6 +15,8 @@ from sync_config import (
     load_sync_config_from_env,
     validate_sync_config,
     resolve_group_names,
+    resolve_group_names_from_identity_store,
+    get_valid_rules_for_resolved_groups,
 )
 
 
@@ -536,3 +538,206 @@ class TestGroupNameResolution:
 
         assert config.get_group_id("TestGroup") == "test-id-123"
         assert config.get_group_id("NonExistent") is None
+
+
+class TestInvalidGroupReferenceHandling:
+    """
+    **Feature: attribute-based-group-sync, Property 8: Invalid group reference handling**
+    **Validates: Requirements 2.5**
+
+    For any mapping rule that references a group ID not in the managed groups list,
+    the system should log an error and skip that rule without failing other rules.
+    """
+
+    @settings(max_examples=100)
+    @given(
+        existing_groups=st.lists(group_name_strategy, min_size=1, max_size=5, unique=True),
+        missing_groups=st.lists(group_name_strategy, min_size=1, max_size=3, unique=True),
+    )
+    def test_rules_with_missing_groups_are_skipped(self, existing_groups: list[str], missing_groups: list[str]):
+        """
+        **Feature: attribute-based-group-sync, Property 8: Invalid group reference handling**
+        **Validates: Requirements 2.5**
+
+        For any configuration where some rules reference groups that don't exist
+        in Identity Store, those rules should be skipped while valid rules are kept.
+        """
+        # Ensure missing groups are actually missing (not in existing)
+        missing_groups = [g for g in missing_groups if g not in existing_groups]
+        assume(len(missing_groups) >= 1)
+
+        all_group_names = existing_groups + missing_groups
+
+        # Create rules for all groups (some will be valid, some invalid)
+        rules = [{"group_name": name, "attributes": {"department": "Test"}} for name in all_group_names]
+
+        config = SyncConfiguration(
+            enabled=True,
+            managed_group_names=tuple(all_group_names),
+            managed_group_ids={},
+            mapping_rules=tuple(rules),
+            manual_assignment_policy="warn",
+            schedule_expression="rate(1 hour)",
+        )
+
+        # Simulate Identity Store only having existing_groups
+        name_to_id = {name: f"id-{i}" for i, name in enumerate(existing_groups)}
+
+        # Resolve group names
+        resolved_config = resolve_group_names(config, name_to_id)
+
+        # Get valid rules
+        valid_rules = get_valid_rules_for_resolved_groups(resolved_config)
+
+        # Verify only rules for existing groups are returned
+        assert len(valid_rules) == len(existing_groups)
+        valid_group_names = {rule["group_name"] for rule in valid_rules}
+        assert valid_group_names == set(existing_groups)
+
+        # Verify missing groups are not in resolved IDs
+        for missing_group in missing_groups:
+            assert missing_group not in resolved_config.managed_group_ids
+
+    @settings(max_examples=100)
+    @given(
+        existing_groups=st.lists(group_name_strategy, min_size=2, max_size=5, unique=True),
+    )
+    def test_valid_rules_are_preserved_when_some_groups_missing(self, existing_groups: list[str]):
+        """
+        **Feature: attribute-based-group-sync, Property 8: Invalid group reference handling**
+        **Validates: Requirements 2.5**
+
+        When some groups are missing, valid rules should still be processed correctly.
+        """
+        # Split groups: some exist, some don't
+        split_point = len(existing_groups) // 2
+        groups_in_store = existing_groups[:split_point] if split_point > 0 else existing_groups[:1]
+        groups_not_in_store = existing_groups[split_point:] if split_point > 0 else existing_groups[1:]
+
+        assume(len(groups_in_store) >= 1)
+        assume(len(groups_not_in_store) >= 1)
+
+        # Create rules for all groups
+        rules = [{"group_name": name, "attributes": {"department": f"Dept-{i}"}} for i, name in enumerate(existing_groups)]
+
+        config = SyncConfiguration(
+            enabled=True,
+            managed_group_names=tuple(existing_groups),
+            managed_group_ids={},
+            mapping_rules=tuple(rules),
+            manual_assignment_policy="warn",
+            schedule_expression="rate(1 hour)",
+        )
+
+        # Only groups_in_store exist in Identity Store
+        name_to_id = {name: f"id-{i}" for i, name in enumerate(groups_in_store)}
+
+        resolved_config = resolve_group_names(config, name_to_id)
+        valid_rules = get_valid_rules_for_resolved_groups(resolved_config)
+
+        # Verify valid rules match groups_in_store
+        assert len(valid_rules) == len(groups_in_store)
+        for rule in valid_rules:
+            assert rule["group_name"] in groups_in_store
+            # Verify the rule attributes are preserved
+            assert "attributes" in rule
+            assert "department" in rule["attributes"]
+
+    def test_all_rules_skipped_when_no_groups_exist(self):
+        """
+        **Feature: attribute-based-group-sync, Property 8: Invalid group reference handling**
+        **Validates: Requirements 2.5**
+
+        When no managed groups exist in Identity Store, all rules should be skipped.
+        """
+        config = SyncConfiguration(
+            enabled=True,
+            managed_group_names=("Group1", "Group2", "Group3"),
+            managed_group_ids={},
+            mapping_rules=(
+                {"group_name": "Group1", "attributes": {"dept": "Eng"}},
+                {"group_name": "Group2", "attributes": {"dept": "Sales"}},
+                {"group_name": "Group3", "attributes": {"dept": "HR"}},
+            ),
+            manual_assignment_policy="warn",
+            schedule_expression="rate(1 hour)",
+        )
+
+        # Empty Identity Store
+        name_to_id: dict[str, str] = {}
+
+        resolved_config = resolve_group_names(config, name_to_id)
+        valid_rules = get_valid_rules_for_resolved_groups(resolved_config)
+
+        assert len(valid_rules) == 0
+        assert len(resolved_config.managed_group_ids) == 0
+
+    def test_all_rules_valid_when_all_groups_exist(self):
+        """
+        **Feature: attribute-based-group-sync, Property 8: Invalid group reference handling**
+        **Validates: Requirements 2.5**
+
+        When all managed groups exist in Identity Store, all rules should be valid.
+        """
+        config = SyncConfiguration(
+            enabled=True,
+            managed_group_names=("Group1", "Group2"),
+            managed_group_ids={},
+            mapping_rules=(
+                {"group_name": "Group1", "attributes": {"dept": "Eng"}},
+                {"group_name": "Group2", "attributes": {"dept": "Sales"}},
+            ),
+            manual_assignment_policy="warn",
+            schedule_expression="rate(1 hour)",
+        )
+
+        # All groups exist
+        name_to_id = {"Group1": "id-1", "Group2": "id-2"}
+
+        resolved_config = resolve_group_names(config, name_to_id)
+        valid_rules = get_valid_rules_for_resolved_groups(resolved_config)
+
+        assert len(valid_rules) == 2
+        assert len(resolved_config.managed_group_ids) == 2
+
+    @settings(max_examples=50)
+    @given(
+        group_names=st.lists(group_name_strategy, min_size=1, max_size=5, unique=True),
+    )
+    def test_resolve_group_names_from_identity_store_with_cache(self, group_names: list[str]):
+        """
+        **Feature: attribute-based-group-sync, Property 8: Invalid group reference handling**
+        **Validates: Requirements 2.5**
+
+        When cached groups are provided, the function should use them instead of
+        querying Identity Store.
+        """
+        config = SyncConfiguration(
+            enabled=True,
+            managed_group_names=tuple(group_names),
+            managed_group_ids={},
+            mapping_rules=tuple({"group_name": name, "attributes": {"dept": "Test"}} for name in group_names),
+            manual_assignment_policy="warn",
+            schedule_expression="rate(1 hour)",
+        )
+
+        # Create cached groups mapping
+        cached_groups = {name: f"cached-id-{i}" for i, name in enumerate(group_names)}
+
+        # Use None for identity_store_client since we're using cache
+        # This would fail if the function tried to use the client
+        resolved_config, returned_cache = resolve_group_names_from_identity_store(
+            config=config,
+            identity_store_client=None,  # type: ignore[arg-type]
+            identity_store_id="test-store-id",
+            cached_groups=cached_groups,
+        )
+
+        # Verify all groups were resolved from cache
+        assert len(resolved_config.managed_group_ids) == len(group_names)
+        for name in group_names:
+            assert name in resolved_config.managed_group_ids
+            assert resolved_config.managed_group_ids[name] == cached_groups[name]
+
+        # Verify returned cache is the same as input cache
+        assert returned_cache == cached_groups

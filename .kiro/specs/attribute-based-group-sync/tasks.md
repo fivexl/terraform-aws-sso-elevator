@@ -43,13 +43,13 @@
   - **Property 9: Configuration validation completeness**
   - **Validates: Requirements 7.4, 7.5, 10.1, 10.5**
 
-- [ ] 4. Implement group name resolution
+- [x] 4. Implement group name resolution
   - Create `resolve_group_names()` function to query Identity Store
   - Implement caching for name-to-ID mappings
   - Handle missing groups gracefully
   - _Requirements: 2.5, 8.2_
 
-- [ ] 4.1 Write property test for invalid group reference handling
+- [x] 4.1 Write property test for invalid group reference handling
   - **Property 8: Invalid group reference handling**
   - **Validates: Requirements 2.5**
 

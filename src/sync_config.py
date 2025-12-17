@@ -4,12 +4,17 @@ This module provides configuration loading and validation for the
 attribute-based group synchronization feature.
 """
 
+from __future__ import annotations
+
 import json
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from config import get_logger
+
+if TYPE_CHECKING:
+    from mypy_boto3_identitystore import IdentityStoreClient
 
 logger = get_logger(service="sync_config")
 
@@ -224,3 +229,114 @@ def resolve_group_names(
         manual_assignment_policy=config.manual_assignment_policy,
         schedule_expression=config.schedule_expression,
     )
+
+
+def get_all_groups_from_identity_store(
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+) -> dict[str, str]:
+    """Query Identity Store for all groups and return name-to-ID mapping.
+
+    Args:
+        identity_store_client: The Identity Store client.
+        identity_store_id: The Identity Store ID.
+
+    Returns:
+        Dictionary mapping group names to their IDs.
+    """
+    name_to_id: dict[str, str] = {}
+
+    try:
+        paginator = identity_store_client.get_paginator("list_groups")
+        for page in paginator.paginate(IdentityStoreId=identity_store_id):
+            for group in page.get("Groups", []):
+                display_name = group.get("DisplayName")
+                group_id = group.get("GroupId")
+                if display_name and group_id:
+                    name_to_id[display_name] = group_id
+    except Exception as e:
+        logger.exception(f"Failed to list groups from Identity Store: {e}")
+        raise
+
+    logger.info(f"Retrieved {len(name_to_id)} groups from Identity Store")
+    return name_to_id
+
+
+def resolve_group_names_from_identity_store(
+    config: SyncConfiguration,
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+    cached_groups: dict[str, str] | None = None,
+) -> tuple[SyncConfiguration, dict[str, str]]:
+    """Resolve group names to IDs by querying Identity Store.
+
+    This function queries the Identity Store for all groups and resolves
+    the managed group names to their IDs. It supports caching to minimize
+    API calls.
+
+    Args:
+        config: The sync configuration with group names.
+        identity_store_client: The Identity Store client.
+        identity_store_id: The Identity Store ID.
+        cached_groups: Optional cached name-to-ID mapping to use first.
+
+    Returns:
+        Tuple of (updated SyncConfiguration, name-to-ID mapping for caching).
+
+    Note:
+        Missing groups are logged as warnings but do not cause failures.
+        The returned configuration will only contain IDs for groups that
+        were successfully resolved.
+    """
+    # Use cached groups if available, otherwise query Identity Store
+    if cached_groups is not None:
+        name_to_id = cached_groups
+        logger.debug("Using cached group name-to-ID mapping")
+    else:
+        name_to_id = get_all_groups_from_identity_store(identity_store_client, identity_store_id)
+
+    # Resolve group names using the mapping
+    resolved_config = resolve_group_names(config, name_to_id)
+
+    # Log any groups that couldn't be resolved
+    missing_groups = [name for name in config.managed_group_names if name not in resolved_config.managed_group_ids]
+    if missing_groups:
+        for group_name in missing_groups:
+            logger.error(f"Group '{group_name}' not found in Identity Store - rules referencing this group will be skipped")
+
+    return resolved_config, name_to_id
+
+
+def get_valid_rules_for_resolved_groups(
+    config: SyncConfiguration,
+) -> list[dict]:
+    """Get mapping rules that reference resolved groups only.
+
+    This function filters the mapping rules to only include those that
+    reference groups that have been successfully resolved to IDs.
+
+    Args:
+        config: The sync configuration with resolved group IDs.
+
+    Returns:
+        List of valid mapping rules (those referencing resolved groups).
+
+    Note:
+        Rules referencing unresolved groups are logged as errors and skipped.
+    """
+    valid_rules: list[dict] = []
+    resolved_group_names = set(config.managed_group_ids.keys())
+
+    for rule in config.mapping_rules:
+        group_name = rule.get("group_name")
+        if group_name in resolved_group_names:
+            valid_rules.append(rule)
+        else:
+            logger.error(f"Skipping rule for group '{group_name}' - group not found in Identity Store")
+
+    logger.info(
+        f"Validated {len(valid_rules)} of {len(config.mapping_rules)} rules "
+        f"({len(config.mapping_rules) - len(valid_rules)} skipped due to missing groups)"
+    )
+
+    return valid_rules
