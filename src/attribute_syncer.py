@@ -20,7 +20,7 @@ from slack_sdk import WebClient
 import cache as cache_module
 import s3 as s3_module
 from attribute_mapper import AttributeCondition, AttributeMappingRule, AttributeMapper
-from config import get_config, get_logger
+from config import get_logger
 from sync_config import (
     SyncConfiguration,
     SyncConfigurationError,
@@ -475,10 +475,10 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
         }
 
     # Initialize clients
-    cfg = get_config()
     identity_store_client: IdentityStoreClient = boto3.client("identitystore")
     s3_client: S3Client = boto3.client("s3")
-    slack_client = WebClient(token=cfg.slack_bot_token)
+    slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    slack_client = WebClient(token=slack_bot_token)
 
     # Get identity store ID from environment
     identity_store_id = os.environ.get("IDENTITY_STORE_ID", "")
@@ -489,7 +489,11 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
             "body": {"error": "IDENTITY_STORE_ID not configured", "success": False},
         }
 
-    cache_config = cache_module.CacheConfig.from_config(cfg)
+    # Create cache config directly from environment variables
+    cache_config = cache_module.CacheConfig(
+        bucket_name=os.environ.get("CONFIG_BUCKET_NAME", "sso-elevator-config"),
+        enabled=os.environ.get("CACHE_ENABLED", "true").lower() == "true",
+    )
 
     # Create sync context
     ctx = SyncContext(
