@@ -344,11 +344,23 @@ def _extract_user_email(user: dict) -> str:
     return emails[0].get("Value", "") if emails else ""
 
 
+def _extract_fields(source: dict, field_mappings: list[tuple[str, str]], target: dict[str, str]) -> None:
+    """Extract fields from source dict to target dict using field mappings."""
+    for field, attr_key in field_mappings:
+        value = source.get(field)
+        if value:
+            target[attr_key] = value
+
+
 def _extract_user_attributes(user: dict) -> dict[str, str]:
-    """Extract attributes from user data."""
+    """Extract attributes from user data.
+
+    Extracts standard SCIM attributes, name attributes, enterprise extension
+    attributes (department, costCenter, etc.), and external IDs.
+    """
     attributes: dict[str, str] = {}
 
-    # Standard SCIM attributes - map field names to attribute keys
+    # Standard SCIM attributes
     scim_fields = [
         ("DisplayName", "displayName"),
         ("Title", "title"),
@@ -359,12 +371,9 @@ def _extract_user_attributes(user: dict) -> dict[str, str]:
         ("ProfileUrl", "profileUrl"),
         ("NickName", "nickName"),
     ]
-    for field, attr_key in scim_fields:
-        if user.get(field):
-            attributes[attr_key] = user[field]
+    _extract_fields(user, scim_fields, attributes)
 
     # Name attributes
-    name = user.get("Name", {})
     name_fields = [
         ("GivenName", "givenName"),
         ("FamilyName", "familyName"),
@@ -372,18 +381,52 @@ def _extract_user_attributes(user: dict) -> dict[str, str]:
         ("HonorificPrefix", "honorificPrefix"),
         ("HonorificSuffix", "honorificSuffix"),
     ]
-    for field, attr_key in name_fields:
-        if name.get(field):
-            attributes[attr_key] = name[field]
+    _extract_fields(user.get("Name", {}), name_fields, attributes)
 
-    # Enterprise extension attributes (commonly used for ABAC)
-    for ext_id in user.get("ExternalIds", []):
+    # Enterprise extension attributes (SCIM enterprise user schema)
+    enterprise_ext_key = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+    enterprise_ext = user.get(enterprise_ext_key, {})
+    enterprise_fields = [
+        ("department", "department"),
+        ("costCenter", "costCenter"),
+        ("organization", "organization"),
+        ("division", "division"),
+        ("employeeNumber", "employeeNumber"),
+    ]
+    _extract_fields(enterprise_ext, enterprise_fields, attributes)
+
+    # Manager is a nested object
+    manager = enterprise_ext.get("manager", {})
+    _extract_fields(manager, [("displayName", "managerDisplayName"), ("value", "managerId")], attributes)
+
+    # AWS Identity Store Extensions (custom attributes)
+    _extract_identity_store_extensions(user.get("Extensions", {}), attributes)
+
+    # External IDs
+    _extract_external_ids(user.get("ExternalIds", []), attributes)
+
+    return attributes
+
+
+def _extract_identity_store_extensions(extensions: dict, attributes: dict[str, str]) -> None:
+    """Extract AWS Identity Store custom extension attributes."""
+    for ext_key, ext_value in extensions.items():
+        if isinstance(ext_value, dict):
+            for attr_name, attr_value in ext_value.items():
+                if isinstance(attr_value, str):
+                    attributes[attr_name] = attr_value
+        elif isinstance(ext_value, str):
+            attr_name = ext_key.split(":")[-1] if ":" in ext_key else ext_key
+            attributes[attr_name] = ext_value
+
+
+def _extract_external_ids(external_ids: list, attributes: dict[str, str]) -> None:
+    """Extract external ID attributes."""
+    for ext_id in external_ids:
         issuer = ext_id.get("Issuer", "")
         ext_id_value = ext_id.get("Id", "")
         if issuer and ext_id_value:
             attributes[f"externalId_{issuer}"] = ext_id_value
-
-    return attributes
 
 
 def _fetch_users_from_identity_store(
@@ -404,12 +447,19 @@ def _fetch_users_from_identity_store(
     paginator = identity_store_client.get_paginator("list_users")
     for page in paginator.paginate(IdentityStoreId=identity_store_id):
         for user in page.get("Users", []):
+            extracted_attrs = _extract_user_attributes(user)
+            user_email = _extract_user_email(user)
+            # Log raw user data keys for debugging attribute extraction
+            logger.debug(
+                f"Raw user data keys for '{mask_email(user_email)}': {list(user.keys())}, "
+                f"extracted attributes: {_filter_sensitive_attributes(extracted_attrs)}"
+            )
             users.append(
                 {
                     "user_id": user.get("UserId"),
                     "username": user.get("UserName", ""),
-                    "email": _extract_user_email(user),
-                    "attributes": _extract_user_attributes(user),
+                    "email": user_email,
+                    "attributes": extracted_attrs,
                 }
             )
 
