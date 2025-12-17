@@ -92,16 +92,16 @@
   - **Property 10: Manual assignment detection accuracy**
   - **Validates: Requirements 3.1, 3.2**
 
-- [ ] 8. Implement policy-based enforcement
+- [x] 8. Implement policy-based enforcement
   - Create logic to handle "warn" vs "remove" policies
   - Ensure removal only occurs when policy is "remove"
   - _Requirements: 3.5, 4.1, 4.2, 4.3_
 
-- [ ] 8.1 Write property test for policy-based removal behavior
+- [x] 8.1 Write property test for policy-based removal behavior
   - **Property 12: Policy-based removal behavior**
   - **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
 
-- [ ] 9. Implement Slack notifications
+- [x] 9. Implement Slack notifications
   - Create notification for users added to groups
   - Create notification for manual assignments detected
   - Create notification for manual assignments removed
@@ -109,11 +109,11 @@
   - Reuse existing Slack client and helpers
   - _Requirements: 3.4, 4.5, 5.5, 6.2_
 
-- [ ] 9.1 Write property test for user addition notification
+- [x] 9.1 Write property test for user addition notification
   - **Property 14: User addition notification**
   - **Validates: Requirements 6.2**
 
-- [ ] 9.2 Write property test for manual assignment notification
+- [x] 9.2 Write property test for manual assignment notification
   - **Property 11: Manual assignment notification**
   - **Validates: Requirements 3.3, 3.4, 4.5**
 
