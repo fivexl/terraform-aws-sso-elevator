@@ -18,13 +18,13 @@
   - **Property 16: Audit entry storage consistency**
   - **Validates: Requirements 6.6**
 
-- [ ] 2. Create attribute mapping engine
+- [x] 2. Create attribute mapping engine
   - Implement `AttributeCondition` class with exact string matching
   - Implement `AttributeMappingRule` class with AND logic for multiple conditions
   - Implement `AttributeMapper` class to evaluate users against rules
   - _Requirements: 1.3, 2.2, 2.3, 2.4_
 
-- [ ] 2.1 Write property test for attribute matching correctness
+- [x] 2.1 Write property test for attribute matching correctness
   - **Property 3: Attribute matching correctness**
   - **Validates: Requirements 1.3, 2.3, 2.4**
 
