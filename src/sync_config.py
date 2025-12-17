@@ -158,11 +158,11 @@ def validate_sync_config(config: SyncConfiguration) -> list[str]:
 
         # Check attributes
         attributes = rule.get("attributes")
-        if not attributes:
+        if attributes is None:
             errors.append(f"Rule {i}: missing 'attributes' field")
         elif not isinstance(attributes, dict):
             errors.append(f"Rule {i}: 'attributes' must be a dictionary")
-        elif not attributes:
+        elif len(attributes) == 0:
             errors.append(f"Rule {i}: 'attributes' must not be empty")
 
     return errors
