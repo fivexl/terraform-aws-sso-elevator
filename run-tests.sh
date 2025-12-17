@@ -2,10 +2,9 @@
 
 set -e
 
-pre-commit run ruff -a
-pre-commit run black -a
-pre-commit run codespell -a
-
 cd src
-uv sync --all-extras
+uv sync --no-install-project --extra dev
 LOG_LEVEL=DEBUG uv run pytest -q $1
+cd ..
+
+uv run pre-commit run -a
