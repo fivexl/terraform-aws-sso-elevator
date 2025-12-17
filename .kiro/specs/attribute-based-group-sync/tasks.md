@@ -83,12 +83,12 @@
   - **Property 20: Cache fallback**
   - **Validates: Requirements 9.3**
 
-- [ ] 7. Implement manual assignment detection
+- [x] 7. Implement manual assignment detection
   - Create logic to identify users in groups who don't match rules
   - Distinguish between sync-added and manually-added users
   - _Requirements: 3.2, 3.3_
 
-- [ ] 7.1 Write property test for manual assignment detection accuracy
+- [x] 7.1 Write property test for manual assignment detection accuracy
   - **Property 10: Manual assignment detection accuracy**
   - **Validates: Requirements 3.1, 3.2**
 

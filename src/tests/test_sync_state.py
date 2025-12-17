@@ -528,6 +528,9 @@ class TestMembershipRemovalCorrectness:
         # Ensure different user IDs
         assume(matching_user.user_id != non_matching_user.user_id)
 
+        # Ensure non_matching_user doesn't accidentally match the rule from matching_data
+        assume(not rule.matches(non_matching_user.attributes))
+
         mapper = AttributeMapper([rule])
         manager = SyncStateManager(
             managed_group_ids={rule.group_name: group_id},
@@ -747,6 +750,292 @@ class TestManualAssignmentDetection:
         matching_users = manager.get_users_matching_group([user], group_id)
 
         assert user.user_id not in matching_users
+
+
+class TestManualAssignmentDetectionAccuracy:
+    """
+    **Feature: attribute-based-group-sync, Property 10: Manual assignment detection accuracy**
+    **Validates: Requirements 3.1, 3.2**
+
+    For any user in a managed group, the system should correctly determine whether
+    they were added by sync (matches rules) or manually (doesn't match rules).
+    """
+
+    @settings(max_examples=100)
+    @given(
+        matching_data=matching_user_and_rule_strategy(),
+        non_matching_data=non_matching_user_and_rule_strategy(),
+    )
+    def test_manual_assignment_detection_distinguishes_matching_from_non_matching(
+        self,
+        matching_data: tuple[UserInfo, AttributeMappingRule, str],
+        non_matching_data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 10: Manual assignment detection accuracy**
+        **Validates: Requirements 3.1, 3.2**
+
+        For any group with both matching and non-matching users as members,
+        the system should correctly identify which users are manual assignments.
+        """
+        matching_user, rule, group_id = matching_data
+        non_matching_user, _, _ = non_matching_data
+
+        # Ensure different user IDs
+        assume(matching_user.user_id != non_matching_user.user_id)
+
+        # Ensure non_matching_user doesn't accidentally match the rule from matching_data
+        assume(not rule.matches(non_matching_user.attributes))
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # Both users are in the group
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([matching_user.user_id, non_matching_user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([matching_user, non_matching_user], current_state)
+
+        # Matching user should NOT be detected as manual assignment (no action)
+        matching_user_actions = [a for a in actions if a.user_id == matching_user.user_id]
+        assert len(matching_user_actions) == 0, "Matching user should not have any actions"
+
+        # Non-matching user SHOULD be detected as manual assignment (warn action)
+        non_matching_user_actions = [a for a in actions if a.user_id == non_matching_user.user_id]
+        assert len(non_matching_user_actions) == 1, "Non-matching user should have exactly one action"
+        assert non_matching_user_actions[0].action_type == "warn", "Non-matching user should have warn action"
+
+    @settings(max_examples=100)
+    @given(data=non_matching_user_and_rule_strategy())
+    def test_manual_assignment_detected_for_user_in_group_not_matching_rules(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 10: Manual assignment detection accuracy**
+        **Validates: Requirements 3.1, 3.2**
+
+        For any user who is in a managed group but does not match the attribute rules,
+        the system should detect them as a manual assignment.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # User is in the group but doesn't match rules
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # Should detect as manual assignment
+        assert len(actions) == 1
+        assert actions[0].action_type == "warn"
+        assert actions[0].user_id == user.user_id
+        assert "manual assignment" in actions[0].reason.lower() or "does not match" in actions[0].reason.lower()
+
+    @settings(max_examples=100)
+    @given(data=matching_user_and_rule_strategy())
+    def test_sync_added_user_not_detected_as_manual_assignment(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 10: Manual assignment detection accuracy**
+        **Validates: Requirements 3.1, 3.2**
+
+        For any user who is in a managed group and matches the attribute rules,
+        the system should NOT detect them as a manual assignment.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # User is in the group and matches rules (sync-added)
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # Should NOT detect as manual assignment - no actions
+        user_actions = [a for a in actions if a.user_id == user.user_id]
+        assert len(user_actions) == 0, "Sync-added user should not be detected as manual assignment"
+
+    @settings(max_examples=100)
+    @given(
+        data=non_matching_user_and_rule_strategy(),
+        policy=policy_strategy,
+    )
+    def test_manual_assignment_detection_independent_of_policy(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+        policy: str,
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 10: Manual assignment detection accuracy**
+        **Validates: Requirements 3.1, 3.2**
+
+        Manual assignment detection should work correctly regardless of the
+        configured policy (warn or remove). The detection itself is independent
+        of what action is taken.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy=policy,
+        )
+
+        # User is in the group but doesn't match rules
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # Should detect as manual assignment regardless of policy
+        assert len(actions) == 1
+        assert actions[0].user_id == user.user_id
+        # Action type depends on policy, but detection should happen
+        assert actions[0].action_type in ["warn", "remove"]
+
+    @settings(max_examples=100)
+    @given(data=matching_user_and_rule_strategy())
+    def test_is_manual_assignment_method_accuracy_for_matching_user(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 10: Manual assignment detection accuracy**
+        **Validates: Requirements 3.1, 3.2**
+
+        The is_manual_assignment helper method should correctly return False
+        for users who match the rules for a group.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # User matches rules - should NOT be manual assignment
+        is_manual = manager.is_manual_assignment(user, group_id)
+        assert is_manual is False, "User matching rules should not be detected as manual assignment"
+
+    @settings(max_examples=100)
+    @given(data=non_matching_user_and_rule_strategy())
+    def test_is_manual_assignment_method_accuracy_for_non_matching_user(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 10: Manual assignment detection accuracy**
+        **Validates: Requirements 3.1, 3.2**
+
+        The is_manual_assignment helper method should correctly return True
+        for users who do not match the rules for a group.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # User doesn't match rules - SHOULD be manual assignment
+        is_manual = manager.is_manual_assignment(user, group_id)
+        assert is_manual is True, "User not matching rules should be detected as manual assignment"
+
+    @settings(max_examples=100)
+    @given(
+        matching_data=matching_user_and_rule_strategy(),
+        non_matching_data=non_matching_user_and_rule_strategy(),
+    )
+    def test_all_current_members_identified_in_managed_groups(
+        self,
+        matching_data: tuple[UserInfo, AttributeMappingRule, str],
+        non_matching_data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 10: Manual assignment detection accuracy**
+        **Validates: Requirements 3.1, 3.2**
+
+        For any sync operation, the system should identify ALL users currently
+        in managed groups and correctly classify each one.
+        """
+        matching_user, rule, group_id = matching_data
+        non_matching_user, _, _ = non_matching_data
+
+        # Ensure different user IDs
+        assume(matching_user.user_id != non_matching_user.user_id)
+
+        # Ensure non_matching_user doesn't accidentally match the rule from matching_data
+        assume(not rule.matches(non_matching_user.attributes))
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # Both users are current members
+        all_members = frozenset([matching_user.user_id, non_matching_user.user_id])
+
+        # Get users matching the group rules
+        matching_users = manager.get_users_matching_group([matching_user, non_matching_user], group_id)
+
+        # Verify all current members are accounted for
+        # Matching user should be in matching_users
+        assert matching_user.user_id in matching_users
+
+        # Non-matching user should NOT be in matching_users
+        assert non_matching_user.user_id not in matching_users
+
+        # Manual assignments = current_members - matching_users
+        manual_assignments = all_members - matching_users
+        assert non_matching_user.user_id in manual_assignments
+        assert matching_user.user_id not in manual_assignments
 
 
 # -----------------Cache Integration Tests-----------------#
