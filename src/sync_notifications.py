@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from sync_state import SyncAction
 
 logger = get_logger(service="sync_notifications")
-cfg = get_config()
 
 
 @dataclass
@@ -64,6 +63,7 @@ def notify_user_added_to_group(
     Returns:
         SyncNotificationResult indicating success or failure.
     """
+    cfg = get_config()
     target_channel = channel_id or cfg.slack_channel_id
 
     attrs_display = format_attributes(action.matched_attributes)
@@ -105,6 +105,7 @@ def notify_manual_assignment_detected(
     Returns:
         SyncNotificationResult indicating success or failure.
     """
+    cfg = get_config()
     target_channel = channel_id or cfg.slack_channel_id
 
     expected_attrs = format_attributes(action.matched_attributes)
@@ -147,6 +148,7 @@ def notify_manual_assignment_removed(
     Returns:
         SyncNotificationResult indicating success or failure.
     """
+    cfg = get_config()
     target_channel = channel_id or cfg.slack_channel_id
 
     expected_attrs = format_attributes(action.matched_attributes)
@@ -190,6 +192,7 @@ def notify_sync_error(
     Returns:
         SyncNotificationResult indicating success or failure.
     """
+    cfg = get_config()
     target_channel = channel_id or cfg.slack_channel_id
 
     text = f":rotating_light: *Attribute Sync: Error Encountered*\n• Error Count: {error_count}\n• Details: {error_message}"
@@ -234,6 +237,7 @@ def notify_sync_summary(
     Returns:
         SyncNotificationResult indicating success or failure.
     """
+    cfg = get_config()
     target_channel = channel_id or cfg.slack_channel_id
 
     # Determine emoji based on errors

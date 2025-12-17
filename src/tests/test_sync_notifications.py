@@ -181,7 +181,9 @@ class TestUserAdditionNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_user_added_to_group(mock_client, action)
@@ -209,7 +211,9 @@ class TestUserAdditionNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_user_added_to_group(mock_client, action)
@@ -237,7 +241,9 @@ class TestUserAdditionNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.side_effect = Exception("API Error")
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_user_added_to_group(mock_client, action)
@@ -258,7 +264,9 @@ class TestUserAdditionNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "DEFAULT_CHANNEL"
 
             result = notify_user_added_to_group(mock_client, action, channel_id=channel_id)
@@ -290,7 +298,9 @@ class TestManualAssignmentNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_manual_assignment_detected(mock_client, action)
@@ -318,7 +328,9 @@ class TestManualAssignmentNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_manual_assignment_detected(mock_client, action)
@@ -344,7 +356,9 @@ class TestManualAssignmentNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_manual_assignment_removed(mock_client, action)
@@ -372,7 +386,9 @@ class TestManualAssignmentNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.side_effect = Exception("API Error")
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_manual_assignment_detected(mock_client, action)
@@ -397,7 +413,9 @@ class TestSyncErrorNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_sync_error(mock_client, error_message, error_count)
@@ -425,7 +443,9 @@ class TestSyncSummaryNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_sync_summary(mock_client, summary)
@@ -451,7 +471,9 @@ class TestSyncSummaryNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = notify_sync_summary(mock_client, summary)
@@ -480,7 +502,9 @@ class TestSendNotificationForAction:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = send_notification_for_action(mock_client, action)
@@ -502,7 +526,9 @@ class TestSendNotificationForAction:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = send_notification_for_action(mock_client, action)
@@ -524,7 +550,9 @@ class TestSendNotificationForAction:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.cfg") as mock_cfg:
+        with patch("sync_notifications.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_get_config.return_value = mock_cfg
             mock_cfg.slack_channel_id = "C12345"
 
             result = send_notification_for_action(mock_client, action)
