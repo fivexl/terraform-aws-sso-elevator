@@ -291,6 +291,7 @@ class SyncContext:
     slack_client: WebClient
     config: SyncConfiguration
     cache_config: cache_module.CacheConfig
+    slack_channel_id: str
 
 
 def _execute_action(
@@ -308,7 +309,7 @@ def _execute_action(
         if success:
             result.users_added += 1
             _log_audit_entry(action)
-            send_notification_for_action(ctx.slack_client, action)
+            send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
         else:
             result.errors.append(f"Failed to add {action.user_email} to {action.group_name}")
 
@@ -322,14 +323,14 @@ def _execute_action(
             result.users_removed += 1
             result.manual_assignments_removed += 1
             _log_audit_entry(action)
-            send_notification_for_action(ctx.slack_client, action)
+            send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
         else:
             result.errors.append(f"Failed to remove {action.user_email} from {action.group_name}")
 
     elif action.action_type == "warn":
         result.manual_assignments_detected += 1
         _log_audit_entry(action)
-        send_notification_for_action(ctx.slack_client, action)
+        send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
 
 
 def _finalize_result(result: SyncOperationResult) -> SyncOperationResult:
@@ -495,6 +496,9 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
         enabled=os.environ.get("CACHE_ENABLED", "true").lower() == "true",
     )
 
+    # Get slack channel ID from environment
+    slack_channel_id = os.environ.get("SLACK_CHANNEL_ID", "")
+
     # Create sync context
     ctx = SyncContext(
         identity_store_client=identity_store_client,
@@ -503,6 +507,7 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
         slack_client=slack_client,
         config=config,
         cache_config=cache_config,
+        slack_channel_id=slack_channel_id,
     )
 
     # Perform sync
@@ -515,8 +520,9 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
                 slack_client=slack_client,
                 error_message="\n".join(result.errors[:5]),
                 error_count=len(result.errors),
+                channel_id=slack_channel_id,
             )
-        notify_sync_summary(slack_client=slack_client, summary=result.to_summary())
+        notify_sync_summary(slack_client=slack_client, summary=result.to_summary(), channel_id=slack_channel_id)
     except Exception as e:
         logger.exception(f"Failed to send summary notification: {e}")
 

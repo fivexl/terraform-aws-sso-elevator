@@ -3,7 +3,7 @@
 Tests the correctness of Slack notification functions for attribute sync operations.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from hypothesis import given, settings, strategies as st
 
@@ -181,22 +181,17 @@ class TestUserAdditionNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_user_added_to_group(mock_client, action, channel_id="C12345")
 
-            result = notify_user_added_to_group(mock_client, action)
+        assert result.success is True
+        mock_client.chat_postMessage.assert_called_once()
 
-            assert result.success is True
-            mock_client.chat_postMessage.assert_called_once()
+        # Verify the message contains required information
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            # Verify the message contains required information
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            assert action.user_email in message_text
-            assert action.group_name in message_text
+        assert action.user_email in message_text
+        assert action.group_name in message_text
 
     @settings(max_examples=100)
     @given(action=add_action_strategy())
@@ -211,22 +206,17 @@ class TestUserAdditionNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_user_added_to_group(mock_client, action, channel_id="C12345")
 
-            result = notify_user_added_to_group(mock_client, action)
+        assert result.success is True
 
-            assert result.success is True
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            # Verify matched attributes are mentioned
-            if action.matched_attributes:
-                for attr_name in action.matched_attributes:
-                    assert attr_name in message_text
+        # Verify matched attributes are mentioned
+        if action.matched_attributes:
+            for attr_name in action.matched_attributes:
+                assert attr_name in message_text
 
     @settings(max_examples=100)
     @given(action=add_action_strategy())
@@ -241,15 +231,10 @@ class TestUserAdditionNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.side_effect = Exception("API Error")
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_user_added_to_group(mock_client, action, channel_id="C12345")
 
-            result = notify_user_added_to_group(mock_client, action)
-
-            assert result.success is False
-            assert result.error is not None
+        assert result.success is False
+        assert result.error is not None
 
     @settings(max_examples=100)
     @given(action=add_action_strategy(), channel_id=st.text(min_size=5, max_size=20, alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"))
@@ -264,16 +249,11 @@ class TestUserAdditionNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "DEFAULT_CHANNEL"
+        result = notify_user_added_to_group(mock_client, action, channel_id=channel_id)
 
-            result = notify_user_added_to_group(mock_client, action, channel_id=channel_id)
-
-            assert result.success is True
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            assert call_kwargs["channel"] == channel_id
+        assert result.success is True
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        assert call_kwargs["channel"] == channel_id
 
 
 class TestManualAssignmentNotification:
@@ -298,22 +278,17 @@ class TestManualAssignmentNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_manual_assignment_detected(mock_client, action, channel_id="C12345")
 
-            result = notify_manual_assignment_detected(mock_client, action)
+        assert result.success is True
+        mock_client.chat_postMessage.assert_called_once()
 
-            assert result.success is True
-            mock_client.chat_postMessage.assert_called_once()
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            assert action.user_email in message_text
-            assert action.group_name in message_text
-            assert "Manual Assignment Detected" in message_text
+        assert action.user_email in message_text
+        assert action.group_name in message_text
+        assert "Manual Assignment Detected" in message_text
 
     @settings(max_examples=100)
     @given(action=warn_action_strategy())
@@ -328,20 +303,15 @@ class TestManualAssignmentNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_manual_assignment_detected(mock_client, action, channel_id="C12345")
 
-            result = notify_manual_assignment_detected(mock_client, action)
+        assert result.success is True
 
-            assert result.success is True
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            # Should contain warning emoji or text
-            assert ":warning:" in message_text or "Warning" in message_text
+        # Should contain warning emoji or text
+        assert ":warning:" in message_text or "Warning" in message_text
 
     @settings(max_examples=100)
     @given(action=remove_action_strategy())
@@ -356,22 +326,17 @@ class TestManualAssignmentNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_manual_assignment_removed(mock_client, action, channel_id="C12345")
 
-            result = notify_manual_assignment_removed(mock_client, action)
+        assert result.success is True
+        mock_client.chat_postMessage.assert_called_once()
 
-            assert result.success is True
-            mock_client.chat_postMessage.assert_called_once()
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            assert action.user_email in message_text
-            assert action.group_name in message_text
-            assert "Removed" in message_text
+        assert action.user_email in message_text
+        assert action.group_name in message_text
+        assert "Removed" in message_text
 
     @settings(max_examples=100)
     @given(action=warn_action_strategy())
@@ -386,15 +351,10 @@ class TestManualAssignmentNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.side_effect = Exception("API Error")
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_manual_assignment_detected(mock_client, action, channel_id="C12345")
 
-            result = notify_manual_assignment_detected(mock_client, action)
-
-            assert result.success is False
-            assert result.error is not None
+        assert result.success is False
+        assert result.error is not None
 
 
 class TestSyncErrorNotification:
@@ -413,21 +373,16 @@ class TestSyncErrorNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_sync_error(mock_client, error_message, error_count, channel_id="C12345")
 
-            result = notify_sync_error(mock_client, error_message, error_count)
+        assert result.success is True
+        mock_client.chat_postMessage.assert_called_once()
 
-            assert result.success is True
-            mock_client.chat_postMessage.assert_called_once()
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            assert str(error_count) in message_text
-            assert "Error" in message_text
+        assert str(error_count) in message_text
+        assert "Error" in message_text
 
 
 class TestSyncSummaryNotification:
@@ -443,23 +398,18 @@ class TestSyncSummaryNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_sync_summary(mock_client, summary, channel_id="C12345")
 
-            result = notify_sync_summary(mock_client, summary)
+        assert result.success is True
+        mock_client.chat_postMessage.assert_called_once()
 
-            assert result.success is True
-            mock_client.chat_postMessage.assert_called_once()
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            # Verify key statistics are in the message
-            assert str(summary.users_evaluated) in message_text
-            assert str(summary.groups_processed) in message_text
-            assert str(summary.users_added) in message_text
+        # Verify key statistics are in the message
+        assert str(summary.users_evaluated) in message_text
+        assert str(summary.groups_processed) in message_text
+        assert str(summary.users_added) in message_text
 
     @settings(max_examples=100)
     @given(summary=sync_summary_strategy())
@@ -471,22 +421,17 @@ class TestSyncSummaryNotification:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = notify_sync_summary(mock_client, summary, channel_id="C12345")
 
-            result = notify_sync_summary(mock_client, summary)
+        assert result.success is True
 
-            assert result.success is True
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            if summary.errors:
-                assert ":warning:" in message_text or "Error" in message_text
-            else:
-                assert ":white_check_mark:" in message_text or "Successfully" in message_text
+        if summary.errors:
+            assert ":warning:" in message_text or "Error" in message_text
+        else:
+            assert ":white_check_mark:" in message_text or "Successfully" in message_text
 
 
 class TestSendNotificationForAction:
@@ -502,19 +447,14 @@ class TestSendNotificationForAction:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = send_notification_for_action(mock_client, action, channel_id="C12345")
 
-            result = send_notification_for_action(mock_client, action)
+        assert result.success is True
 
-            assert result.success is True
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            assert "User Added to Group" in message_text
+        assert "User Added to Group" in message_text
 
     @settings(max_examples=100)
     @given(action=warn_action_strategy())
@@ -526,19 +466,14 @@ class TestSendNotificationForAction:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = send_notification_for_action(mock_client, action, channel_id="C12345")
 
-            result = send_notification_for_action(mock_client, action)
+        assert result.success is True
 
-            assert result.success is True
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            assert "Manual Assignment Detected" in message_text
+        assert "Manual Assignment Detected" in message_text
 
     @settings(max_examples=100)
     @given(action=remove_action_strategy())
@@ -550,16 +485,11 @@ class TestSendNotificationForAction:
         mock_client = MagicMock()
         mock_client.chat_postMessage.return_value = {"ok": True}
 
-        with patch("sync_notifications.get_config") as mock_get_config:
-            mock_cfg = MagicMock()
-            mock_get_config.return_value = mock_cfg
-            mock_cfg.slack_channel_id = "C12345"
+        result = send_notification_for_action(mock_client, action, channel_id="C12345")
 
-            result = send_notification_for_action(mock_client, action)
+        assert result.success is True
 
-            assert result.success is True
+        call_kwargs = mock_client.chat_postMessage.call_args[1]
+        message_text = call_kwargs["text"]
 
-            call_kwargs = mock_client.chat_postMessage.call_args[1]
-            message_text = call_kwargs["text"]
-
-            assert "Manual Assignment Removed" in message_text
+        assert "Manual Assignment Removed" in message_text

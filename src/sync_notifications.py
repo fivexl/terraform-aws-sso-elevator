@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from config import get_config, get_logger
+from config import get_logger
 
 if TYPE_CHECKING:
     from slack_sdk import WebClient
@@ -48,7 +48,7 @@ def format_attributes(attributes: dict[str, str] | None) -> str:
 def notify_user_added_to_group(
     slack_client: WebClient,
     action: SyncAction,
-    channel_id: str | None = None,
+    channel_id: str,
 ) -> SyncNotificationResult:
     """Send Slack notification when a user is added to a group via attribute sync.
 
@@ -58,13 +58,12 @@ def notify_user_added_to_group(
     Args:
         slack_client: Slack WebClient instance.
         action: The SyncAction describing the add operation.
-        channel_id: Optional channel ID override (defaults to config).
+        channel_id: Slack channel ID to send the notification to.
 
     Returns:
         SyncNotificationResult indicating success or failure.
     """
-    cfg = get_config()
-    target_channel = channel_id or cfg.slack_channel_id
+    target_channel = channel_id
 
     attrs_display = format_attributes(action.matched_attributes)
     text = (
@@ -90,7 +89,7 @@ def notify_user_added_to_group(
 def notify_manual_assignment_detected(
     slack_client: WebClient,
     action: SyncAction,
-    channel_id: str | None = None,
+    channel_id: str,
 ) -> SyncNotificationResult:
     """Send Slack notification when a manual assignment is detected.
 
@@ -100,13 +99,12 @@ def notify_manual_assignment_detected(
     Args:
         slack_client: Slack WebClient instance.
         action: The SyncAction describing the manual assignment.
-        channel_id: Optional channel ID override (defaults to config).
+        channel_id: Slack channel ID to send the notification to.
 
     Returns:
         SyncNotificationResult indicating success or failure.
     """
-    cfg = get_config()
-    target_channel = channel_id or cfg.slack_channel_id
+    target_channel = channel_id
 
     expected_attrs = format_attributes(action.matched_attributes)
     text = (
@@ -133,7 +131,7 @@ def notify_manual_assignment_detected(
 def notify_manual_assignment_removed(
     slack_client: WebClient,
     action: SyncAction,
-    channel_id: str | None = None,
+    channel_id: str,
 ) -> SyncNotificationResult:
     """Send Slack notification when a manual assignment is removed.
 
@@ -143,13 +141,12 @@ def notify_manual_assignment_removed(
     Args:
         slack_client: Slack WebClient instance.
         action: The SyncAction describing the removal.
-        channel_id: Optional channel ID override (defaults to config).
+        channel_id: Slack channel ID to send the notification to.
 
     Returns:
         SyncNotificationResult indicating success or failure.
     """
-    cfg = get_config()
-    target_channel = channel_id or cfg.slack_channel_id
+    target_channel = channel_id
 
     expected_attrs = format_attributes(action.matched_attributes)
     text = (
@@ -177,7 +174,7 @@ def notify_sync_error(
     slack_client: WebClient,
     error_message: str,
     error_count: int = 1,
-    channel_id: str | None = None,
+    channel_id: str = "",
 ) -> SyncNotificationResult:
     """Send Slack notification when sync operation encounters errors.
 
@@ -187,13 +184,12 @@ def notify_sync_error(
         slack_client: Slack WebClient instance.
         error_message: Description of the error(s).
         error_count: Number of errors encountered.
-        channel_id: Optional channel ID override (defaults to config).
+        channel_id: Slack channel ID to send the notification to.
 
     Returns:
         SyncNotificationResult indicating success or failure.
     """
-    cfg = get_config()
-    target_channel = channel_id or cfg.slack_channel_id
+    target_channel = channel_id
 
     text = f":rotating_light: *Attribute Sync: Error Encountered*\n• Error Count: {error_count}\n• Details: {error_message}"
 
@@ -225,20 +221,19 @@ class SyncSummary:
 def notify_sync_summary(
     slack_client: WebClient,
     summary: SyncSummary,
-    channel_id: str | None = None,
+    channel_id: str = "",
 ) -> SyncNotificationResult:
     """Send Slack notification with sync operation summary.
 
     Args:
         slack_client: Slack WebClient instance.
         summary: SyncSummary with operation statistics.
-        channel_id: Optional channel ID override (defaults to config).
+        channel_id: Slack channel ID to send the notification to.
 
     Returns:
         SyncNotificationResult indicating success or failure.
     """
-    cfg = get_config()
-    target_channel = channel_id or cfg.slack_channel_id
+    target_channel = channel_id
 
     # Determine emoji based on errors
     if summary.errors:
@@ -280,7 +275,7 @@ def notify_sync_summary(
 def send_notification_for_action(
     slack_client: WebClient,
     action: SyncAction,
-    channel_id: str | None = None,
+    channel_id: str,
 ) -> SyncNotificationResult:
     """Send appropriate Slack notification based on action type.
 
@@ -290,7 +285,7 @@ def send_notification_for_action(
     Args:
         slack_client: Slack WebClient instance.
         action: The SyncAction to notify about.
-        channel_id: Optional channel ID override (defaults to config).
+        channel_id: Slack channel ID to send the notification to.
 
     Returns:
         SyncNotificationResult indicating success or failure.
