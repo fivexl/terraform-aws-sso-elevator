@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 import cache as cache_module
+from attribute_mapper import mask_email
 from config import get_logger
 
 if TYPE_CHECKING:
@@ -19,6 +20,31 @@ if TYPE_CHECKING:
     from attribute_mapper import AttributeMapper
 
 logger = get_logger(service="sync_state")
+
+# Attributes to exclude from logging (PII)
+_SENSITIVE_ATTRIBUTES = frozenset(
+    {
+        "givenName",
+        "familyName",
+        "middleName",
+        "honorificPrefix",
+        "honorificSuffix",
+        "displayName",
+        "nickName",
+    }
+)
+
+
+def _filter_sensitive_attributes(attributes: dict[str, str]) -> dict[str, str]:
+    """Filter out sensitive attributes (names) from logging.
+
+    Args:
+        attributes: User attributes dictionary.
+
+    Returns:
+        Filtered dictionary without sensitive attributes.
+    """
+    return {k: v for k, v in attributes.items() if k not in _SENSITIVE_ATTRIBUTES}
 
 
 @dataclass(frozen=True)
@@ -143,11 +169,12 @@ class SyncStateManager:
             # Compute desired members for this group
             desired_members: set[str] = set()
             for user in users:
-                logger.debug(f"Evaluating user '{user.email}' (id={user.user_id}) with attributes: {user.attributes}")
+                safe_attrs = _filter_sensitive_attributes(user.attributes)
+                logger.debug(f"Evaluating user '{mask_email(user.email)}' (id={user.user_id}) with attributes: {safe_attrs}")
                 target_groups = self._mapper.get_target_groups_for_user(user.attributes)
                 if group_id in target_groups:
                     desired_members.add(user.user_id)
-                    logger.debug(f"User '{user.email}' matches rules for group '{group_name}'")
+                    logger.debug(f"User '{mask_email(user.email)}' matches rules for group '{group_name}'")
 
             # Log summary for this group
             logger.info(f"Group '{group_name}': current_members={len(state.current_members)}, desired_members={len(desired_members)}")
@@ -159,9 +186,10 @@ class SyncStateManager:
                 if user:
                     matched_attrs = self._get_matched_attributes(user.attributes, rule)
                     expected_attrs = self._get_expected_attributes(rule) if rule else None
+                    safe_attrs = _filter_sensitive_attributes(user.attributes)
                     logger.info(
-                        f"ADD action: user '{user.email}' to group '{group_name}' - "
-                        f"user_attributes={user.attributes}, "
+                        f"ADD action: user '{mask_email(user.email)}' to group '{group_name}' - "
+                        f"user_attributes={safe_attrs}, "
                         f"rule_expected={expected_attrs}, "
                         f"matched_attributes={matched_attrs}"
                     )
@@ -191,9 +219,10 @@ class SyncStateManager:
                         action_type = "warn"
                         reason = f"User does not match attribute rules for group '{group_name}' (manual assignment detected)"
 
+                    safe_attrs = _filter_sensitive_attributes(user.attributes)
                     logger.info(
-                        f"{action_type.upper()} action: user '{user.email}' in group '{group_name}' - "
-                        f"user_attributes={user.attributes}, "
+                        f"{action_type.upper()} action: user '{mask_email(user.email)}' in group '{group_name}' - "
+                        f"user_attributes={safe_attrs}, "
                         f"rule_expected={expected_attrs}, "
                         f"policy={self._manual_assignment_policy}"
                     )

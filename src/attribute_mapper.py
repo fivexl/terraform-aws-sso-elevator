@@ -11,6 +11,37 @@ from config import get_logger
 logger = get_logger(service="attribute_mapper")
 
 
+_EMAIL_MASK_PREFIX_LEN = 5
+_EMAIL_MASK_SUFFIX_LEN = 5
+_EMAIL_MIN_LENGTH_FOR_MASKING = _EMAIL_MASK_PREFIX_LEN + _EMAIL_MASK_SUFFIX_LEN
+
+
+def mask_email(email: str) -> str:
+    """Mask email for logging - show first 5 and last 5 characters only.
+
+    Args:
+        email: The email address to mask.
+
+    Returns:
+        Masked email like "john.*****.com" or original if too short.
+    """
+    if len(email) <= _EMAIL_MIN_LENGTH_FOR_MASKING:
+        return email
+    return f"{email[:_EMAIL_MASK_PREFIX_LEN]}*****{email[-_EMAIL_MASK_SUFFIX_LEN:]}"
+
+
+def _normalize_for_comparison(value: str | None) -> str:
+    """Normalize a value for case-insensitive comparison.
+
+    Args:
+        value: The value to normalize.
+
+    Returns:
+        Lowercase version of the value, or empty string if None.
+    """
+    return value.lower() if value else ""
+
+
 @dataclass(frozen=True)
 class AttributeCondition:
     """Single attribute condition (e.g., department = "Engineering").
@@ -23,17 +54,25 @@ class AttributeCondition:
     expected_value: str
 
     def matches(self, user_attributes: dict[str, str]) -> bool:
-        """Check if user attributes satisfy this condition.
+        """Check if user attributes satisfy this condition (case-insensitive).
 
         Args:
             user_attributes: Dictionary of user attribute name to value.
 
         Returns:
-            True if the user has the attribute and it exactly matches
-            the expected value, False otherwise.
+            True if the user has the attribute and it matches
+            the expected value (case-insensitive), False otherwise.
         """
-        actual_value = user_attributes.get(self.attribute_name)
-        return actual_value == self.expected_value
+        # Case-insensitive attribute name lookup
+        normalized_attr_name = _normalize_for_comparison(self.attribute_name)
+        actual_value = None
+        for attr_name, attr_value in user_attributes.items():
+            if _normalize_for_comparison(attr_name) == normalized_attr_name:
+                actual_value = attr_value
+                break
+
+        # Case-insensitive value comparison
+        return _normalize_for_comparison(actual_value) == _normalize_for_comparison(self.expected_value)
 
 
 @dataclass(frozen=True)
@@ -63,14 +102,23 @@ class AttributeMappingRule:
 
         all_match = True
         for condition in self.conditions:
-            actual_value = user_attributes.get(condition.attribute_name)
-            condition_matches = actual_value == condition.expected_value
+            # Case-insensitive attribute name lookup
+            normalized_attr_name = _normalize_for_comparison(condition.attribute_name)
+            actual_value = None
+            for attr_name, attr_value in user_attributes.items():
+                if _normalize_for_comparison(attr_name) == normalized_attr_name:
+                    actual_value = attr_value
+                    break
+
+            # Case-insensitive value comparison
+            condition_matches = _normalize_for_comparison(actual_value) == _normalize_for_comparison(condition.expected_value)
             if not condition_matches:
                 all_match = False
                 logger.debug(
                     f"Condition mismatch for group '{self.group_name}': "
                     f"attribute '{condition.attribute_name}' - "
-                    f"expected '{condition.expected_value}', got '{actual_value}'"
+                    f"expected '{condition.expected_value}' (normalized: '{_normalize_for_comparison(condition.expected_value)}'), "
+                    f"got '{actual_value}' (normalized: '{_normalize_for_comparison(actual_value)}')"
                 )
 
         return all_match
