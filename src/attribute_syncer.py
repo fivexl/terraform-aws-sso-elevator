@@ -47,6 +47,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(service="attribute_syncer")
 
+# Module-level boto3 clients for better Lambda cold start performance
+# These are initialized once per container and reused across invocations
+_identity_store_client: IdentityStoreClient = boto3.client("identitystore")
+_s3_client: S3Client = boto3.client("s3")
+
 
 @dataclass
 class SyncOperationResult:
@@ -479,9 +484,7 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
             "body": {"message": "Attribute sync is disabled", "success": True},
         }
 
-    # Initialize clients
-    identity_store_client: IdentityStoreClient = boto3.client("identitystore")
-    s3_client: S3Client = boto3.client("s3")
+    # Initialize Slack client (token may change, so not module-level)
     slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
     slack_client = WebClient(token=slack_bot_token)
 
@@ -507,11 +510,11 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
     audit_bucket_name = os.environ.get("S3_BUCKET_FOR_AUDIT_ENTRY_NAME", "")
     audit_bucket_prefix = os.environ.get("S3_BUCKET_PREFIX_FOR_PARTITIONS", "audit")
 
-    # Create sync context
+    # Create sync context using module-level boto3 clients
     ctx = SyncContext(
-        identity_store_client=identity_store_client,
+        identity_store_client=_identity_store_client,
         identity_store_id=identity_store_id,
-        s3_client=s3_client,
+        s3_client=_s3_client,
         slack_client=slack_client,
         config=config,
         cache_config=cache_config,

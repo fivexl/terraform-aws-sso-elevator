@@ -132,9 +132,21 @@ class AttributeMapper:
 
         Args:
             rules: List of attribute mapping rules to evaluate against.
+
+        Note:
+            If multiple rules exist for the same group, only the last rule
+            is used for audit logging purposes. All rules are still evaluated
+            for membership determination.
         """
         self._rules = rules
-        self._rules_by_group: dict[str, AttributeMappingRule] = {rule.group_id: rule for rule in rules}
+        self._rules_by_group: dict[str, AttributeMappingRule] = {}
+        for rule in rules:
+            if rule.group_id in self._rules_by_group:
+                logger.warning(
+                    f"Multiple rules configured for group '{rule.group_name}' ({rule.group_id}). "
+                    f"Only the last rule will be used for audit logging."
+                )
+            self._rules_by_group[rule.group_id] = rule
 
     @property
     def rules(self) -> list[AttributeMappingRule]:
