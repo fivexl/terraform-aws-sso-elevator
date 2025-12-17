@@ -1809,3 +1809,545 @@ class TestPolicyBasedRemovalBehavior:
             user_actions = [a for a in actions if a.user_id == u.user_id]
             assert len(user_actions) == 1, f"User {u.user_id} should have exactly one action"
             assert user_actions[0].action_type == "remove", f"User {u.user_id} should have remove action"
+
+
+class TestManagedGroupIsolation:
+    """
+    **Feature: attribute-based-group-sync, Property 6: Managed group isolation**
+    **Validates: Requirements 10.4**
+
+    For any group not in the managed groups list, the system should perform
+    no operations (no adds, removes, or monitoring).
+    """
+
+    @settings(max_examples=100)
+    @given(
+        data=matching_user_and_rule_strategy(),
+        non_managed_group_id=group_id_strategy,
+        non_managed_group_name=group_name_strategy,
+    )
+    def test_non_managed_group_receives_no_add_actions(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+        non_managed_group_id: str,
+        non_managed_group_name: str,
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 6: Managed group isolation**
+        **Validates: Requirements 10.4**
+
+        For any group not in the managed groups list, even if users match rules
+        for that group, no add actions should be generated.
+        """
+        user, rule, managed_group_id = data
+
+        # Ensure non-managed group is different from managed group
+        assume(non_managed_group_id != managed_group_id)
+        assume(non_managed_group_name != rule.group_name)
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: managed_group_id},  # Only managed group
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # Include both managed and non-managed groups in current state
+        current_state = {
+            managed_group_id: GroupMembershipState(
+                group_id=managed_group_id,
+                group_name=rule.group_name,
+                current_members=frozenset(),
+            ),
+            non_managed_group_id: GroupMembershipState(
+                group_id=non_managed_group_id,
+                group_name=non_managed_group_name,
+                current_members=frozenset(),
+            ),
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # Actions should only be for the managed group
+        non_managed_actions = [a for a in actions if a.group_id == non_managed_group_id]
+        assert len(non_managed_actions) == 0, "Non-managed group should receive no actions"
+
+        # Managed group should still receive appropriate actions
+        managed_actions = [a for a in actions if a.group_id == managed_group_id]
+        assert len(managed_actions) == 1, "Managed group should receive add action"
+        assert managed_actions[0].action_type == "add"
+
+    @settings(max_examples=100)
+    @given(
+        data=non_matching_user_and_rule_strategy(),
+        non_managed_group_id=group_id_strategy,
+        non_managed_group_name=group_name_strategy,
+    )
+    def test_non_managed_group_receives_no_remove_or_warn_actions(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+        non_managed_group_id: str,
+        non_managed_group_name: str,
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 6: Managed group isolation**
+        **Validates: Requirements 10.4**
+
+        For any group not in the managed groups list, even if users in that group
+        don't match rules, no remove or warn actions should be generated.
+        """
+        user, rule, managed_group_id = data
+
+        # Ensure non-managed group is different from managed group
+        assume(non_managed_group_id != managed_group_id)
+        assume(non_managed_group_name != rule.group_name)
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: managed_group_id},  # Only managed group
+            mapper=mapper,
+            manual_assignment_policy="remove",  # Even with remove policy
+        )
+
+        # User is in the non-managed group (but not in managed group)
+        current_state = {
+            managed_group_id: GroupMembershipState(
+                group_id=managed_group_id,
+                group_name=rule.group_name,
+                current_members=frozenset(),
+            ),
+            non_managed_group_id: GroupMembershipState(
+                group_id=non_managed_group_id,
+                group_name=non_managed_group_name,
+                current_members=frozenset([user.user_id]),  # User in non-managed group
+            ),
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # No actions should be generated for the non-managed group
+        non_managed_actions = [a for a in actions if a.group_id == non_managed_group_id]
+        assert len(non_managed_actions) == 0, "Non-managed group should receive no actions"
+
+    @settings(max_examples=100)
+    @given(
+        user=user_info_strategy(),
+        non_managed_group_ids=st.lists(group_id_strategy, min_size=1, max_size=5, unique=True),
+    )
+    def test_completely_non_managed_state_produces_no_actions(
+        self,
+        user: UserInfo,
+        non_managed_group_ids: list[str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 6: Managed group isolation**
+        **Validates: Requirements 10.4**
+
+        When the current state contains only non-managed groups, no actions
+        should be generated regardless of user attributes or group membership.
+        """
+        # Create a rule for a managed group that doesn't exist in current state
+        managed_group_id = "managed-group-id-not-in-state"
+        managed_group_name = "ManagedGroup"
+
+        # Ensure managed group ID is not in non_managed_group_ids
+        assume(managed_group_id not in non_managed_group_ids)
+
+        rule = AttributeMappingRule(
+            group_name=managed_group_name,
+            group_id=managed_group_id,
+            conditions=(AttributeCondition(attribute_name="department", expected_value="Engineering"),),
+        )
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={managed_group_name: managed_group_id},
+            mapper=mapper,
+            manual_assignment_policy="remove",
+        )
+
+        # Current state contains only non-managed groups with user as member
+        current_state = {
+            gid: GroupMembershipState(
+                group_id=gid,
+                group_name=f"NonManaged_{i}",
+                current_members=frozenset([user.user_id]),
+            )
+            for i, gid in enumerate(non_managed_group_ids)
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # No actions should be generated for any non-managed group
+        assert len(actions) == 0, "No actions should be generated when only non-managed groups exist in state"
+
+    @settings(max_examples=100)
+    @given(
+        matching_data=matching_user_and_rule_strategy(),
+        non_managed_group_ids=st.lists(group_id_strategy, min_size=1, max_size=3, unique=True),
+    )
+    def test_managed_group_actions_not_affected_by_non_managed_groups(
+        self,
+        matching_data: tuple[UserInfo, AttributeMappingRule, str],
+        non_managed_group_ids: list[str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 6: Managed group isolation**
+        **Validates: Requirements 10.4**
+
+        The presence of non-managed groups in the current state should not
+        affect the actions generated for managed groups.
+        """
+        user, rule, managed_group_id = matching_data
+
+        # Ensure non-managed group IDs are different from managed group
+        assume(managed_group_id not in non_managed_group_ids)
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: managed_group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # State with only managed group
+        state_managed_only = {
+            managed_group_id: GroupMembershipState(
+                group_id=managed_group_id,
+                group_name=rule.group_name,
+                current_members=frozenset(),
+            ),
+        }
+
+        # State with managed group + non-managed groups
+        state_with_non_managed = {
+            managed_group_id: GroupMembershipState(
+                group_id=managed_group_id,
+                group_name=rule.group_name,
+                current_members=frozenset(),
+            ),
+            **{
+                gid: GroupMembershipState(
+                    group_id=gid,
+                    group_name=f"NonManaged_{i}",
+                    current_members=frozenset([user.user_id]),  # User in non-managed groups
+                )
+                for i, gid in enumerate(non_managed_group_ids)
+            },
+        }
+
+        actions_managed_only = manager.compute_sync_actions([user], state_managed_only)
+        actions_with_non_managed = manager.compute_sync_actions([user], state_with_non_managed)
+
+        # Filter to only managed group actions
+        managed_actions_only = [a for a in actions_managed_only if a.group_id == managed_group_id]
+        managed_actions_with = [a for a in actions_with_non_managed if a.group_id == managed_group_id]
+
+        # Actions for managed group should be the same regardless of non-managed groups
+        assert len(managed_actions_only) == len(managed_actions_with)
+        for a1, a2 in zip(managed_actions_only, managed_actions_with, strict=False):
+            assert a1.action_type == a2.action_type
+            assert a1.user_id == a2.user_id
+            assert a1.group_id == a2.group_id
+
+
+class TestManagedGroupProcessingCompleteness:
+    """
+    **Feature: attribute-based-group-sync, Property 7: Managed group processing completeness**
+    **Validates: Requirements 10.2, 10.3**
+
+    For any group in the managed groups list, the system should evaluate all users
+    against rules and monitor for manual assignments.
+    """
+
+    @settings(max_examples=100)
+    @given(
+        matching_data=matching_user_and_rule_strategy(),
+        additional_users=st.lists(user_info_strategy(), min_size=1, max_size=5),
+    )
+    def test_all_users_evaluated_against_managed_group_rules(
+        self,
+        matching_data: tuple[UserInfo, AttributeMappingRule, str],
+        additional_users: list[UserInfo],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 7: Managed group processing completeness**
+        **Validates: Requirements 10.2**
+
+        For any managed group, all users should be evaluated against the rules
+        to determine if they should be added.
+        """
+        matching_user, rule, group_id = matching_data
+
+        # Ensure unique user IDs
+        all_user_ids = {matching_user.user_id} | {u.user_id for u in additional_users}
+        assume(len(all_user_ids) == 1 + len(additional_users))
+
+        all_users = [matching_user] + additional_users
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # Empty group - all matching users should get add actions
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset(),
+            ),
+        }
+
+        actions = manager.compute_sync_actions(all_users, current_state)
+
+        # Count how many users actually match the rule
+        matching_users = [u for u in all_users if rule.matches(u.attributes)]
+
+        # Each matching user should have an add action
+        add_actions = [a for a in actions if a.action_type == "add"]
+        add_user_ids = {a.user_id for a in add_actions}
+
+        for user in matching_users:
+            assert user.user_id in add_user_ids, f"Matching user {user.user_id} should have add action"
+
+    @settings(max_examples=100)
+    @given(
+        data=non_matching_user_and_rule_strategy(),
+        additional_non_matching_users=st.lists(user_info_strategy(), min_size=1, max_size=3),
+    )
+    def test_all_manual_assignments_detected_in_managed_group(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+        additional_non_matching_users: list[UserInfo],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 7: Managed group processing completeness**
+        **Validates: Requirements 10.3**
+
+        For any managed group, all users who are members but don't match rules
+        should be detected as manual assignments.
+        """
+        user, rule, group_id = data
+
+        # Ensure unique user IDs and none match the rule
+        all_non_matching = [user] + [
+            u for u in additional_non_matching_users if u.user_id != user.user_id and not rule.matches(u.attributes)
+        ]
+
+        # Need at least the original user
+        assume(len(all_non_matching) >= 1)
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # All non-matching users are in the group
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset(u.user_id for u in all_non_matching),
+            ),
+        }
+
+        actions = manager.compute_sync_actions(all_non_matching, current_state)
+
+        # Each non-matching user should have a warn action
+        warn_actions = [a for a in actions if a.action_type == "warn"]
+        warn_user_ids = {a.user_id for a in warn_actions}
+
+        for user in all_non_matching:
+            assert user.user_id in warn_user_ids, f"Non-matching user {user.user_id} should be detected as manual assignment"
+
+    @settings(max_examples=100)
+    @given(
+        managed_groups=st.lists(
+            st.tuples(group_name_strategy, group_id_strategy),
+            min_size=2,
+            max_size=4,
+            unique_by=lambda x: x[1],  # Unique by group_id
+        ),
+        user=user_info_strategy(),
+    )
+    def test_all_managed_groups_processed(
+        self,
+        managed_groups: list[tuple[str, str]],
+        user: UserInfo,
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 7: Managed group processing completeness**
+        **Validates: Requirements 10.2, 10.3**
+
+        For any set of managed groups, all of them should be processed
+        during a sync operation.
+        """
+        # Ensure unique group names
+        group_names = [g[0] for g in managed_groups]
+        assume(len(set(group_names)) == len(group_names))
+
+        # Create rules for each managed group with different attribute requirements
+        attr_values = ["Engineering", "Sales", "HR", "Finance", "Marketing"]
+        rules = []
+        for i, (group_name, group_id) in enumerate(managed_groups):
+            rules.append(
+                AttributeMappingRule(
+                    group_name=group_name,
+                    group_id=group_id,
+                    conditions=(
+                        AttributeCondition(
+                            attribute_name="department",
+                            expected_value=attr_values[i % len(attr_values)],
+                        ),
+                    ),
+                )
+            )
+
+        managed_group_ids = dict(managed_groups)
+
+        mapper = AttributeMapper(rules)
+        manager = SyncStateManager(
+            managed_group_ids=managed_group_ids,
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # User is in all managed groups
+        current_state = {
+            gid: GroupMembershipState(
+                group_id=gid,
+                group_name=name,
+                current_members=frozenset([user.user_id]),
+            )
+            for name, gid in managed_groups
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # Each managed group should have been processed
+        # (user will either match and have no action, or not match and have warn action)
+        processed_group_ids = set()
+        for action in actions:
+            processed_group_ids.add(action.group_id)
+
+        # For groups where user doesn't match, there should be a warn action
+        for name, gid in managed_groups:
+            rule = next(r for r in rules if r.group_id == gid)
+            if not rule.matches(user.attributes):
+                assert gid in processed_group_ids, f"Managed group {name} should be processed"
+
+    @settings(max_examples=100)
+    @given(
+        matching_data=matching_user_and_rule_strategy(),
+        non_matching_data=non_matching_user_and_rule_strategy(),
+    )
+    def test_managed_group_handles_mixed_membership(
+        self,
+        matching_data: tuple[UserInfo, AttributeMappingRule, str],
+        non_matching_data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 7: Managed group processing completeness**
+        **Validates: Requirements 10.2, 10.3**
+
+        For any managed group with mixed membership (some matching, some not),
+        the system should correctly handle both cases.
+        """
+        matching_user, rule, group_id = matching_data
+        non_matching_user, _, _ = non_matching_data
+
+        # Ensure different user IDs
+        assume(matching_user.user_id != non_matching_user.user_id)
+
+        # Ensure non_matching_user doesn't match the rule
+        assume(not rule.matches(non_matching_user.attributes))
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # Both users are in the group
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([matching_user.user_id, non_matching_user.user_id]),
+            ),
+        }
+
+        actions = manager.compute_sync_actions([matching_user, non_matching_user], current_state)
+
+        # Matching user should have no actions (already correctly in group)
+        matching_actions = [a for a in actions if a.user_id == matching_user.user_id]
+        assert len(matching_actions) == 0, "Matching user should have no actions"
+
+        # Non-matching user should have warn action (manual assignment)
+        non_matching_actions = [a for a in actions if a.user_id == non_matching_user.user_id]
+        assert len(non_matching_actions) == 1, "Non-matching user should have one action"
+        assert non_matching_actions[0].action_type == "warn", "Non-matching user should have warn action"
+
+    @settings(max_examples=100)
+    @given(
+        data=matching_user_and_rule_strategy(),
+        users_not_in_group=st.lists(user_info_strategy(), min_size=1, max_size=3),
+    )
+    def test_managed_group_adds_all_matching_users_not_in_group(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+        users_not_in_group: list[UserInfo],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 7: Managed group processing completeness**
+        **Validates: Requirements 10.2**
+
+        For any managed group, all users who match rules but are not in the group
+        should receive add actions.
+        """
+        matching_user, rule, group_id = data
+
+        # Create additional users that match the rule
+        matching_users = [matching_user]
+        for u in users_not_in_group:
+            if u.user_id != matching_user.user_id:
+                # Give them attributes that match the rule
+                matching_attrs = {cond.attribute_name: cond.expected_value for cond in rule.conditions}
+                matching_users.append(
+                    UserInfo(
+                        user_id=u.user_id,
+                        email=u.email,
+                        attributes=matching_attrs,
+                    )
+                )
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # Empty group
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset(),
+            ),
+        }
+
+        actions = manager.compute_sync_actions(matching_users, current_state)
+
+        # All matching users should have add actions
+        add_actions = [a for a in actions if a.action_type == "add"]
+        add_user_ids = {a.user_id for a in add_actions}
+
+        for user in matching_users:
+            assert user.user_id in add_user_ids, f"Matching user {user.user_id} should have add action"

@@ -132,16 +132,16 @@
   - **Property 18: Error resilience**
   - **Validates: Requirements 5.5, 8.1, 8.2, 8.3, 8.4, 8.5**
 
-- [ ] 11. Implement managed group isolation
+- [x] 11. Implement managed group isolation
   - Ensure only managed groups are processed
   - Ensure non-managed groups are completely ignored
   - _Requirements: 10.2, 10.3, 10.4_
 
-- [ ] 11.1 Write property test for managed group isolation
+- [x] 11.1 Write property test for managed group isolation
   - **Property 6: Managed group isolation**
   - **Validates: Requirements 10.4**
 
-- [ ] 11.2 Write property test for managed group processing completeness
+- [x] 11.2 Write property test for managed group processing completeness
   - **Property 7: Managed group processing completeness**
   - **Validates: Requirements 10.2, 10.3**
 
