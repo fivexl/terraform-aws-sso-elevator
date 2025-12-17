@@ -53,6 +53,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install trivy -y
 
+      - name: Debug codespell issue
+        run: |
+          echo "=== Current commit ==="
+          git log -1 --oneline
+          echo "=== Line 390 of README.md ==="
+          sed -n '385,395p' README.md
+          echo "=== Searching for typo in all files ==="
+          grep -rn "avaialble" . --include="*.md" --include="*.tf" || echo "Typo not found"
+          echo "=== Running codespell directly with verbose output ==="
+          pip install codespell
+          codespell --version
+          codespell -d README.md || true
+          echo "=== Running codespell on all files ==="
+          codespell -d . --skip=".git,*.lock,*.pyc,__pycache__,.venv,.terraform" || true
+
       - name: Run tests
         run: bash run-tests.sh
 
