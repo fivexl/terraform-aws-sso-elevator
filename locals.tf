@@ -46,6 +46,10 @@ locals {
     var.attribute_sync_enabled && length(var.attribute_sync_rules) == 0 ?
     ["attribute_sync_rules must not be empty when attribute_sync_enabled is true"] : [],
 
+    # Validate identity_store_id is provided when sso_instance_arn is provided
+    var.attribute_sync_enabled && var.sso_instance_arn != "" && var.identity_store_id == "" ?
+    ["identity_store_id must be provided when sso_instance_arn is provided and attribute_sync_enabled is true"] : [],
+
     # Validate all rules reference managed groups
     [for rule in var.attribute_sync_rules :
       "Rule for group '${rule.group_name}' references a group not in attribute_sync_managed_groups list"
