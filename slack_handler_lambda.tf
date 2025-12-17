@@ -1,18 +1,19 @@
 module "access_requester_slack_handler" {
   source  = "terraform-aws-modules/lambda/aws"
-  version = "7.19.0"
+  version = "8.1.2"
 
   function_name = var.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"
 
-  publish     = true
-  timeout     = var.lambda_timeout
-  memory_size = var.lambda_memory_size
+  publish       = true
+  timeout       = var.lambda_timeout
+  memory_size   = var.lambda_memory_size
+  architectures = [var.lambda_architecture]
 
   # Pull image from ecr
   package_type   = var.use_pre_created_image ? "Image" : "Zip"
   create_package = var.use_pre_created_image ? false : true
-  image_uri      = var.use_pre_created_image ? "${var.ecr_owner_account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/${var.ecr_repo_name}:requester-${var.ecr_repo_tag}" : null
+  image_uri      = var.use_pre_created_image ? "${var.ecr_owner_account_id}.dkr.ecr.${data.aws_region.current.region}.amazonaws.com/${var.ecr_repo_name}:requester-${var.ecr_repo_tag}" : null
 
   # Build zip from source code using Docker
   hash_extra      = var.use_pre_created_image ? "" : var.requester_lambda_name
@@ -255,7 +256,7 @@ module "http_api" {
   routes = {
     "POST ${local.api_resource_path}" : {
       integration = {
-        uri  = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+        uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
         type = "AWS_PROXY"
       }
       throttling_burst_limit = var.api_gateway_throttling_burst_limit

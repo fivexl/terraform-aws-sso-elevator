@@ -22,7 +22,7 @@ variable "ecr_repo_name" {
 variable "ecr_repo_tag" {
   description = "The tag of the image in the ECR repository."
   type        = string
-  default     = "4.0.0"
+  default     = "4.1.0"
 }
 
 variable "use_pre_created_image" {
@@ -346,6 +346,17 @@ variable "lambda_timeout" {
   default     = 30
 }
 
+variable "lambda_architecture" {
+  description = "The instruction set architecture for Lambda functions. Valid values are 'x86_64' or 'arm64'. Use 'arm64' for better price/performance on Graviton2."
+  type        = string
+  default     = "x86_64"
+
+  validation {
+    condition     = contains(["x86_64", "arm64"], var.lambda_architecture)
+    error_message = "lambda_architecture must be either 'x86_64' or 'arm64'"
+  }
+}
+
 variable "lambda_memory_size" {
   description = "Amount of memory in MB your Lambda Function can use at runtime. Valid value between 128 MB to 10,240 MB (10 GB), in 64 MB increments."
   type        = number
@@ -368,4 +379,89 @@ variable "config_bucket_kms_key_arn" {
   description = "ARN of the KMS key to use for config S3 bucket encryption. If not provided, uses AES256 encryption."
   type        = string
   default     = null
+}
+
+
+# ==========================================
+# Attribute Sync Variables
+# ==========================================
+
+variable "attribute_sync_enabled" {
+  description = "Enable attribute-based group sync feature. When enabled, users will be automatically added to groups based on their Identity Store attributes."
+  type        = bool
+  default     = false
+}
+
+variable "attribute_sync_managed_groups" {
+  description = "List of group names to manage via attribute sync. Only these groups will be monitored and modified by the sync process."
+  type        = list(string)
+  default     = []
+}
+
+variable "attribute_sync_rules" {
+  description = <<EOT
+Attribute mapping rules for group sync. Each rule specifies a group name and the attribute conditions that must be met for a user to be added to that group.
+Example:
+[
+  {
+    group_name = "Engineering"
+    attributes = {
+      department = "Engineering"
+      employeeType = "FullTime"
+    }
+  }
+]
+EOT
+  type = list(object({
+    group_name = string
+    attributes = map(string)
+  }))
+  default = []
+}
+
+variable "attribute_sync_manual_assignment_policy" {
+  description = "Policy for handling manual assignments (users in managed groups who don't match any rules): 'warn' only logs and notifies, 'remove' automatically removes them."
+  type        = string
+  default     = "warn"
+
+  validation {
+    condition     = contains(["warn", "remove"], var.attribute_sync_manual_assignment_policy)
+    error_message = "attribute_sync_manual_assignment_policy must be either 'warn' or 'remove'"
+  }
+}
+
+variable "attribute_sync_schedule" {
+  description = "Schedule expression for attribute sync (e.g., 'rate(1 hour)' or 'cron(0 * * * ? *)'). Determines how often the sync runs."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "attribute_sync_lambda_memory" {
+  description = "Memory allocation for attribute syncer Lambda (MB). Increase for large user/group sets."
+  type        = number
+  default     = 512
+}
+
+variable "attribute_sync_lambda_timeout" {
+  description = "Timeout for attribute syncer Lambda (seconds). Increase for large user/group sets."
+  type        = number
+  default     = 300
+}
+
+variable "attribute_syncer_lambda_name" {
+  description = "Name for the attribute syncer Lambda function."
+  type        = string
+  default     = "attribute-syncer"
+}
+
+variable "attribute_sync_event_rule_name" {
+  description = "Name for the EventBridge rule that triggers the attribute syncer."
+  type        = string
+  default     = "sso-elevator-attribute-sync"
+}
+
+variable "identity_store_id" {
+  description = "The Identity Store ID. If not provided and sso_instance_arn is also not provided, it will be automatically discovered."
+  type        = string
+  default     = ""
 }

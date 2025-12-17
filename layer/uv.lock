@@ -30,6 +30,34 @@ parser = [
 ]
 
 [[package]]
+name = "boto3"
+version = "1.42.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+    { name = "jmespath" },
+    { name = "s3transfer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/98/66/ffe9623d64e97800ff6bac26953cd9ef99410fb864a0b26a0ea2e09b97f0/boto3-1.42.12.tar.gz", hash = "sha256:649b134d25b278c24fcc8b3f94519de3884283b7848dc32f42b0ffdd9d19ce99", size = 112868, upload-time = "2025-12-17T20:30:42.394Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/8b/20a90c75499e3c3a8e3eb5607d930c723577ef8c64968b9be6b743f18158/boto3-1.42.12-py3-none-any.whl", hash = "sha256:8112e1beb5978bb455ea4b41a9ef26fc408f6340d8ff69ef93dded4f80fd53e9", size = 140573, upload-time = "2025-12-17T20:30:40.063Z" },
+]
+
+[[package]]
+name = "botocore"
+version = "1.42.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jmespath" },
+    { name = "python-dateutil" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/b6/9b7988a8476712cdbfeeb68c733933005465c85ebf0ee469a6ea5ca3415c/botocore-1.42.12.tar.gz", hash = "sha256:1f9f63c3d6bb1f768519da30d6018706443c5d8af5472274d183a4945f3d81f8", size = 14879004, upload-time = "2025-12-17T20:30:29.542Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/73/22764d0a17130b7d95b2a4104607e6db5487a0e5afb68f5691260ae9c3dc/botocore-1.42.12-py3-none-any.whl", hash = "sha256:4f163880350f6d831857ce5d023875b7c6534be862e5affd9fcf82b8d1ab3537", size = 14552878, upload-time = "2025-12-17T20:30:24.671Z" },
+]
+
+[[package]]
 name = "jmespath"
 version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -44,12 +72,14 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aws-lambda-powertools", extra = ["parser"] },
+    { name = "boto3" },
     { name = "slack-bolt" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", extras = ["parser"], specifier = ">=2.14.1" },
+    { name = "boto3", specifier = ">=1.35.0" },
     { name = "slack-bolt", specifier = ">=1.26.0" },
 ]
 
@@ -118,6 +148,39 @@ wheels = [
 ]
 
 [[package]]
+name = "python-dateutil"
+version = "2.9.0.post0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
+]
+
+[[package]]
+name = "s3transfer"
+version = "0.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/05/04/74127fc843314818edfa81b5540e26dd537353b123a4edc563109d8f17dd/s3transfer-0.16.0.tar.gz", hash = "sha256:8e990f13268025792229cd52fa10cb7163744bf56e719e0b9cb925ab79abf920", size = 153827, upload-time = "2025-12-01T02:30:59.114Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fc/51/727abb13f44c1fcf6d145979e1535a35794db0f6e450a0cb46aa24732fe2/s3transfer-0.16.0-py3-none-any.whl", hash = "sha256:18e25d66fed509e3868dc1572b3f427ff947dd2c56f844a5bf09481ad3f3b2fe", size = 86830, upload-time = "2025-12-01T02:30:57.729Z" },
+]
+
+[[package]]
+name = "six"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
 name = "slack-bolt"
 version = "1.26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -157,4 +220,13 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464", size = 75949, upload-time = "2025-10-01T02:14:41.687Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/9b/47798a6c91d8bdb567fe2698fe81e0c6b7cb7ef4d13da4114b41d239f65d/typing_inspection-0.4.2-py3-none-any.whl", hash = "sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7", size = 14611, upload-time = "2025-10-01T02:14:40.154Z" },
+]
+
+[[package]]
+name = "urllib3"
+version = "2.6.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/24/a2a2ed9addd907787d7aa0355ba36a6cadf1768b934c652ea78acbd59dcd/urllib3-2.6.2.tar.gz", hash = "sha256:016f9c98bb7e98085cb2b4b17b87d2c702975664e4f060c6532e64d1c1a5e797", size = 432930, upload-time = "2025-12-11T15:56:40.252Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6d/b9/4095b668ea3678bf6a0af005527f39de12fb026516fb3df17495a733b7f8/urllib3-2.6.2-py3-none-any.whl", hash = "sha256:ec21cddfe7724fc7cb4ba4bea7aa8e2ef36f607a4bab81aa6ce42a13dc3f03dd", size = 131182, upload-time = "2025-12-11T15:56:38.584Z" },
 ]

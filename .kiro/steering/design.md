@@ -24,11 +24,7 @@ When adding new configuration parameters:
 - Ensure consistency across all runtime environments
 
 ## External Tools & Resources
-
-- Use `strands-agents` MCP tool to access Strands Agents SDK documentation
 - Use AWS knowledge MCP tools for AWS service documentation and best practices
-- Review agent prompts using `.kiro/steering/prompt_engineering_guidelines.md` for best practices
-
 
 ## Testing
 

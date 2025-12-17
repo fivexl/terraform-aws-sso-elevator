@@ -17,6 +17,7 @@
 - [Introduction](#introduction)
 - [Functionality](#functionality)
   - [Group Assignments Mode](#group-assignments-mode)
+  - [Attribute-Based Group Sync](#attribute-based-group-sync)
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
 - [Module configuration, and features](#module-configuration-and-features)
   - [Configuration structure](#configuration-structure)
@@ -126,6 +127,206 @@ If you were using Terraform AWS SSO Elevator before version 2.0.0, you need to u
 }
 To disable this functionality, simply remove the shortcut from the manifest.
 
+
+## Attribute-Based Group Sync
+
+Starting from version 3.0, SSO Elevator introduces automatic user-to-group synchronization based on IAM Identity Center user attributes. This feature allows you to automatically add users to groups based on their organizational attributes (e.g., department, job title, cost center) without manual intervention.
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    EventBridge->>Lambda (attribute-syncer): Triggers on schedule (e.g., hourly)
+    Lambda (attribute-syncer)->>Identity Store: Query all users with attributes
+    Lambda (attribute-syncer)->>Identity Store: Query managed group memberships
+    Lambda (attribute-syncer)->>Lambda (attribute-syncer): Evaluate users against mapping rules
+    Lambda (attribute-syncer)->>Identity Store: Add users matching rules to groups
+    Lambda (attribute-syncer)->>Identity Store: Detect manual assignments
+    Lambda (attribute-syncer)->>S3 Bucket: Write audit entries
+    Lambda (attribute-syncer)->>Slack: Send notifications
+```
+
+The attribute syncer Lambda runs on a configurable schedule and:
+1. Reads attribute mapping rules from configuration
+2. Queries all users and their attributes from the Identity Store
+3. Evaluates users against mapping rules (exact string matching with AND logic)
+4. Adds users to groups when they match rules
+5. Detects manually-added users who don't match any rules
+6. Optionally removes manual assignments based on policy
+7. Logs all operations to the audit bucket
+8. Sends Slack notifications for important events
+
+### Configuration
+
+To enable attribute-based group sync, add the following to your Terraform configuration:
+
+```hcl
+module "aws_sso_elevator" {
+  # ... existing configuration ...
+
+  # Enable the feature
+  attribute_sync_enabled = true
+
+  # List of groups to manage (by name)
+  attribute_sync_managed_groups = [
+    "Engineering",
+    "Finance",
+    "DevOps",
+  ]
+
+  # Attribute mapping rules
+  attribute_sync_rules = [
+    {
+      group_name = "Engineering"
+      attributes = {
+        department   = "Engineering"
+        employeeType = "FullTime"
+      }
+    },
+    {
+      group_name = "Finance"
+      attributes = {
+        department = "Finance"
+      }
+    },
+    {
+      group_name = "DevOps"
+      attributes = {
+        department = "Engineering"
+        jobTitle   = "DevOps Engineer"
+      }
+    },
+  ]
+
+  # Policy for handling manual assignments: "warn" or "remove"
+  attribute_sync_manual_assignment_policy = "warn"
+
+  # How often to run the sync
+  attribute_sync_schedule = "rate(1 hour)"
+}
+```
+
+### Configuration Options
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `attribute_sync_enabled` | Enable/disable the feature | `false` |
+| `attribute_sync_managed_groups` | List of group names to manage | `[]` |
+| `attribute_sync_rules` | Attribute mapping rules | `[]` |
+| `attribute_sync_manual_assignment_policy` | Policy for manual assignments: `warn` or `remove` | `"warn"` |
+| `attribute_sync_schedule` | Schedule expression (e.g., `rate(1 hour)`) | `"rate(1 hour)"` |
+| `attribute_sync_lambda_memory` | Lambda memory in MB | `512` |
+| `attribute_sync_lambda_timeout` | Lambda timeout in seconds | `300` |
+
+### Attribute Mapping Rules
+
+Each rule specifies:
+- **group_name**: The name of the group to add users to (must be in `attribute_sync_managed_groups`)
+- **attributes**: A map of attribute conditions that must ALL match (AND logic)
+
+Supported attributes include any SCIM attributes in your Identity Store:
+- `department`
+- `employeeType`
+- `costCenter`
+- `jobTitle`
+- Custom attributes
+
+### Manual Assignment Policy
+
+When the syncer detects users in managed groups who don't match any rules:
+
+- **warn** (default): Logs a warning and sends a Slack notification, but does not remove the user
+- **remove**: Automatically removes the user from the group and sends a notification
+
+### Audit Logging
+
+All sync operations are logged to the same S3 audit bucket used by SSO Elevator:
+- `sync_add`: User added to group based on attribute match
+- `sync_remove`: User removed from group (no longer matches rules)
+- `manual_detected`: Manual assignment detected (user doesn't match rules)
+
+### Slack Notifications
+
+The syncer sends notifications for:
+- Users added to groups
+- Manual assignments detected
+- Manual assignments removed (when policy is `remove`)
+- Sync errors
+
+### Migration Guide for Existing Deployments
+
+If you're upgrading from a previous version of SSO Elevator:
+
+**Phase 1: Deploy with feature disabled (default)**
+```hcl
+# No changes needed - feature is disabled by default
+module "aws_sso_elevator" {
+  source  = "fivexl/sso-elevator/aws"
+  version = "3.0.0"
+  # ... existing configuration ...
+}
+```
+
+**Phase 2: Configure and enable**
+```hcl
+module "aws_sso_elevator" {
+  source  = "fivexl/sso-elevator/aws"
+  version = "3.0.0"
+  # ... existing configuration ...
+
+  attribute_sync_enabled = true
+  attribute_sync_managed_groups = ["Engineering", "Finance"]
+  attribute_sync_rules = [
+    {
+      group_name = "Engineering"
+      attributes = { department = "Engineering" }
+    },
+    {
+      group_name = "Finance"
+      attributes = { department = "Finance" }
+    },
+  ]
+  # Start with "warn" to review manual assignments
+  attribute_sync_manual_assignment_policy = "warn"
+}
+```
+
+**Phase 3: Monitor and adjust**
+- Review Slack notifications for manual assignments
+- Adjust mapping rules as needed
+- Once confident, change policy from `warn` to `remove` if desired
+
+### Rollback Strategy
+
+If issues arise after enabling attribute sync:
+
+**Immediate rollback** - Set `attribute_sync_enabled = false` and apply:
+```hcl
+attribute_sync_enabled = false
+```
+This will:
+- Stop scheduled syncs immediately
+- Preserve existing group memberships (no users removed)
+- Keep all audit logs in S3
+
+**Complete removal** - Remove all attribute sync configuration:
+- The Lambda function and EventBridge rule will be deleted
+- Existing group memberships remain unchanged
+- Audit logs remain in S3 for compliance
+
+### Important Considerations
+
+1. **Managed Groups Only**: The syncer only operates on groups explicitly listed in `attribute_sync_managed_groups`. All other groups are completely ignored.
+
+2. **Group Names**: Configuration uses human-readable group names. The Lambda resolves names to IDs at runtime.
+
+3. **Attribute Matching**: Uses exact string matching. Attribute values must match exactly (case-sensitive).
+
+4. **AND Logic**: When multiple attributes are specified in a rule, ALL must match for the user to be added.
+
+5. **Caching**: The syncer uses the same caching mechanism as SSO Elevator to minimize API calls.
+
+6. **Error Handling**: If an error occurs processing one group or user, the syncer continues with others and reports errors in the summary notification.
 
 # Important Considerations and Assumptions
 
@@ -505,26 +706,30 @@ settings:
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 4.64 |
-| <a name="provider_random"></a> [random](#provider\_random) | >= 3.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.26.0 |
+| <a name="provider_null"></a> [null](#provider\_null) | 3.2.4 |
+| <a name="provider_random"></a> [random](#provider\_random) | 3.7.2 |
 
 ## Modules
 
 | Name | Source | Version |
 |------|--------|---------|
-| <a name="module_access_requester_slack_handler"></a> [access\_requester\_slack\_handler](#module\_access\_requester\_slack\_handler) | terraform-aws-modules/lambda/aws | 7.19.0 |
-| <a name="module_access_revoker"></a> [access\_revoker](#module\_access\_revoker) | terraform-aws-modules/lambda/aws | 7.19.0 |
+| <a name="module_access_requester_slack_handler"></a> [access\_requester\_slack\_handler](#module\_access\_requester\_slack\_handler) | terraform-aws-modules/lambda/aws | 8.1.2 |
+| <a name="module_access_revoker"></a> [access\_revoker](#module\_access\_revoker) | terraform-aws-modules/lambda/aws | 8.1.2 |
+| <a name="module_attribute_syncer"></a> [attribute\_syncer](#module\_attribute\_syncer) | terraform-aws-modules/lambda/aws | 8.1.2 |
 | <a name="module_audit_bucket"></a> [audit\_bucket](#module\_audit\_bucket) | fivexl/account-baseline/aws//modules/s3_baseline | 2.0.0 |
 | <a name="module_config_bucket"></a> [config\_bucket](#module\_config\_bucket) | fivexl/account-baseline/aws//modules/s3_baseline | 2.0.0 |
 | <a name="module_http_api"></a> [http\_api](#module\_http\_api) | terraform-aws-modules/apigateway-v2/aws | 5.0.0 |
-| <a name="module_sso_elevator_dependencies"></a> [sso\_elevator\_dependencies](#module\_sso\_elevator\_dependencies) | terraform-aws-modules/lambda/aws | 7.19.0 |
+| <a name="module_sso_elevator_dependencies"></a> [sso\_elevator\_dependencies](#module\_sso\_elevator\_dependencies) | terraform-aws-modules/lambda/aws | 8.1.2 |
 
 ## Resources
 
 | Name | Type |
 |------|------|
+| [aws_cloudwatch_event_rule.attribute_sync_schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_rule.sso_elevator_check_on_inconsistency](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
+| [aws_cloudwatch_event_target.attribute_sync_schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_cloudwatch_event_target.check_inconsistency](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_cloudwatch_event_target.sso_elevator_scheduled_revocation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_iam_role.eventbridge_role](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
@@ -535,8 +740,10 @@ settings:
 | [aws_scheduler_schedule_group.one_time_schedule_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule_group) | resource |
 | [aws_sns_topic.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
 | [aws_sns_topic_subscription.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
+| [null_resource.attribute_sync_validation](https://registry.terraform.io/providers/hashicorp/null/latest/docs/resources/resource) | resource |
 | [random_string.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_iam_policy_document.attribute_syncer](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.revoker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.slack_handler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
@@ -551,6 +758,15 @@ settings:
 | <a name="input_api_gateway_throttling_rate_limit"></a> [api\_gateway\_throttling\_rate\_limit](#input\_api\_gateway\_throttling\_rate\_limit) | The maximum number of requests that API Gateway allows per second. | `number` | `1` | no |
 | <a name="input_approver_renotification_backoff_multiplier"></a> [approver\_renotification\_backoff\_multiplier](#input\_approver\_renotification\_backoff\_multiplier) | The multiplier applied to the wait time for each subsequent notification sent to the approver. Default is 2, which means the wait time will double for each attempt. | `number` | `2` | no |
 | <a name="input_approver_renotification_initial_wait_time"></a> [approver\_renotification\_initial\_wait\_time](#input\_approver\_renotification\_initial\_wait\_time) | The initial wait time before the first re-notification to the approver is sent. This is measured in minutes. If set to 0, no re-notifications will be sent. | `number` | `15` | no |
+| <a name="input_attribute_sync_enabled"></a> [attribute\_sync\_enabled](#input\_attribute\_sync\_enabled) | Enable attribute-based group sync feature. When enabled, users will be automatically added to groups based on their Identity Store attributes. | `bool` | `false` | no |
+| <a name="input_attribute_sync_event_rule_name"></a> [attribute\_sync\_event\_rule\_name](#input\_attribute\_sync\_event\_rule\_name) | Name for the EventBridge rule that triggers the attribute syncer. | `string` | `"sso-elevator-attribute-sync"` | no |
+| <a name="input_attribute_sync_lambda_memory"></a> [attribute\_sync\_lambda\_memory](#input\_attribute\_sync\_lambda\_memory) | Memory allocation for attribute syncer Lambda (MB). Increase for large user/group sets. | `number` | `512` | no |
+| <a name="input_attribute_sync_lambda_timeout"></a> [attribute\_sync\_lambda\_timeout](#input\_attribute\_sync\_lambda\_timeout) | Timeout for attribute syncer Lambda (seconds). Increase for large user/group sets. | `number` | `300` | no |
+| <a name="input_attribute_sync_managed_groups"></a> [attribute\_sync\_managed\_groups](#input\_attribute\_sync\_managed\_groups) | List of group names to manage via attribute sync. Only these groups will be monitored and modified by the sync process. | `list(string)` | `[]` | no |
+| <a name="input_attribute_sync_manual_assignment_policy"></a> [attribute\_sync\_manual\_assignment\_policy](#input\_attribute\_sync\_manual\_assignment\_policy) | Policy for handling manual assignments (users in managed groups who don't match any rules): 'warn' only logs and notifies, 'remove' automatically removes them. | `string` | `"warn"` | no |
+| <a name="input_attribute_sync_rules"></a> [attribute\_sync\_rules](#input\_attribute\_sync\_rules) | Attribute mapping rules for group sync. Each rule specifies a group name and the attribute conditions that must be met for a user to be added to that group.<br/>Example:<br/>[<br/>  {<br/>    group\_name = "Engineering"<br/>    attributes = {<br/>      department = "Engineering"<br/>      employeeType = "FullTime"<br/>    }<br/>  }<br/>] | <pre>list(object({<br/>    group_name = string<br/>    attributes = map(string)<br/>  }))</pre> | `[]` | no |
+| <a name="input_attribute_sync_schedule"></a> [attribute\_sync\_schedule](#input\_attribute\_sync\_schedule) | Schedule expression for attribute sync (e.g., 'rate(1 hour)' or 'cron(0 * * * ? *)'). Determines how often the sync runs. | `string` | `"rate(1 hour)"` | no |
+| <a name="input_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#input\_attribute\_syncer\_lambda\_name) | Name for the attribute syncer Lambda function. | `string` | `"attribute-syncer"` | no |
 | <a name="input_aws_sns_topic_subscription_email"></a> [aws\_sns\_topic\_subscription\_email](#input\_aws\_sns\_topic\_subscription\_email) | value for the email address to subscribe to the SNS topic | `string` | `""` | no |
 | <a name="input_cache_enabled"></a> [cache\_enabled](#input\_cache\_enabled) | Enable caching of AWS accounts and permission sets in S3. If set to false, caching is disabled but the S3 bucket will still be created for future config storage. | `bool` | `true` | no |
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | `[]` | no |
@@ -560,12 +776,14 @@ settings:
 | <a name="input_create_lambda_url"></a> [create\_lambda\_url](#input\_create\_lambda\_url) | If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future<br/>If false, Lambda url will be deleted. | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
-| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.0.0"` | no |
+| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.1.0"` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |
 | <a name="input_event_brige_check_on_inconsistency_rule_name"></a> [event\_brige\_check\_on\_inconsistency\_rule\_name](#input\_event\_brige\_check\_on\_inconsistency\_rule\_name) | DEPRECATED: Use event\_bridge\_check\_on\_inconsistency\_rule\_name instead. This variable contains a typo and will be removed in a future version. | `string` | `"sso-elevator-check-on-inconsistency"` | no |
 | <a name="input_event_brige_scheduled_revocation_rule_name"></a> [event\_brige\_scheduled\_revocation\_rule\_name](#input\_event\_brige\_scheduled\_revocation\_rule\_name) | DEPRECATED: Use event\_bridge\_scheduled\_revocation\_rule\_name instead. This variable contains a typo and will be removed in a future version. | `string` | `"sso-elevator-scheduled-revocation"` | no |
 | <a name="input_group_config"></a> [group\_config](#input\_group\_config) | value for the SSO Elevator group config | `any` | `[]` | no |
+| <a name="input_identity_store_id"></a> [identity\_store\_id](#input\_identity\_store\_id) | The Identity Store ID. If not provided and sso\_instance\_arn is also not provided, it will be automatically discovered. | `string` | `""` | no |
+| <a name="input_lambda_architecture"></a> [lambda\_architecture](#input\_lambda\_architecture) | The instruction set architecture for Lambda functions. Valid values are 'x86\_64' or 'arm64'. Use 'arm64' for better price/performance on Graviton2. | `string` | `"x86_64"` | no |
 | <a name="input_lambda_memory_size"></a> [lambda\_memory\_size](#input\_lambda\_memory\_size) | Amount of memory in MB your Lambda Function can use at runtime. Valid value between 128 MB to 10,240 MB (10 GB), in 64 MB increments. | `number` | `256` | no |
 | <a name="input_lambda_timeout"></a> [lambda\_timeout](#input\_lambda\_timeout) | The amount of time your Lambda Function has to run in seconds. | `number` | `30` | no |
 | <a name="input_log_level"></a> [log\_level](#input\_log\_level) | value for the log level | `string` | `"INFO"` | no |
@@ -600,6 +818,9 @@ settings:
 
 | Name | Description |
 |------|-------------|
+| <a name="output_attribute_sync_schedule_rule_arn"></a> [attribute\_sync\_schedule\_rule\_arn](#output\_attribute\_sync\_schedule\_rule\_arn) | The ARN of the EventBridge rule that triggers the attribute syncer. |
+| <a name="output_attribute_syncer_lambda_arn"></a> [attribute\_syncer\_lambda\_arn](#output\_attribute\_syncer\_lambda\_arn) | The ARN of the attribute syncer Lambda function. |
+| <a name="output_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#output\_attribute\_syncer\_lambda\_name) | The name of the attribute syncer Lambda function. |
 | <a name="output_config_s3_bucket_arn"></a> [config\_s3\_bucket\_arn](#output\_config\_s3\_bucket\_arn) | The ARN of the S3 bucket for storing configuration and cache data. |
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
 | <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |

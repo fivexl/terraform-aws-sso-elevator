@@ -62,3 +62,12 @@ jobs:
           push: true
           tags: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator:revoker-${{ env.GIT_TAG }}
           provenance: false
+
+      - name: Build and push attribute syncer image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: src/docker/Dockerfile.attribute_syncer
+          push: true
+          tags: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator:attribute-syncer-${{ env.GIT_TAG }}
+          provenance: false
