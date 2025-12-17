@@ -1,7 +1,7 @@
 repos:
 # Terraform
 - repo: https://github.com/antonbabenko/pre-commit-terraform
-  rev: v1.77.2
+  rev: v1.104.0
   hooks:
     - id: terraform_fmt
       exclude: ^(tests|src/tests)/
@@ -11,7 +11,7 @@ repos:
       exclude: ^(tests|src/tests)/
     - id: terraform_docs
       exclude: ^(tests|src/tests)/
-    - id: terraform_tfsec
+    - id: terraform_trivy
       exclude: ^(tests|src/tests)/
 # Python
 -   repo: local

@@ -46,9 +46,12 @@ jobs:
           sudo mv terraform-docs /usr/local/bin/
           rm terraform-docs.tar.gz
 
-      - name: Install tfsec
+      - name: Install Trivy
         run: |
-          curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy -y
 
       - name: Run tests
         run: bash run-tests.sh
