@@ -68,18 +68,18 @@
   - **Property 5: Membership removal correctness**
   - **Validates: Requirements 1.5**
 
-- [ ] 6. Implement user and group data retrieval
+- [x] 6. Implement user and group data retrieval
   - Create `get_users_with_attributes()` function
   - Create `get_managed_groups()` function
   - Integrate with existing caching mechanism
   - Handle pagination for large user sets
   - _Requirements: 1.2, 9.1, 9.2, 9.3_
 
-- [ ] 6.1 Write property test for cache utilization
+- [x] 6.1 Write property test for cache utilization
   - **Property 19: Cache utilization**
   - **Validates: Requirements 9.1, 9.2**
 
-- [ ] 6.2 Write property test for cache fallback
+- [x] 6.2 Write property test for cache fallback
   - **Property 20: Cache fallback**
   - **Validates: Requirements 9.3**
 

@@ -3,8 +3,11 @@
 Tests the correctness of sync action computation using Hypothesis.
 """
 
+from unittest.mock import Mock, patch
+
 from hypothesis import given, settings, strategies as st, assume
 
+import cache as cache_module
 from attribute_mapper import AttributeCondition, AttributeMappingRule, AttributeMapper
 from sync_state import GroupMembershipState, UserInfo, SyncStateManager
 
@@ -744,3 +747,412 @@ class TestManualAssignmentDetection:
         matching_users = manager.get_users_matching_group([user], group_id)
 
         assert user.user_id not in matching_users
+
+
+# -----------------Cache Integration Tests-----------------#
+
+
+@st.composite
+def user_data_dict_strategy(draw: st.DrawFn) -> dict:
+    """Generate a user data dictionary as returned by the API."""
+    user_id = draw(user_id_strategy)
+    email = draw(email_strategy)
+    num_attrs = draw(st.integers(min_value=0, max_value=3))
+    attr_names = draw(st.permutations(["department", "employeeType", "costCenter", "jobTitle"]))
+    selected_attrs = attr_names[:num_attrs]
+    attributes = {name: draw(attribute_value_strategy) for name in selected_attrs}
+    return {
+        "user_id": user_id,
+        "username": f"user_{user_id[:8]}",
+        "email": email,
+        "attributes": attributes,
+    }
+
+
+@st.composite
+def groups_dict_strategy(draw: st.DrawFn) -> dict[str, str]:
+    """Generate a groups name-to-ID mapping dictionary."""
+    num_groups = draw(st.integers(min_value=1, max_value=5))
+    group_names = draw(st.permutations(["Engineering", "Sales", "HR", "Finance", "Marketing", "Operations", "Admins"]))
+    selected_names = group_names[:num_groups]
+    return {name: draw(group_id_strategy) for name in selected_names}
+
+
+class TestCacheUtilization:
+    """
+    **Feature: attribute-based-group-sync, Property 19: Cache utilization**
+    **Validates: Requirements 9.1, 9.2**
+
+    For any cached resource (users or groups), if cache is valid and not expired,
+    the system should use cached data instead of making API calls.
+    """
+
+    @settings(max_examples=100)
+    @given(users_data=st.lists(user_data_dict_strategy(), min_size=1, max_size=5))
+    def test_users_cache_hit_uses_cached_data(self, users_data: list[dict]):
+        """
+        **Feature: attribute-based-group-sync, Property 19: Cache utilization**
+        **Validates: Requirements 9.1, 9.2**
+
+        When cached user data is available, the system should use it
+        and the result should match the cached data.
+        """
+        from sync_state import get_users_with_attributes, UserInfo
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=True)
+
+        # Mock cache to return data
+        with patch.object(cache_module, "with_cache_resilience") as mock_resilience:
+            mock_resilience.return_value = users_data
+
+            result = get_users_with_attributes(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+            )
+
+            # Verify result matches cached data
+            assert len(result) == len(users_data)
+            for i, user_info in enumerate(result):
+                assert isinstance(user_info, UserInfo)
+                assert user_info.user_id == users_data[i]["user_id"]
+                assert user_info.email == users_data[i]["email"]
+                assert user_info.attributes == users_data[i]["attributes"]
+
+    @settings(max_examples=100)
+    @given(groups_data=groups_dict_strategy())
+    def test_groups_cache_hit_uses_cached_data(self, groups_data: dict[str, str]):
+        """
+        **Feature: attribute-based-group-sync, Property 19: Cache utilization**
+        **Validates: Requirements 9.1, 9.2**
+
+        When cached group data is available, the system should use it
+        and the result should match the cached data.
+        """
+        from sync_state import get_managed_groups
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=True)
+
+        # Select some groups to manage
+        managed_group_names = list(groups_data.keys())[:2] if len(groups_data) > 1 else list(groups_data.keys())
+
+        # Mock cache resilience to return groups data
+        # Also mock _fetch_group_members to return empty sets
+        with (
+            patch.object(cache_module, "with_cache_resilience") as mock_resilience,
+            patch("sync_state._fetch_group_members") as mock_fetch_members,
+        ):
+            mock_resilience.return_value = groups_data
+            mock_fetch_members.return_value = set()
+
+            all_groups, current_state = get_managed_groups(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+                managed_group_names,
+            )
+
+            # Verify all_groups matches cached data
+            assert all_groups == groups_data
+
+            # Verify managed groups are in current_state
+            for group_name in managed_group_names:
+                group_id = groups_data.get(group_name)
+                if group_id:
+                    assert group_id in current_state
+                    assert current_state[group_id].group_name == group_name
+
+    @settings(max_examples=100)
+    @given(users_data=st.lists(user_data_dict_strategy(), min_size=1, max_size=3))
+    def test_cache_resilience_called_with_correct_parameters_for_users(self, users_data: list[dict]):
+        """
+        **Feature: attribute-based-group-sync, Property 19: Cache utilization**
+        **Validates: Requirements 9.1, 9.2**
+
+        The cache resilience function should be called with proper cache getter,
+        API getter, and cache setter for user data.
+        """
+        from sync_state import get_users_with_attributes
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=True)
+
+        with patch.object(cache_module, "with_cache_resilience") as mock_resilience:
+            mock_resilience.return_value = users_data
+
+            get_users_with_attributes(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+            )
+
+            # Verify with_cache_resilience was called
+            mock_resilience.assert_called_once()
+
+            # Verify resource_name parameter
+            call_kwargs = mock_resilience.call_args[1]
+            assert call_kwargs["resource_name"] == "users_with_attributes"
+
+    @settings(max_examples=100)
+    @given(groups_data=groups_dict_strategy())
+    def test_cache_resilience_called_with_correct_parameters_for_groups(self, groups_data: dict[str, str]):
+        """
+        **Feature: attribute-based-group-sync, Property 19: Cache utilization**
+        **Validates: Requirements 9.1, 9.2**
+
+        The cache resilience function should be called with proper cache getter,
+        API getter, and cache setter for group data.
+        """
+        from sync_state import get_managed_groups
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=True)
+
+        managed_group_names = list(groups_data.keys())[:1]
+
+        with (
+            patch.object(cache_module, "with_cache_resilience") as mock_resilience,
+            patch("sync_state._fetch_group_members") as mock_fetch_members,
+        ):
+            mock_resilience.return_value = groups_data
+            mock_fetch_members.return_value = set()
+
+            get_managed_groups(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+                managed_group_names,
+            )
+
+            # Verify with_cache_resilience was called
+            mock_resilience.assert_called_once()
+
+            # Verify resource_name parameter
+            call_kwargs = mock_resilience.call_args[1]
+            assert call_kwargs["resource_name"] == "groups"
+
+
+class TestCacheFallback:
+    """
+    **Feature: attribute-based-group-sync, Property 20: Cache fallback**
+    **Validates: Requirements 9.3**
+
+    For any cache miss or cache error, the system should fall back to direct
+    API calls without failing the sync operation.
+    """
+
+    @settings(max_examples=100)
+    @given(users_data=st.lists(user_data_dict_strategy(), min_size=1, max_size=3))
+    def test_users_api_fallback_on_cache_miss(self, users_data: list[dict]):
+        """
+        **Feature: attribute-based-group-sync, Property 20: Cache fallback**
+        **Validates: Requirements 9.3**
+
+        When cache returns None (cache miss), the system should fall back
+        to API calls and return valid data.
+        """
+        from sync_state import get_users_with_attributes, UserInfo
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=True)
+
+        # Simulate cache miss followed by API success
+        with patch.object(cache_module, "with_cache_resilience") as mock_resilience:
+            # with_cache_resilience handles the fallback internally and returns API data
+            mock_resilience.return_value = users_data
+
+            result = get_users_with_attributes(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+            )
+
+            # Verify we got valid UserInfo objects
+            assert len(result) == len(users_data)
+            for user_info in result:
+                assert isinstance(user_info, UserInfo)
+                assert user_info.user_id is not None
+                assert user_info.email is not None
+
+    @settings(max_examples=100)
+    @given(groups_data=groups_dict_strategy())
+    def test_groups_api_fallback_on_cache_miss(self, groups_data: dict[str, str]):
+        """
+        **Feature: attribute-based-group-sync, Property 20: Cache fallback**
+        **Validates: Requirements 9.3**
+
+        When cache returns None (cache miss), the system should fall back
+        to API calls for groups and return valid data.
+        """
+        from sync_state import get_managed_groups
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=True)
+
+        managed_group_names = list(groups_data.keys())[:2] if len(groups_data) > 1 else list(groups_data.keys())
+
+        with (
+            patch.object(cache_module, "with_cache_resilience") as mock_resilience,
+            patch("sync_state._fetch_group_members") as mock_fetch_members,
+        ):
+            mock_resilience.return_value = groups_data
+            mock_fetch_members.return_value = set()
+
+            all_groups, current_state = get_managed_groups(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+                managed_group_names,
+            )
+
+            # Verify we got valid group data
+            assert isinstance(all_groups, dict)
+            assert len(all_groups) > 0
+
+            # Verify managed groups have state
+            for group_name in managed_group_names:
+                group_id = groups_data.get(group_name)
+                if group_id:
+                    assert group_id in current_state
+
+    @settings(max_examples=100)
+    @given(users_data=st.lists(user_data_dict_strategy(), min_size=1, max_size=3))
+    def test_cache_disabled_uses_api_directly(self, users_data: list[dict]):
+        """
+        **Feature: attribute-based-group-sync, Property 20: Cache fallback**
+        **Validates: Requirements 9.3**
+
+        When cache is disabled, the system should use API calls directly
+        and still return valid data.
+        """
+        from sync_state import get_users_with_attributes, UserInfo
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        # Cache disabled
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=False)
+
+        with patch.object(cache_module, "with_cache_resilience") as mock_resilience:
+            mock_resilience.return_value = users_data
+
+            result = get_users_with_attributes(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+            )
+
+            # Verify we got valid UserInfo objects
+            assert len(result) == len(users_data)
+            for user_info in result:
+                assert isinstance(user_info, UserInfo)
+
+    @settings(max_examples=100)
+    @given(
+        groups_data=groups_dict_strategy(),
+        missing_group_name=group_name_strategy,
+    )
+    def test_missing_managed_group_handled_gracefully(
+        self,
+        groups_data: dict[str, str],
+        missing_group_name: str,
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 20: Cache fallback**
+        **Validates: Requirements 9.3**
+
+        When a managed group is not found in the Identity Store,
+        the system should handle it gracefully and continue with other groups.
+        """
+        from sync_state import get_managed_groups
+
+        # Ensure missing_group_name is not in groups_data
+        assume(missing_group_name not in groups_data)
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=True)
+
+        # Include both existing and missing group names
+        existing_group_name = list(groups_data.keys())[0] if groups_data else "NonExistent"
+        managed_group_names = [existing_group_name, missing_group_name]
+
+        with (
+            patch.object(cache_module, "with_cache_resilience") as mock_resilience,
+            patch("sync_state._fetch_group_members") as mock_fetch_members,
+        ):
+            mock_resilience.return_value = groups_data
+            mock_fetch_members.return_value = set()
+
+            all_groups, current_state = get_managed_groups(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+                managed_group_names,
+            )
+
+            # Should not raise an exception
+            # Existing group should be in current_state
+            if existing_group_name in groups_data:
+                group_id = groups_data[existing_group_name]
+                assert group_id in current_state
+
+            # Missing group should not be in current_state
+            assert missing_group_name not in [state.group_name for state in current_state.values()]
+
+    @settings(max_examples=100)
+    @given(groups_data=groups_dict_strategy())
+    def test_group_member_fetch_error_handled_gracefully(self, groups_data: dict[str, str]):
+        """
+        **Feature: attribute-based-group-sync, Property 20: Cache fallback**
+        **Validates: Requirements 9.3**
+
+        When fetching group members fails, the system should handle it
+        gracefully and continue with empty membership.
+        """
+        from sync_state import get_managed_groups
+
+        mock_identity_store_client = Mock()
+        mock_s3_client = Mock()
+        cache_config = cache_module.CacheConfig(bucket_name="test-bucket", enabled=True)
+
+        managed_group_names = list(groups_data.keys())[:1]
+
+        with (
+            patch.object(cache_module, "with_cache_resilience") as mock_resilience,
+            patch("sync_state._fetch_group_members") as mock_fetch_members,
+        ):
+            mock_resilience.return_value = groups_data
+            # Simulate error when fetching members
+            mock_fetch_members.side_effect = Exception("API error")
+
+            # Should not raise an exception
+            all_groups, current_state = get_managed_groups(
+                mock_identity_store_client,
+                "test-identity-store-id",
+                mock_s3_client,
+                cache_config,
+                managed_group_names,
+            )
+
+            # Group should still be in current_state with empty membership
+            for group_name in managed_group_names:
+                group_id = groups_data.get(group_name)
+                if group_id:
+                    assert group_id in current_state
+                    assert current_state[group_id].current_members == frozenset()

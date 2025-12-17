@@ -9,8 +9,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+import cache as cache_module
+from config import get_logger
+
 if TYPE_CHECKING:
+    from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_s3 import S3Client
+
     from attribute_mapper import AttributeMapper
+
+logger = get_logger(service="sync_state")
 
 
 @dataclass(frozen=True)
@@ -268,3 +276,255 @@ class SyncStateManager:
         """
         target_groups = self._mapper.get_target_groups_for_user(user.attributes)
         return group_id not in target_groups
+
+
+# -----------------User and Group Data Retrieval-----------------#
+
+
+def _extract_user_email(user: dict) -> str:
+    """Extract primary email from user's Emails list."""
+    emails = user.get("Emails", [])
+    for email_entry in emails:
+        if email_entry.get("Primary", False):
+            return email_entry.get("Value", "")
+    return emails[0].get("Value", "") if emails else ""
+
+
+def _extract_user_attributes(user: dict) -> dict[str, str]:
+    """Extract attributes from user data."""
+    attributes: dict[str, str] = {}
+
+    # Standard SCIM attributes - map field names to attribute keys
+    scim_fields = [
+        ("DisplayName", "displayName"),
+        ("Title", "title"),
+        ("Locale", "locale"),
+        ("Timezone", "timezone"),
+        ("UserType", "userType"),
+        ("PreferredLanguage", "preferredLanguage"),
+        ("ProfileUrl", "profileUrl"),
+        ("NickName", "nickName"),
+    ]
+    for field, attr_key in scim_fields:
+        if user.get(field):
+            attributes[attr_key] = user[field]
+
+    # Name attributes
+    name = user.get("Name", {})
+    name_fields = [
+        ("GivenName", "givenName"),
+        ("FamilyName", "familyName"),
+        ("MiddleName", "middleName"),
+        ("HonorificPrefix", "honorificPrefix"),
+        ("HonorificSuffix", "honorificSuffix"),
+    ]
+    for field, attr_key in name_fields:
+        if name.get(field):
+            attributes[attr_key] = name[field]
+
+    # Enterprise extension attributes (commonly used for ABAC)
+    for ext_id in user.get("ExternalIds", []):
+        issuer = ext_id.get("Issuer", "")
+        ext_id_value = ext_id.get("Id", "")
+        if issuer and ext_id_value:
+            attributes[f"externalId_{issuer}"] = ext_id_value
+
+    return attributes
+
+
+def _fetch_users_from_identity_store(
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+) -> list[dict]:
+    """Fetch all users with their attributes from Identity Store.
+
+    Args:
+        identity_store_client: The Identity Store client.
+        identity_store_id: The Identity Store ID.
+
+    Returns:
+        List of user dictionaries with attributes.
+    """
+    users: list[dict] = []
+
+    paginator = identity_store_client.get_paginator("list_users")
+    for page in paginator.paginate(IdentityStoreId=identity_store_id):
+        for user in page.get("Users", []):
+            users.append(
+                {
+                    "user_id": user.get("UserId"),
+                    "username": user.get("UserName", ""),
+                    "email": _extract_user_email(user),
+                    "attributes": _extract_user_attributes(user),
+                }
+            )
+
+    logger.info(f"Fetched {len(users)} users from Identity Store")
+    return users
+
+
+def _fetch_groups_from_identity_store(
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+) -> dict[str, str]:
+    """Fetch all groups from Identity Store and return name-to-ID mapping.
+
+    Args:
+        identity_store_client: The Identity Store client.
+        identity_store_id: The Identity Store ID.
+
+    Returns:
+        Dictionary mapping group names to their IDs.
+    """
+    name_to_id: dict[str, str] = {}
+
+    paginator = identity_store_client.get_paginator("list_groups")
+    for page in paginator.paginate(IdentityStoreId=identity_store_id):
+        for group in page.get("Groups", []):
+            display_name = group.get("DisplayName")
+            group_id = group.get("GroupId")
+            if display_name and group_id:
+                name_to_id[display_name] = group_id
+
+    logger.info(f"Fetched {len(name_to_id)} groups from Identity Store")
+    return name_to_id
+
+
+def get_users_with_attributes(
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+    s3_client: S3Client,
+    cache_config: cache_module.CacheConfig,
+) -> list[UserInfo]:
+    """Get all users with their attributes, using cache with API fallback.
+
+    This function uses the cache resilience pattern:
+    - If cache is available and valid, use cached data
+    - If cache is unavailable, fall back to direct API calls
+    - Update cache after successful API calls
+
+    Args:
+        identity_store_client: The Identity Store client.
+        identity_store_id: The Identity Store ID.
+        s3_client: S3 client for cache operations.
+        cache_config: Cache configuration.
+
+    Returns:
+        List of UserInfo objects with user attributes.
+
+    Raises:
+        Exception: If both cache and API fail.
+    """
+    users_data = cache_module.with_cache_resilience(
+        cache_getter=lambda: cache_module.get_cached_users_with_attributes(s3_client, cache_config),
+        api_getter=lambda: _fetch_users_from_identity_store(identity_store_client, identity_store_id),
+        cache_setter=lambda users: cache_module.set_cached_users_with_attributes(s3_client, cache_config, users),
+        resource_name="users_with_attributes",
+    )
+
+    # Convert dictionaries to UserInfo objects
+    return [
+        UserInfo(
+            user_id=user["user_id"],
+            email=user["email"],
+            attributes=user["attributes"],
+        )
+        for user in users_data
+    ]
+
+
+def get_managed_groups(
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+    s3_client: S3Client,
+    cache_config: cache_module.CacheConfig,
+    managed_group_names: list[str],
+) -> tuple[dict[str, str], dict[str, GroupMembershipState]]:
+    """Get managed groups with their current membership state.
+
+    This function:
+    1. Fetches all groups (using cache with API fallback)
+    2. Filters to only managed groups
+    3. Fetches current membership for each managed group
+
+    Args:
+        identity_store_client: The Identity Store client.
+        identity_store_id: The Identity Store ID.
+        s3_client: S3 client for cache operations.
+        cache_config: Cache configuration.
+        managed_group_names: List of group names to manage.
+
+    Returns:
+        Tuple of:
+        - Dictionary mapping group names to IDs (for all groups, for caching)
+        - Dictionary mapping group IDs to GroupMembershipState (for managed groups only)
+
+    Raises:
+        Exception: If both cache and API fail.
+    """
+    # Get all groups (name to ID mapping)
+    all_groups = cache_module.with_cache_resilience(
+        cache_getter=lambda: cache_module.get_cached_groups(s3_client, cache_config),
+        api_getter=lambda: _fetch_groups_from_identity_store(identity_store_client, identity_store_id),
+        cache_setter=lambda groups: cache_module.set_cached_groups(s3_client, cache_config, groups),
+        resource_name="groups",
+    )
+
+    # Filter to managed groups and get their membership state
+    managed_group_ids: dict[str, str] = {}
+    current_state: dict[str, GroupMembershipState] = {}
+
+    for group_name in managed_group_names:
+        group_id = all_groups.get(group_name)
+        if group_id:
+            managed_group_ids[group_name] = group_id
+
+            # Fetch current membership for this group
+            try:
+                members = _fetch_group_members(identity_store_client, identity_store_id, group_id)
+                current_state[group_id] = GroupMembershipState(
+                    group_id=group_id,
+                    group_name=group_name,
+                    current_members=frozenset(members),
+                )
+            except Exception as e:
+                logger.exception(f"Failed to fetch members for group '{group_name}': {e}")
+                # Continue with empty membership - will be handled by error resilience
+                current_state[group_id] = GroupMembershipState(
+                    group_id=group_id,
+                    group_name=group_name,
+                    current_members=frozenset(),
+                )
+        else:
+            logger.warning(f"Managed group '{group_name}' not found in Identity Store")
+
+    logger.info(f"Retrieved {len(managed_group_ids)} of {len(managed_group_names)} managed groups")
+    return all_groups, current_state
+
+
+def _fetch_group_members(
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+    group_id: str,
+) -> set[str]:
+    """Fetch all member user IDs for a group.
+
+    Args:
+        identity_store_client: The Identity Store client.
+        identity_store_id: The Identity Store ID.
+        group_id: The group ID to fetch members for.
+
+    Returns:
+        Set of user principal IDs that are members of the group.
+    """
+    members: set[str] = set()
+
+    paginator = identity_store_client.get_paginator("list_group_memberships")
+    for page in paginator.paginate(IdentityStoreId=identity_store_id, GroupId=group_id):
+        for membership in page.get("GroupMemberships", []):
+            member_id = membership.get("MemberId", {})
+            user_id = member_id.get("UserId")
+            if user_id:
+                members.add(user_id)
+
+    return members
