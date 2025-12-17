@@ -29,13 +29,34 @@ jobs:
       - name: Install pre-commit
         run: pip3 install pre-commit
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.2"
+
+      - name: Install tflint
+        run: |
+          curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+
+      - name: Install terraform-docs
+        run: |
+          curl -Lo ./terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.16.0/terraform-docs-v0.16.0-linux-amd64.tar.gz
+          tar -xzf terraform-docs.tar.gz
+          chmod +x terraform-docs
+          sudo mv terraform-docs /usr/local/bin/
+          rm terraform-docs.tar.gz
+
+      - name: Install tfsec
+        run: |
+          curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
       - name: Run tests
         run: bash run-tests.sh
 
   terraform-job:
     uses: fivexl/github-reusable-workflows/.github/workflows/terraform-job.yml@main
     with:
-      terraform-version: "1.5.0"
+      terraform-version: "1.14.2"
       aws-default-region: "eu-central-1"
 
   # localstack:

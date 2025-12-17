@@ -101,7 +101,7 @@ jobs:
           cursor-agent --force --model "$MODEL" --output-format=text --print "$PROMPT"
 
       - name: Check blocking review results
-        if: env.BLOCKING_REVIEW == 'true'
+        if: ${{ (vars.BLOCKING_REVIEW || 'false') == 'true' }}
         run: |
           echo "Checking for critical issues..."
           echo "CRITICAL_ISSUES_FOUND: ${CRITICAL_ISSUES_FOUND:-unset}"
