@@ -87,16 +87,18 @@ class TestAuditEntryCreation:
     @given(params=sync_audit_params_strategy())
     @settings(max_examples=100)
     @patch("s3.s3")
-    @patch("s3.cfg")
+    @patch("s3.get_config")
     def test_log_operation_writes_to_s3_with_correct_type(
         self,
-        mock_cfg: MagicMock,
+        mock_get_config: MagicMock,
         mock_s3: MagicMock,
         params: SyncAuditParams,
     ):
         """For any sync operation, log_operation should write to S3 with correct operation type."""
+        mock_cfg = MagicMock()
         mock_cfg.s3_bucket_for_audit_entry_name = "test-bucket"
         mock_cfg.s3_bucket_prefix_for_partitions = "audit"
+        mock_get_config.return_value = mock_cfg
         mock_s3.put_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
         audit_entry = create_sync_audit_entry(params)
@@ -140,16 +142,18 @@ class TestAuditEntryCompleteness:
     @given(params=sync_audit_params_strategy())
     @settings(max_examples=100)
     @patch("s3.s3")
-    @patch("s3.cfg")
+    @patch("s3.get_config")
     def test_logged_audit_entry_contains_timestamp(
         self,
-        mock_cfg: MagicMock,
+        mock_get_config: MagicMock,
         mock_s3: MagicMock,
         params: SyncAuditParams,
     ):
         """For any logged audit entry, timestamp should be present."""
+        mock_cfg = MagicMock()
         mock_cfg.s3_bucket_for_audit_entry_name = "test-bucket"
         mock_cfg.s3_bucket_prefix_for_partitions = "audit"
+        mock_get_config.return_value = mock_cfg
         mock_s3.put_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
         audit_entry = create_sync_audit_entry(params)
@@ -167,16 +171,18 @@ class TestAuditEntryCompleteness:
     @given(params=sync_audit_params_strategy())
     @settings(max_examples=100)
     @patch("s3.s3")
-    @patch("s3.cfg")
+    @patch("s3.get_config")
     def test_logged_audit_entry_contains_all_fields_in_json(
         self,
-        mock_cfg: MagicMock,
+        mock_get_config: MagicMock,
         mock_s3: MagicMock,
         params: SyncAuditParams,
     ):
         """For any logged audit entry, all required fields should be in the JSON."""
+        mock_cfg = MagicMock()
         mock_cfg.s3_bucket_for_audit_entry_name = "test-bucket"
         mock_cfg.s3_bucket_prefix_for_partitions = "audit"
+        mock_get_config.return_value = mock_cfg
         mock_s3.put_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
         audit_entry = create_sync_audit_entry(params)
@@ -215,18 +221,20 @@ class TestAuditEntryStorageConsistency:
     )
     @settings(max_examples=100)
     @patch("s3.s3")
-    @patch("s3.cfg")
+    @patch("s3.get_config")
     def test_audit_entry_uses_configured_bucket(
         self,
-        mock_cfg: MagicMock,
+        mock_get_config: MagicMock,
         mock_s3: MagicMock,
         params: SyncAuditParams,
         bucket_name: str,
         bucket_prefix: str,
     ):
         """For any audit entry, it should be written to the configured S3 bucket."""
+        mock_cfg = MagicMock()
         mock_cfg.s3_bucket_for_audit_entry_name = bucket_name
         mock_cfg.s3_bucket_prefix_for_partitions = bucket_prefix.rstrip("/")
+        mock_get_config.return_value = mock_cfg
         mock_s3.put_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
         audit_entry = create_sync_audit_entry(params)
@@ -241,16 +249,18 @@ class TestAuditEntryStorageConsistency:
     @given(params=sync_audit_params_strategy())
     @settings(max_examples=100)
     @patch("s3.s3")
-    @patch("s3.cfg")
+    @patch("s3.get_config")
     def test_audit_entry_uses_date_partitioning(
         self,
-        mock_cfg: MagicMock,
+        mock_get_config: MagicMock,
         mock_s3: MagicMock,
         params: SyncAuditParams,
     ):
         """For any audit entry, it should use YYYY/MM/DD date partitioning."""
+        mock_cfg = MagicMock()
         mock_cfg.s3_bucket_for_audit_entry_name = "test-bucket"
         mock_cfg.s3_bucket_prefix_for_partitions = "audit"
+        mock_get_config.return_value = mock_cfg
         mock_s3.put_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
         audit_entry = create_sync_audit_entry(params)
@@ -273,16 +283,18 @@ class TestAuditEntryStorageConsistency:
     @given(params=sync_audit_params_strategy())
     @settings(max_examples=100)
     @patch("s3.s3")
-    @patch("s3.cfg")
+    @patch("s3.get_config")
     def test_audit_entry_uses_json_content_type(
         self,
-        mock_cfg: MagicMock,
+        mock_get_config: MagicMock,
         mock_s3: MagicMock,
         params: SyncAuditParams,
     ):
         """For any audit entry, it should use application/json content type."""
+        mock_cfg = MagicMock()
         mock_cfg.s3_bucket_for_audit_entry_name = "test-bucket"
         mock_cfg.s3_bucket_prefix_for_partitions = "audit"
+        mock_get_config.return_value = mock_cfg
         mock_s3.put_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
         audit_entry = create_sync_audit_entry(params)
@@ -297,16 +309,18 @@ class TestAuditEntryStorageConsistency:
     @given(params=sync_audit_params_strategy())
     @settings(max_examples=100)
     @patch("s3.s3")
-    @patch("s3.cfg")
+    @patch("s3.get_config")
     def test_audit_entry_uses_server_side_encryption(
         self,
-        mock_cfg: MagicMock,
+        mock_get_config: MagicMock,
         mock_s3: MagicMock,
         params: SyncAuditParams,
     ):
         """For any audit entry, it should use server-side encryption."""
+        mock_cfg = MagicMock()
         mock_cfg.s3_bucket_for_audit_entry_name = "test-bucket"
         mock_cfg.s3_bucket_prefix_for_partitions = "audit"
+        mock_get_config.return_value = mock_cfg
         mock_s3.put_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
         audit_entry = create_sync_audit_entry(params)

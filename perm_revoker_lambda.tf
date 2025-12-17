@@ -1,13 +1,14 @@
 module "access_revoker" {
   source  = "terraform-aws-modules/lambda/aws"
-  version = "7.19.0"
+  version = "8.1.2"
 
   function_name = var.revoker_lambda_name
   description   = "Revokes temporary permissions"
 
-  publish     = true
-  timeout     = var.lambda_timeout
-  memory_size = var.lambda_memory_size
+  publish       = true
+  timeout       = var.lambda_timeout
+  memory_size   = var.lambda_memory_size
+  architectures = [var.lambda_architecture]
 
   # Pull image from ecr
   package_type   = var.use_pre_created_image ? "Image" : "Zip"

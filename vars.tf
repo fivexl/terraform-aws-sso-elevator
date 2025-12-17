@@ -346,6 +346,17 @@ variable "lambda_timeout" {
   default     = 30
 }
 
+variable "lambda_architecture" {
+  description = "The instruction set architecture for Lambda functions. Valid values are 'x86_64' or 'arm64'. Use 'arm64' for better price/performance on Graviton2."
+  type        = string
+  default     = "x86_64"
+
+  validation {
+    condition     = contains(["x86_64", "arm64"], var.lambda_architecture)
+    error_message = "lambda_architecture must be either 'x86_64' or 'arm64'"
+  }
+}
+
 variable "lambda_memory_size" {
   description = "Amount of memory in MB your Lambda Function can use at runtime. Valid value between 128 MB to 10,240 MB (10 GB), in 64 MB increments."
   type        = number

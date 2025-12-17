@@ -9,7 +9,6 @@ from mypy_boto3_s3 import S3Client, type_defs
 
 from config import get_config, get_logger
 
-cfg = get_config()
 logger = get_logger(service="s3")
 s3: S3Client = boto3.client("s3")
 
@@ -40,6 +39,7 @@ class AuditEntry:
 
 
 def log_operation(audit_entry: AuditEntry) -> type_defs.PutObjectOutputTypeDef:
+    cfg = get_config()
     now = datetime.now(timezone.utc)
     logger.debug("Posting audit entry to s3", extra={"audit_entry": audit_entry})
     logger.info("Posting audit entry to s3")

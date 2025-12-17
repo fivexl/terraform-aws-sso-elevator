@@ -5,14 +5,15 @@
 module "attribute_syncer" {
   count   = var.attribute_sync_enabled ? 1 : 0
   source  = "terraform-aws-modules/lambda/aws"
-  version = "7.19.0"
+  version = "8.1.2"
 
   function_name = var.attribute_syncer_lambda_name
   description   = "Automatically synchronizes users to groups based on their attributes"
 
-  publish     = true
-  timeout     = var.attribute_sync_lambda_timeout
-  memory_size = var.attribute_sync_lambda_memory
+  publish       = true
+  timeout       = var.attribute_sync_lambda_timeout
+  memory_size   = var.attribute_sync_lambda_memory
+  architectures = [var.lambda_architecture]
 
   # Pull image from ecr
   package_type   = var.use_pre_created_image ? "Image" : "Zip"
