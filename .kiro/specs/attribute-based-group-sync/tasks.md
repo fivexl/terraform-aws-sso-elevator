@@ -53,18 +53,18 @@
   - **Property 8: Invalid group reference handling**
   - **Validates: Requirements 2.5**
 
-- [ ] 5. Create sync state manager
+- [x] 5. Create sync state manager
   - Implement `GroupMembershipState` dataclass
   - Implement `SyncAction` dataclass
   - Implement `SyncStateManager` class to compute required actions
   - Handle both add and remove operations
   - _Requirements: 1.4, 1.5, 3.1, 3.2_
 
-- [ ] 5.1 Write property test for membership addition idempotence
+- [x] 5.1 Write property test for membership addition idempotence
   - **Property 4: Membership addition idempotence**
   - **Validates: Requirements 1.4**
 
-- [ ] 5.2 Write property test for membership removal correctness
+- [x] 5.2 Write property test for membership removal correctness
   - **Property 5: Membership removal correctness**
   - **Validates: Requirements 1.5**
 
