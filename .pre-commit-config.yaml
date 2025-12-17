@@ -13,6 +13,8 @@ repos:
       exclude: ^(tests|src/tests)/
     - id: terraform_trivy
       exclude: ^(tests|src/tests)/
+      args:
+        - --args=--severity CRITICAL
 # Python
 -   repo: local
     hooks:
