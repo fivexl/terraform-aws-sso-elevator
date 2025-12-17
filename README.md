@@ -505,8 +505,8 @@ settings:
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 4.64 |
-| <a name="provider_random"></a> [random](#provider\_random) | >= 3.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.26.0 |
+| <a name="provider_random"></a> [random](#provider\_random) | 3.7.2 |
 
 ## Modules
 
