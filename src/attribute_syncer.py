@@ -513,18 +513,23 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
     # Perform sync
     result = perform_sync(ctx)
 
-    # Send summary notification
-    try:
-        if result.errors:
-            notify_sync_error(
-                slack_client=slack_client,
-                error_message="\n".join(result.errors[:5]),
-                error_count=len(result.errors),
-                channel_id=slack_channel_id,
-            )
-        notify_sync_summary(slack_client=slack_client, summary=result.to_summary(), channel_id=slack_channel_id)
-    except Exception as e:
-        logger.exception(f"Failed to send summary notification: {e}")
+    # Send summary notification only if there were changes or errors
+    has_changes = result.users_added > 0 or result.users_removed > 0 or result.manual_assignments_detected > 0 or result.errors
+
+    if has_changes:
+        try:
+            if result.errors:
+                notify_sync_error(
+                    slack_client=slack_client,
+                    error_message="\n".join(result.errors[:5]),
+                    error_count=len(result.errors),
+                    channel_id=slack_channel_id,
+                )
+            notify_sync_summary(slack_client=slack_client, summary=result.to_summary(), channel_id=slack_channel_id)
+        except Exception as e:
+            logger.exception(f"Failed to send summary notification: {e}")
+    else:
+        logger.info("No changes detected, skipping notification")
 
     return {
         "statusCode": 200 if result.success else 500,

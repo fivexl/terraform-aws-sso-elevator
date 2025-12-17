@@ -463,7 +463,7 @@ def _fetch_users_from_identity_store(
                     Extensions=["aws:identitystore:enterprise"],
                 )
             except Exception as e:
-                logger.warning(f"Failed to describe user {user_id}, using list data: {e}")
+                logger.exception(f"Failed to describe user {user_id}: {e}")
                 full_user = user
 
             extracted_attrs = _extract_user_attributes(full_user)
