@@ -1,12 +1,69 @@
-- prioritize simplicity and readability over checking every single possible thing
-- strive to have less code and solutions that achieve the goal with the less code
-- actively seek and delete unused/dead code
-- do not account for backward compatibility and do not create additional code to support backward compatibility
-- always use uv run python instead of just python
-- at the end of every task commit all the changes, use spec and task name as commit title, save task summary as commit message
+# Kiro Steering Rules
 
-Testing
-- only use `bash run-tests.sh` to run tests
-- always mock external dependencies such as aws services, slack bolt
-- in addition to unit tests always run `git add . && pre-commit run -a`
-- when finished working on the task re-run all the tests to make sure they are still in tact
+## Code Quality & Philosophy
+
+### Simplicity First
+- Prioritize simplicity and readability over exhaustive validation
+- Achieve goals with minimal code - less is more
+- Actively identify and remove unused or dead code
+- Do not maintain backward compatibility - remove obsolete code paths
+
+### Python Environment
+- Always use `uv run python` instead of direct `python` commands
+
+### Exception Logging
+- Use `logger.exception()` instead of `logger.error()` for exceptions
+- Always include the exception object in the log message
+- Example: `logger.exception(f"Text describing what happened: {error}")`
+
+## Configuration Management
+
+When adding new configuration parameters:
+- Update all relevant shell scripts
+- Update Docker files
+- Ensure consistency across all runtime environments
+
+## External Tools & Resources
+
+- Use `strands-agents` MCP tool to access Strands Agents SDK documentation
+- Use AWS knowledge MCP tools for AWS service documentation and best practices
+- Review agent prompts using `.kiro/steering/prompt_engineering_guidelines.md` for best practices
+
+
+## Testing
+
+### Running Tests
+- Execute tests using: `bash run-tests.sh`
+- Always run pre-commit hooks: `git add . && pre-commit run -a`
+- Re-run full test suite after completing any task to ensure integrity
+
+### Mocking Strategy
+- Mock all external dependencies including:
+  - AWS services
+  - Valkey
+  - Slack Bolt
+  - Strands Agents
+
+## Version Control
+
+### Git Commands
+- Always use `--no-pager` with git commands to prevent interactive paging: `git --no-pager log`, `git --no-pager diff`
+- Use heredoc for commit messages and PR descriptions:
+  ```bash
+  git commit -S -m "$(cat <<'EOF'
+  [fix] commit title
+
+  Detailed commit message here
+  EOF
+  )"
+  ```
+
+### Branching
+- start a new branch of main for every vibe request
+- stay on the same branch when working on specs or have vibe requests started from the spec branch
+
+### Commit Workflow
+- Commit all changes at the end of every task
+- Commit title format: `[spec/fix/feature/refactoring] task name`
+- Commit message: Include detailed task summary
+- Always sign commits
