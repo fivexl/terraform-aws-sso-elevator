@@ -158,7 +158,7 @@
   - **Property 22: Cache TTL respect**
   - **Validates: Requirements 9.5**
 
-- [-] 13. Create Terraform resources for attribute syncer
+- [x] 13. Create Terraform resources for attribute syncer
   - Create Lambda function resource with Python 3.12 runtime
   - Create IAM role with Identity Store permissions
   - Create EventBridge schedule rule
@@ -166,7 +166,7 @@
   - Add conditional creation based on `attribute_sync_enabled` variable
   - _Requirements: 5.1, 5.2, 7.1, 7.2, 7.3_
 
-- [ ] 14. Add Terraform variables and validation
+- [x] 14. Add Terraform variables and validation
   - Add `attribute_sync_enabled` variable (default: false)
   - Add `attribute_sync_managed_groups` variable
   - Add `attribute_sync_rules` variable
@@ -176,7 +176,7 @@
   - Implement Terraform validation logic
   - _Requirements: 7.4, 7.5, 10.1, 10.5_
 
-- [ ] 15. Update module documentation
+- [-] 15. Update module documentation
   - Update README.md with attribute sync feature description
   - Add configuration examples
   - Add migration guide for existing deployments
