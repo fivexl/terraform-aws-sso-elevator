@@ -7,6 +7,7 @@ locals {
   revoker_lambda_arn   = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.revoker_lambda_name}"
   requester_lambda_arn = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
   sso_instance_arn     = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].arns[0] : var.sso_instance_arn
+  identity_store_id    = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].identity_store_ids[0] : var.identity_store_id
 
   # In case of default value for var.s3_bucket_name_for_audit_entry, we append a random string to the bucket name to make it unique.
   # In case of non-default value for var.s3_bucket_name_for_audit_entry, we use the value as is and expect the name is unique.
@@ -32,6 +33,24 @@ locals {
   event_bridge_scheduled_revocation_rule_name = coalesce(
     var.event_bridge_scheduled_revocation_rule_name,
     var.event_brige_scheduled_revocation_rule_name
+  )
+
+  # Attribute sync configuration
+  attribute_sync_event_rule_name = var.attribute_sync_event_rule_name
+
+  # Attribute sync validation errors
+  attribute_sync_validation_errors = concat(
+    var.attribute_sync_enabled && length(var.attribute_sync_managed_groups) == 0 ?
+    ["attribute_sync_managed_groups must not be empty when attribute_sync_enabled is true"] : [],
+
+    var.attribute_sync_enabled && length(var.attribute_sync_rules) == 0 ?
+    ["attribute_sync_rules must not be empty when attribute_sync_enabled is true"] : [],
+
+    # Validate all rules reference managed groups
+    [for rule in var.attribute_sync_rules :
+      "Rule for group '${rule.group_name}' references a group not in attribute_sync_managed_groups list"
+      if !contains(var.attribute_sync_managed_groups, rule.group_name)
+    ]
   )
 }
 

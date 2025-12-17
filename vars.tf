@@ -369,3 +369,88 @@ variable "config_bucket_kms_key_arn" {
   type        = string
   default     = null
 }
+
+
+# ==========================================
+# Attribute Sync Variables
+# ==========================================
+
+variable "attribute_sync_enabled" {
+  description = "Enable attribute-based group sync feature. When enabled, users will be automatically added to groups based on their Identity Store attributes."
+  type        = bool
+  default     = false
+}
+
+variable "attribute_sync_managed_groups" {
+  description = "List of group names to manage via attribute sync. Only these groups will be monitored and modified by the sync process."
+  type        = list(string)
+  default     = []
+}
+
+variable "attribute_sync_rules" {
+  description = <<EOT
+Attribute mapping rules for group sync. Each rule specifies a group name and the attribute conditions that must be met for a user to be added to that group.
+Example:
+[
+  {
+    group_name = "Engineering"
+    attributes = {
+      department = "Engineering"
+      employeeType = "FullTime"
+    }
+  }
+]
+EOT
+  type = list(object({
+    group_name = string
+    attributes = map(string)
+  }))
+  default = []
+}
+
+variable "attribute_sync_manual_assignment_policy" {
+  description = "Policy for handling manual assignments (users in managed groups who don't match any rules): 'warn' only logs and notifies, 'remove' automatically removes them."
+  type        = string
+  default     = "warn"
+
+  validation {
+    condition     = contains(["warn", "remove"], var.attribute_sync_manual_assignment_policy)
+    error_message = "attribute_sync_manual_assignment_policy must be either 'warn' or 'remove'"
+  }
+}
+
+variable "attribute_sync_schedule" {
+  description = "Schedule expression for attribute sync (e.g., 'rate(1 hour)' or 'cron(0 * * * ? *)'). Determines how often the sync runs."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "attribute_sync_lambda_memory" {
+  description = "Memory allocation for attribute syncer Lambda (MB). Increase for large user/group sets."
+  type        = number
+  default     = 512
+}
+
+variable "attribute_sync_lambda_timeout" {
+  description = "Timeout for attribute syncer Lambda (seconds). Increase for large user/group sets."
+  type        = number
+  default     = 300
+}
+
+variable "attribute_syncer_lambda_name" {
+  description = "Name for the attribute syncer Lambda function."
+  type        = string
+  default     = "attribute-syncer"
+}
+
+variable "attribute_sync_event_rule_name" {
+  description = "Name for the EventBridge rule that triggers the attribute syncer."
+  type        = string
+  default     = "sso-elevator-attribute-sync"
+}
+
+variable "identity_store_id" {
+  description = "The Identity Store ID. If not provided and sso_instance_arn is also not provided, it will be automatically discovered."
+  type        = string
+  default     = ""
+}

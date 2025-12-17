@@ -158,7 +158,7 @@
   - **Property 22: Cache TTL respect**
   - **Validates: Requirements 9.5**
 
-- [ ] 13. Create Terraform resources for attribute syncer
+- [-] 13. Create Terraform resources for attribute syncer
   - Create Lambda function resource with Python 3.12 runtime
   - Create IAM role with Identity Store permissions
   - Create EventBridge schedule rule
