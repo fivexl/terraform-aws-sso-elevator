@@ -38,8 +38,27 @@ class AuditEntry:
     sso_user_email: str = "NA"  # Human-readable email for the SSO user
 
 
-def log_operation(audit_entry: AuditEntry) -> type_defs.PutObjectOutputTypeDef:
-    cfg = get_config()
+def log_operation(
+    audit_entry: AuditEntry,
+    bucket_name: str | None = None,
+    bucket_prefix: str | None = None,
+) -> type_defs.PutObjectOutputTypeDef:
+    """Log an audit entry to S3.
+
+    Args:
+        audit_entry: The audit entry to log.
+        bucket_name: S3 bucket name for audit entries. If None, uses config.
+        bucket_prefix: S3 key prefix for partitions. If None, uses config.
+
+    Returns:
+        S3 PutObject response.
+    """
+    # Get bucket config from parameters or fall back to global config
+    if bucket_name is None or bucket_prefix is None:
+        cfg = get_config()
+        bucket_name = bucket_name or cfg.s3_bucket_for_audit_entry_name
+        bucket_prefix = bucket_prefix or cfg.s3_bucket_prefix_for_partitions
+
     now = datetime.now(timezone.utc)
     logger.debug("Posting audit entry to s3", extra={"audit_entry": audit_entry})
     logger.info("Posting audit entry to s3")
@@ -59,8 +78,6 @@ def log_operation(audit_entry: AuditEntry) -> type_defs.PutObjectOutputTypeDef:
         audit_entry_dict["matched_attributes"] = "NA"
 
     json_data = json.dumps(audit_entry_dict)
-    bucket_name = cfg.s3_bucket_for_audit_entry_name
-    bucket_prefix = cfg.s3_bucket_prefix_for_partitions
     return s3.put_object(
         Bucket=bucket_name,
         Key=f"{bucket_prefix}/{now.strftime('%Y/%m/%d')}/{uuid.uuid4()}.json",

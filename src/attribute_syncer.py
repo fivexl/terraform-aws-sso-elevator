@@ -251,11 +251,13 @@ def _execute_remove_action(
         return False
 
 
-def _log_audit_entry(action: SyncAction) -> None:
+def _log_audit_entry(action: SyncAction, bucket_name: str, bucket_prefix: str) -> None:
     """Log an audit entry for a sync action.
 
     Args:
         action: The sync action to log.
+        bucket_name: S3 bucket name for audit entries.
+        bucket_prefix: S3 key prefix for partitions.
     """
     try:
         # Map action type to operation type
@@ -276,7 +278,7 @@ def _log_audit_entry(action: SyncAction) -> None:
             matched_attributes=action.matched_attributes,
         )
         audit_entry = s3_module.create_sync_audit_entry(audit_params)
-        s3_module.log_operation(audit_entry)
+        s3_module.log_operation(audit_entry, bucket_name, bucket_prefix)
     except Exception as e:
         logger.exception(f"Failed to log audit entry for action {action.action_type}: {e}")
 
@@ -292,6 +294,8 @@ class SyncContext:
     config: SyncConfiguration
     cache_config: cache_module.CacheConfig
     slack_channel_id: str
+    audit_bucket_name: str
+    audit_bucket_prefix: str
 
 
 def _execute_action(
@@ -308,7 +312,7 @@ def _execute_action(
         )
         if success:
             result.users_added += 1
-            _log_audit_entry(action)
+            _log_audit_entry(action, ctx.audit_bucket_name, ctx.audit_bucket_prefix)
             send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
         else:
             result.errors.append(f"Failed to add {action.user_email} to {action.group_name}")
@@ -322,14 +326,14 @@ def _execute_action(
         if success:
             result.users_removed += 1
             result.manual_assignments_removed += 1
-            _log_audit_entry(action)
+            _log_audit_entry(action, ctx.audit_bucket_name, ctx.audit_bucket_prefix)
             send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
         else:
             result.errors.append(f"Failed to remove {action.user_email} from {action.group_name}")
 
     elif action.action_type == "warn":
         result.manual_assignments_detected += 1
-        _log_audit_entry(action)
+        _log_audit_entry(action, ctx.audit_bucket_name, ctx.audit_bucket_prefix)
         send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
 
 
@@ -499,6 +503,10 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
     # Get slack channel ID from environment
     slack_channel_id = os.environ.get("SLACK_CHANNEL_ID", "")
 
+    # Get audit bucket config from environment
+    audit_bucket_name = os.environ.get("S3_BUCKET_FOR_AUDIT_ENTRY_NAME", "")
+    audit_bucket_prefix = os.environ.get("S3_BUCKET_PREFIX_FOR_PARTITIONS", "audit")
+
     # Create sync context
     ctx = SyncContext(
         identity_store_client=identity_store_client,
@@ -508,6 +516,8 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
         config=config,
         cache_config=cache_config,
         slack_channel_id=slack_channel_id,
+        audit_bucket_name=audit_bucket_name,
+        audit_bucket_prefix=audit_bucket_prefix,
     )
 
     # Perform sync

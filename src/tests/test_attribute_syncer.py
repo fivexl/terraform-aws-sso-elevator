@@ -468,7 +468,7 @@ class TestErrorResilience:
             mock_s3.create_sync_audit_entry = MagicMock()
             mock_s3.log_operation = MagicMock()
 
-            _log_audit_entry(action)
+            _log_audit_entry(action, "test-bucket", "audit")
 
             # Verify audit entry was created
             mock_s3.SyncAuditParams.assert_called_once()
@@ -501,7 +501,7 @@ class TestErrorResilience:
 
             with patch("attribute_syncer.logger") as mock_logger:
                 # Should not raise
-                _log_audit_entry(action)
+                _log_audit_entry(action, "test-bucket", "audit")
 
                 # Should log the exception
                 mock_logger.exception.assert_called_once()
