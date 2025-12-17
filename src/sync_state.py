@@ -435,6 +435,9 @@ def _fetch_users_from_identity_store(
 ) -> list[dict]:
     """Fetch all users with their attributes from Identity Store.
 
+    Uses list_users to get user IDs, then describe_user with Extensions
+    to get full attributes including enterprise extension (department, etc.).
+
     Args:
         identity_store_client: The Identity Store client.
         identity_store_id: The Identity Store ID.
@@ -444,20 +447,36 @@ def _fetch_users_from_identity_store(
     """
     users: list[dict] = []
 
+    # First, list all users to get their IDs
     paginator = identity_store_client.get_paginator("list_users")
     for page in paginator.paginate(IdentityStoreId=identity_store_id):
         for user in page.get("Users", []):
-            extracted_attrs = _extract_user_attributes(user)
-            user_email = _extract_user_email(user)
+            user_id = user.get("UserId")
+            if not user_id:
+                continue
+
+            # Call describe_user with Extensions to get enterprise attributes
+            try:
+                full_user = identity_store_client.describe_user(
+                    IdentityStoreId=identity_store_id,
+                    UserId=user_id,
+                    Extensions=["aws:identitystore:enterprise"],
+                )
+            except Exception as e:
+                logger.warning(f"Failed to describe user {user_id}, using list data: {e}")
+                full_user = user
+
+            extracted_attrs = _extract_user_attributes(full_user)
+            user_email = _extract_user_email(full_user)
             # Log raw user data keys for debugging attribute extraction
             logger.debug(
-                f"Raw user data keys for '{mask_email(user_email)}': {list(user.keys())}, "
+                f"Raw user data keys for '{mask_email(user_email)}': {list(full_user.keys())}, "
                 f"extracted attributes: {_filter_sensitive_attributes(extracted_attrs)}"
             )
             users.append(
                 {
-                    "user_id": user.get("UserId"),
-                    "username": user.get("UserName", ""),
+                    "user_id": user_id,
+                    "username": full_user.get("UserName", ""),
                     "email": user_email,
                     "attributes": extracted_attrs,
                 }
