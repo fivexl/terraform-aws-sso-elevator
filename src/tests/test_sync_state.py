@@ -1445,3 +1445,367 @@ class TestCacheFallback:
                 if group_id:
                     assert group_id in current_state
                     assert current_state[group_id].current_members == frozenset()
+
+
+class TestPolicyBasedRemovalBehavior:
+    """
+    **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+    **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+    For any manual assignment, when policy is "warn" the user should not be removed,
+    and when policy is "remove" the user should be removed.
+    """
+
+    @settings(max_examples=100)
+    @given(data=non_matching_user_and_rule_strategy())
+    def test_warn_policy_generates_warn_action_not_remove(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+        **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+        For any manual assignment (user in group but not matching rules),
+        when policy is "warn", the system should generate a "warn" action
+        and NOT a "remove" action.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        # User is in the group but doesn't match rules (manual assignment)
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # Should have exactly one action for this user
+        user_actions = [a for a in actions if a.user_id == user.user_id]
+        assert len(user_actions) == 1
+
+        # Action should be "warn", not "remove"
+        assert user_actions[0].action_type == "warn"
+        assert user_actions[0].group_id == group_id
+
+    @settings(max_examples=100)
+    @given(data=non_matching_user_and_rule_strategy())
+    def test_remove_policy_generates_remove_action(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+        **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+        For any manual assignment (user in group but not matching rules),
+        when policy is "remove", the system should generate a "remove" action.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="remove",
+        )
+
+        # User is in the group but doesn't match rules (manual assignment)
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # Should have exactly one action for this user
+        user_actions = [a for a in actions if a.user_id == user.user_id]
+        assert len(user_actions) == 1
+
+        # Action should be "remove"
+        assert user_actions[0].action_type == "remove"
+        assert user_actions[0].group_id == group_id
+
+    @settings(max_examples=100)
+    @given(
+        data=non_matching_user_and_rule_strategy(),
+        policy=policy_strategy,
+    )
+    def test_policy_determines_action_type_for_manual_assignments(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+        policy: str,
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+        **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+        For any manual assignment and any policy setting, the action type
+        should match the configured policy.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy=policy,
+        )
+
+        # User is in the group but doesn't match rules (manual assignment)
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        # Should have exactly one action for this user
+        user_actions = [a for a in actions if a.user_id == user.user_id]
+        assert len(user_actions) == 1
+
+        # Action type should match policy
+        expected_action_type = policy  # "warn" -> "warn", "remove" -> "remove"
+        assert user_actions[0].action_type == expected_action_type
+
+    @settings(max_examples=100)
+    @given(data=matching_user_and_rule_strategy())
+    def test_matching_users_not_affected_by_policy(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+        **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+        For any user who matches the rules and is in the group,
+        no action should be generated regardless of policy setting.
+        """
+        user, rule, group_id = data
+
+        # Test with both policies
+        for policy in ["warn", "remove"]:
+            mapper = AttributeMapper([rule])
+            manager = SyncStateManager(
+                managed_group_ids={rule.group_name: group_id},
+                mapper=mapper,
+                manual_assignment_policy=policy,
+            )
+
+            # User is in the group AND matches rules (not a manual assignment)
+            current_state = {
+                group_id: GroupMembershipState(
+                    group_id=group_id,
+                    group_name=rule.group_name,
+                    current_members=frozenset([user.user_id]),
+                )
+            }
+
+            actions = manager.compute_sync_actions([user], current_state)
+
+            # Should have no actions for matching users
+            user_actions = [a for a in actions if a.user_id == user.user_id]
+            assert len(user_actions) == 0, f"Matching user should have no actions with policy '{policy}'"
+
+    @settings(max_examples=100)
+    @given(
+        matching_data=matching_user_and_rule_strategy(),
+        non_matching_data=non_matching_user_and_rule_strategy(),
+    )
+    def test_policy_only_affects_manual_assignments(
+        self,
+        matching_data: tuple[UserInfo, AttributeMappingRule, str],
+        non_matching_data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+        **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+        For any group with both matching and non-matching users,
+        the policy should only affect the non-matching users (manual assignments).
+        """
+        matching_user, rule, group_id = matching_data
+        non_matching_user, _, _ = non_matching_data
+
+        # Ensure different user IDs
+        assume(matching_user.user_id != non_matching_user.user_id)
+
+        # Ensure non_matching_user doesn't accidentally match the rule
+        assume(not rule.matches(non_matching_user.attributes))
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="remove",
+        )
+
+        # Both users are in the group
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([matching_user.user_id, non_matching_user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([matching_user, non_matching_user], current_state)
+
+        # Matching user should have no actions
+        matching_user_actions = [a for a in actions if a.user_id == matching_user.user_id]
+        assert len(matching_user_actions) == 0
+
+        # Non-matching user should have a remove action (policy is "remove")
+        non_matching_user_actions = [a for a in actions if a.user_id == non_matching_user.user_id]
+        assert len(non_matching_user_actions) == 1
+        assert non_matching_user_actions[0].action_type == "remove"
+
+    @settings(max_examples=100)
+    @given(data=non_matching_user_and_rule_strategy())
+    def test_warn_action_includes_manual_assignment_reason(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+        **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+        For any manual assignment with "warn" policy, the action reason
+        should indicate it's a manual assignment detection.
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="warn",
+        )
+
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        assert len(actions) == 1
+        # Reason should mention manual assignment or not matching rules
+        reason_lower = actions[0].reason.lower()
+        assert "manual assignment" in reason_lower or "does not match" in reason_lower
+
+    @settings(max_examples=100)
+    @given(data=non_matching_user_and_rule_strategy())
+    def test_remove_action_includes_policy_reason(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+        **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+        For any manual assignment with "remove" policy, the action reason
+        should indicate the policy is "remove".
+        """
+        user, rule, group_id = data
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="remove",
+        )
+
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset([user.user_id]),
+            )
+        }
+
+        actions = manager.compute_sync_actions([user], current_state)
+
+        assert len(actions) == 1
+        # Reason should mention the policy is "remove"
+        reason_lower = actions[0].reason.lower()
+        assert "remove" in reason_lower or "policy" in reason_lower
+
+    @settings(max_examples=100)
+    @given(
+        data=non_matching_user_and_rule_strategy(),
+        other_user_ids=st.lists(user_id_strategy, min_size=1, max_size=3),
+    )
+    def test_policy_applied_consistently_to_all_manual_assignments(
+        self,
+        data: tuple[UserInfo, AttributeMappingRule, str],
+        other_user_ids: list[str],
+    ):
+        """
+        **Feature: attribute-based-group-sync, Property 12: Policy-based removal behavior**
+        **Validates: Requirements 3.5, 4.1, 4.2, 4.3**
+
+        For any group with multiple manual assignments, the policy should
+        be applied consistently to all of them.
+        """
+        user, rule, group_id = data
+
+        # Create additional non-matching users
+        non_matching_users = [user]
+        for uid in other_user_ids:
+            if uid != user.user_id:
+                # Create user with attributes that don't match the rule
+                non_matching_users.append(
+                    UserInfo(
+                        user_id=uid,
+                        email=f"{uid[:8]}@example.com",
+                        attributes={"department": "NonMatching"},
+                    )
+                )
+
+        # Ensure none of the users match the rule
+        for u in non_matching_users:
+            assume(not rule.matches(u.attributes))
+
+        mapper = AttributeMapper([rule])
+        manager = SyncStateManager(
+            managed_group_ids={rule.group_name: group_id},
+            mapper=mapper,
+            manual_assignment_policy="remove",
+        )
+
+        # All non-matching users are in the group
+        current_state = {
+            group_id: GroupMembershipState(
+                group_id=group_id,
+                group_name=rule.group_name,
+                current_members=frozenset(u.user_id for u in non_matching_users),
+            )
+        }
+
+        actions = manager.compute_sync_actions(non_matching_users, current_state)
+
+        # All users should have remove actions
+        for u in non_matching_users:
+            user_actions = [a for a in actions if a.user_id == u.user_id]
+            assert len(user_actions) == 1, f"User {u.user_id} should have exactly one action"
+            assert user_actions[0].action_type == "remove", f"User {u.user_id} should have remove action"
