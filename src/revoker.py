@@ -412,8 +412,9 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
             slack_client.chat_postMessage(
                 channel=cfg.slack_channel_id,
                 text=(
-                    f"""Inconsistent group assignment detected in {
-                        group_assignment.group_name}-{group_assignment.group_id} for user {mention}."""
+                    f"""Inconsistent group assignment detected in {group_assignment.group_name}-{group_assignment.group_id} for user {
+                        mention
+                    }."""
                     f"The unidentified assignment will be automatically revoked.{time_notice}"
                 ),
             )
@@ -584,7 +585,7 @@ def handle_approvers_renotification_event(
                 channel=event.channel_id,
                 thread_ts=message["ts"],
                 text="The request is still awaiting approval. The next reminder will be "
-                f"sent in {time_to_wait.seconds//60} minutes, "
+                f"sent in {time_to_wait.seconds // 60} minutes, "
                 "unless the request is approved or discarded beforehand.",
             )
             logger.info("Notifications to approvers were sent.")

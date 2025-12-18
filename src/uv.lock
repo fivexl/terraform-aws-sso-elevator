@@ -570,7 +570,6 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "aws-lambda-powertools", extra = ["parser"] },
-    { name = "black" },
     { name = "boto3" },
     { name = "hypothesis", extra = ["ghostwriter"] },
     { name = "pytest" },
@@ -581,7 +580,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", extras = ["parser"], marker = "extra == 'dev'", specifier = ">=2.14.1" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=24.3.0" },
     { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.26.97" },
     { name = "boto3-stubs", extras = ["identitystore", "organizations", "s3", "scheduler", "sso-admin", "events"], specifier = ">=1.26.134" },
     { name = "croniter", specifier = ">=1.3.14" },
