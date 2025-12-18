@@ -40,11 +40,9 @@ jobs:
 
       - name: Install terraform-docs
         run: |
-          curl -Lo ./terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.21.0/terraform-docs-v0.21.0-linux-amd64.tar.gz
-          tar -xzf terraform-docs.tar.gz
-          chmod +x terraform-docs
-          sudo mv terraform-docs /usr/local/bin/
-          rm terraform-docs.tar.gz
+          curl -Lo /tmp/terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.21.0/terraform-docs-v0.21.0-linux-amd64.tar.gz
+          tar -xzf /tmp/terraform-docs.tar.gz -C /tmp
+          sudo mv /tmp/terraform-docs /usr/local/bin/
 
       - name: Install Trivy
         run: |
