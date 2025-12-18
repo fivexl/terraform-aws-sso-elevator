@@ -328,6 +328,8 @@ This will:
 
 6. **Error Handling**: If an error occurs processing one group or user, the syncer continues with others and reports errors in the summary notification.
 
+7. **No Overlap with group_config**: Groups in `attribute_sync_managed_groups` must NOT also appear in `group_config`. The attribute syncer adds users permanently based on attributes, while `group_config` is for JIT (just-in-time) access with scheduled revocation. If the same group is in both, the revoker will see attribute-synced users as "inconsistent assignments" and warn about them. Terraform will fail with a validation error if overlap is detected.
+
 # Important Considerations and Assumptions
 
 SSO elevator assumes that your Slack user email will match SSO user id otherwise it won't be able to match Slack user sending request to an AWS SSO user.
