@@ -22,6 +22,6 @@ RUN --mount=from=uv,source=/uv,target=/bin/uv \
     uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt && \
     uv pip install --python-platform linux --target /asset/python -r requirements.txt
 
-# Final stage for layer
+# Final stage for layer - this is an asset-only image, not a runnable container
 FROM scratch
 COPY --from=builder /asset /asset

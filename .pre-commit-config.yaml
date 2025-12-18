@@ -50,7 +50,11 @@ repos:
       exclude: ^(tests|src/tests)/
     - id: terraform_docs
       exclude: ^(tests|src/tests)/
+      verbose: true
+      args:
+        - --hook-config=--output-check-diff=true
     - id: terraform_trivy
       exclude: ^(tests|src/tests)/
       args:
-        - --args=--severity CRITICAL
+        # Dockerfile.layer uses FROM scratch for asset extraction only, not a runnable container
+        - --args=--severity HIGH,CRITICAL --skip-dirs .terraform,examples/complete/.terraform,tests --skip-files src/docker/Dockerfile.layer

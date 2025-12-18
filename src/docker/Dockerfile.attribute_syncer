@@ -32,11 +32,14 @@ RUN --mount=from=uv,source=/uv,target=/bin/uv \
 
 FROM public.ecr.aws/lambda/python:3.13
 
-# Copy the runtime dependencies from the builder stage
-COPY --from=builder ${LAMBDA_TASK_ROOT} ${LAMBDA_TASK_ROOT}
+# Copy the runtime dependencies from the builder stage with proper ownership
+COPY --from=builder --chown=1000:1000 ${LAMBDA_TASK_ROOT} ${LAMBDA_TASK_ROOT}
 
-# Copy the application code
-COPY src/ ${LAMBDA_TASK_ROOT}/
+# Copy the application code with proper ownership for non-root user
+COPY --chown=1000:1000 src/ ${LAMBDA_TASK_ROOT}/
+
+# Run as non-root user for security
+USER 1000
 
 # Set the AWS Lambda handler
 CMD ["attribute_syncer.lambda_handler"]
