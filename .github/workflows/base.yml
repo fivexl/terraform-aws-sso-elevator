@@ -40,11 +40,9 @@ jobs:
 
       - name: Install terraform-docs
         run: |
-          curl -Lo ./terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.16.0/terraform-docs-v0.16.0-linux-amd64.tar.gz
-          tar -xzf terraform-docs.tar.gz
-          chmod +x terraform-docs
-          sudo mv terraform-docs /usr/local/bin/
-          rm terraform-docs.tar.gz
+          curl -Lo /tmp/terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.21.0/terraform-docs-v0.21.0-linux-amd64.tar.gz
+          tar -xzf /tmp/terraform-docs.tar.gz -C /tmp
+          sudo mv /tmp/terraform-docs /usr/local/bin/
 
       - name: Install Trivy
         run: |
@@ -55,12 +53,6 @@ jobs:
 
       - name: Run tests
         run: bash run-tests.sh
-
-  terraform-job:
-    uses: fivexl/github-reusable-workflows/.github/workflows/terraform-job.yml@main
-    with:
-      terraform-version: "1.14.2"
-      aws-default-region: "eu-central-1"
 
   # localstack:
   #   name: localstack

@@ -26,7 +26,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt && \
     uv pip install --system -r requirements.txt
 
-# Copy function code
-COPY src/ ${LAMBDA_TASK_ROOT}/
+# Copy function code with proper ownership for non-root user
+COPY --chown=1000:1000 src/ ${LAMBDA_TASK_ROOT}/
+
+# Run as non-root user for security
+USER 1000
 
 CMD ["main.lambda_handler"]
