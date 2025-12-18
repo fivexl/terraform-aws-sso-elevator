@@ -53,14 +53,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install trivy -y
 
+      - name: Debug - show git status and README line 256
+        run: |
+          echo "=== Git status ==="
+          git status
+          echo "=== Git log (last 5 commits) ==="
+          git log --oneline -5
+          echo "=== README.md line 254-258 ==="
+          sed -n '254,258p' README.md
+          echo "=== Search for 'avaialble' in all files ==="
+          grep -rn "avaialble" . --include="*.md" --include="*.py" --include="*.tf" || echo "Not found"
+          echo "=== README.md total lines ==="
+          wc -l README.md
+          find . -type f -name "README.md" -exec wc -l {} \;
+
       - name: Run tests
         run: bash run-tests.sh
-
-  terraform-job:
-    uses: fivexl/github-reusable-workflows/.github/workflows/terraform-job.yml@main
-    with:
-      terraform-version: "1.14.2"
-      aws-default-region: "eu-central-1"
 
   # localstack:
   #   name: localstack

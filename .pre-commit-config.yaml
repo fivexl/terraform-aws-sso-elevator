@@ -3,6 +3,7 @@ repos:
     rev: v2.4.1
     hooks:
     -   id: codespell
+        args: [--show-context]
         types_or: [python, rst, markdown, cython, c, terraform]
         additional_dependencies: [tomli]
 # Python
