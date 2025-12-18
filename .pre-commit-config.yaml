@@ -1,4 +1,42 @@
 repos:
+-   repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+    -   id: codespell
+        types_or: [python, rst, markdown, cython, c, terraform]
+        additional_dependencies: [tomli]
+# Python
+-   repo: local
+    hooks:
+    # Python syntax check - catches syntax errors early
+    -   id: python-check-syntax
+        name: python syntax check
+        description: "Check Python syntax"
+        entry: python
+        args: [-m, py_compile]
+        language: python
+        types: [python]
+        require_serial: false
+    -   id: uv-export-src
+        name: uv export src requirements
+        description: "Export src/requirements.txt from pyproject.toml"
+        entry: bash -c 'cd src && uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt'
+        language: system
+        files: ^src/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+    -   id: uv-export-layer
+        name: uv export layer requirements
+        description: "Export layer/requirements.txt from pyproject.toml"
+        entry: bash -c 'cd layer && uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt'
+        language: system
+        files: ^layer/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.9
+    hooks:
+    -   id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+    -   id: ruff-format
 # Terraform
 - repo: https://github.com/antonbabenko/pre-commit-terraform
   rev: v1.104.0
@@ -15,41 +53,3 @@ repos:
       exclude: ^(tests|src/tests)/
       args:
         - --args=--severity CRITICAL
-# Python
--   repo: local
-    hooks:
-    # NOTE: we make `black` a local hook because if it's installed from
-    # PyPI (rather than from source) then it'll run twice as fast thanks to mypyc
-    -   id: black
-        name: black
-        description: "Black: The uncompromising Python code formatter"
-        entry: black
-        language: python
-        require_serial: true
-        types_or: [python, pyi]
-        additional_dependencies: [black==25.1.0]
-    -   id: uv-export-src
-        name: uv export src requirements
-        description: "Export src/requirements.txt from pyproject.toml"
-        entry: bash -c 'cd src && uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt'
-        language: system
-        files: ^src/(pyproject\.toml|uv\.lock)$
-        pass_filenames: false
-    -   id: uv-export-layer
-        name: uv export layer requirements
-        description: "Export layer/requirements.txt from pyproject.toml"
-        entry: bash -c 'cd layer && uv export --frozen --no-emit-workspace --no-dev --no-editable -o requirements.txt'
-        language: system
-        files: ^layer/(pyproject\.toml|uv\.lock)$
-        pass_filenames: false
--   repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: v0.11.0
-    hooks:
-    -   id: ruff
-        args: [--exit-non-zero-on-fix]
--   repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1 # use latest version here
-    hooks:
-    -   id: codespell
-        types_or: [python, rst, markdown, cython, c, terraform]
-        additional_dependencies: [tomli]
