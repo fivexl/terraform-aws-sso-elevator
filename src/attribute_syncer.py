@@ -407,7 +407,7 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
         # Step 4: Get managed groups with current membership
         logger.info("Fetching managed groups and membership state")
         try:
-            _, current_state = get_managed_groups(
+            fresh_groups, current_state = get_managed_groups(
                 identity_store_client=ctx.identity_store_client,
                 identity_store_id=ctx.identity_store_id,
                 s3_client=ctx.s3_client,
@@ -415,6 +415,8 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
                 managed_group_names=list(resolved_config.managed_group_names),
             )
             result.groups_processed = len(current_state)
+            # Use fresh groups data for cache update (may be fresher than all_groups from step 1)
+            all_groups = fresh_groups
         except Exception as e:
             logger.exception(f"Failed to fetch managed groups: {e}")
             result.errors.append(f"Failed to fetch managed groups: {e}")
