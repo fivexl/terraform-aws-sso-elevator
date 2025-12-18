@@ -9,13 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-import cache as cache_module
 from attribute_mapper import mask_email
 from config import get_logger
 
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
-    from mypy_boto3_s3 import S3Client
 
     from attribute_mapper import AttributeMapper
 
@@ -516,34 +514,17 @@ def _fetch_groups_from_identity_store(
 def get_users_with_attributes(
     identity_store_client: IdentityStoreClient,
     identity_store_id: str,
-    s3_client: S3Client,
-    cache_config: cache_module.CacheConfig,
 ) -> list[UserInfo]:
-    """Get all users with their attributes, using cache with API fallback.
-
-    This function uses the cache resilience pattern:
-    - If cache is available and valid, use cached data
-    - If cache is unavailable, fall back to direct API calls
-    - Update cache after successful API calls
+    """Get all users with their attributes from Identity Store.
 
     Args:
         identity_store_client: The Identity Store client.
         identity_store_id: The Identity Store ID.
-        s3_client: S3 client for cache operations.
-        cache_config: Cache configuration.
 
     Returns:
         List of UserInfo objects with user attributes.
-
-    Raises:
-        Exception: If both cache and API fail.
     """
-    users_data = cache_module.with_cache_resilience(
-        cache_getter=lambda: cache_module.get_cached_users_with_attributes(s3_client, cache_config),
-        api_getter=lambda: _fetch_users_from_identity_store(identity_store_client, identity_store_id),
-        cache_setter=lambda users: cache_module.set_cached_users_with_attributes(s3_client, cache_config, users),
-        resource_name="users_with_attributes",
-    )
+    users_data = _fetch_users_from_identity_store(identity_store_client, identity_store_id)
 
     # Convert dictionaries to UserInfo objects
     return [
@@ -556,52 +537,44 @@ def get_users_with_attributes(
     ]
 
 
-def get_managed_groups(
+def get_all_groups(
     identity_store_client: IdentityStoreClient,
     identity_store_id: str,
-    s3_client: S3Client,
-    cache_config: cache_module.CacheConfig,
-    managed_group_names: list[str],
-) -> tuple[dict[str, str], dict[str, GroupMembershipState]]:
-    """Get managed groups with their current membership state.
-
-    This function:
-    1. Fetches all groups (using cache with API fallback)
-    2. Filters to only managed groups
-    3. Fetches current membership for each managed group
+) -> dict[str, str]:
+    """Get all groups from Identity Store.
 
     Args:
         identity_store_client: The Identity Store client.
         identity_store_id: The Identity Store ID.
-        s3_client: S3 client for cache operations.
-        cache_config: Cache configuration.
+
+    Returns:
+        Dictionary mapping group names to IDs.
+    """
+    return _fetch_groups_from_identity_store(identity_store_client, identity_store_id)
+
+
+def get_managed_groups(
+    identity_store_client: IdentityStoreClient,
+    identity_store_id: str,
+    all_groups: dict[str, str],
+    managed_group_names: list[str],
+) -> dict[str, GroupMembershipState]:
+    """Get managed groups with their current membership state.
+
+    Args:
+        identity_store_client: The Identity Store client.
+        identity_store_id: The Identity Store ID.
+        all_groups: Dictionary mapping group names to IDs.
         managed_group_names: List of group names to manage.
 
     Returns:
-        Tuple of:
-        - Dictionary mapping group names to IDs (for all groups, for caching)
-        - Dictionary mapping group IDs to GroupMembershipState (for managed groups only)
-
-    Raises:
-        Exception: If both cache and API fail.
+        Dictionary mapping group IDs to GroupMembershipState.
     """
-    # Get all groups (name to ID mapping)
-    all_groups = cache_module.with_cache_resilience(
-        cache_getter=lambda: cache_module.get_cached_groups(s3_client, cache_config),
-        api_getter=lambda: _fetch_groups_from_identity_store(identity_store_client, identity_store_id),
-        cache_setter=lambda groups: cache_module.set_cached_groups(s3_client, cache_config, groups),
-        resource_name="groups",
-    )
-
-    # Filter to managed groups and get their membership state
-    managed_group_ids: dict[str, str] = {}
     current_state: dict[str, GroupMembershipState] = {}
 
     for group_name in managed_group_names:
         group_id = all_groups.get(group_name)
         if group_id:
-            managed_group_ids[group_name] = group_id
-
             # Fetch current membership for this group
             try:
                 members = _fetch_group_members(identity_store_client, identity_store_id, group_id)
@@ -621,8 +594,8 @@ def get_managed_groups(
         else:
             logger.warning(f"Managed group '{group_name}' not found in Identity Store")
 
-    logger.info(f"Retrieved {len(managed_group_ids)} of {len(managed_group_names)} managed groups")
-    return all_groups, current_state
+    logger.info(f"Retrieved {len(current_state)} of {len(managed_group_names)} managed groups")
+    return current_state
 
 
 def _fetch_group_members(

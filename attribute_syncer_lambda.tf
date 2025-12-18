@@ -60,8 +60,6 @@ module "attribute_syncer" {
 
     S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
     S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix
-    CONFIG_BUCKET_NAME              = local.config_bucket_name
-    CACHE_ENABLED                   = var.cache_enabled
 
     # Attribute sync specific configuration
     ATTRIBUTE_SYNC_ENABLED                  = "true"
@@ -138,21 +136,6 @@ data "aws_iam_policy_document" "attribute_syncer" {
       "s3:PutObject",
     ]
     resources = ["${local.s3_bucket_arn}/${var.s3_bucket_partition_prefix}/*"]
-  }
-
-  # S3 permissions for config bucket (cache read/write)
-  statement {
-    sid    = "AllowS3ConfigAccess"
-    effect = "Allow"
-    actions = [
-      "s3:GetObject",
-      "s3:PutObject",
-      "s3:ListBucket",
-    ]
-    resources = [
-      module.config_bucket.s3_bucket_arn,
-      "${module.config_bucket.s3_bucket_arn}/*"
-    ]
   }
 }
 

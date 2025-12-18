@@ -17,16 +17,15 @@ from typing import TYPE_CHECKING, Any
 import boto3
 from slack_sdk import WebClient
 
-import cache as cache_module
 import s3 as s3_module
 from attribute_mapper import AttributeCondition, AttributeMappingRule, AttributeMapper
 from config import get_logger
 from sync_config import (
     SyncConfiguration,
     SyncConfigurationError,
-    load_sync_config,
-    resolve_group_names_from_identity_store,
     get_valid_rules_for_resolved_groups,
+    load_sync_config,
+    resolve_group_names,
 )
 from sync_notifications import (
     SyncSummary,
@@ -39,6 +38,7 @@ from sync_state import (
     SyncStateManager,
     get_managed_groups,
     get_users_with_attributes,
+    get_all_groups,
 )
 
 if TYPE_CHECKING:
@@ -297,7 +297,6 @@ class SyncContext:
     s3_client: S3Client
     slack_client: WebClient
     config: SyncConfiguration
-    cache_config: cache_module.CacheConfig
     slack_channel_id: str
     audit_bucket_name: str
     audit_bucket_prefix: str
@@ -366,15 +365,14 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
     result.log_start()
 
     try:
-        # Step 1: Resolve group names to IDs
-        logger.info("Resolving group names to IDs")
+        # Step 1: Get all groups and resolve group names to IDs
+        logger.info("Fetching groups and resolving names to IDs")
         try:
-            resolved_config, all_groups = resolve_group_names_from_identity_store(
-                config=ctx.config,
+            all_groups = get_all_groups(
                 identity_store_client=ctx.identity_store_client,
                 identity_store_id=ctx.identity_store_id,
-                cached_groups=cache_module.get_cached_groups(ctx.s3_client, ctx.cache_config),
             )
+            resolved_config = resolve_group_names(ctx.config, all_groups)
         except Exception as e:
             logger.exception(f"Failed to resolve group names: {e}")
             result.errors.append(f"Failed to resolve group names: {e}")
@@ -395,8 +393,6 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
             users = get_users_with_attributes(
                 identity_store_client=ctx.identity_store_client,
                 identity_store_id=ctx.identity_store_id,
-                s3_client=ctx.s3_client,
-                cache_config=ctx.cache_config,
             )
             result.users_evaluated = len(users)
         except Exception as e:
@@ -407,16 +403,13 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
         # Step 4: Get managed groups with current membership
         logger.info("Fetching managed groups and membership state")
         try:
-            fresh_groups, current_state = get_managed_groups(
+            current_state = get_managed_groups(
                 identity_store_client=ctx.identity_store_client,
                 identity_store_id=ctx.identity_store_id,
-                s3_client=ctx.s3_client,
-                cache_config=ctx.cache_config,
+                all_groups=all_groups,
                 managed_group_names=list(resolved_config.managed_group_names),
             )
             result.groups_processed = len(current_state)
-            # Use fresh groups data for cache update (may be fresher than all_groups from step 1)
-            all_groups = fresh_groups
         except Exception as e:
             logger.exception(f"Failed to fetch managed groups: {e}")
             result.errors.append(f"Failed to fetch managed groups: {e}")
@@ -439,12 +432,6 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
             except Exception as e:
                 logger.exception(f"Error executing action {action.action_type} for {action.user_email}: {e}")
                 result.errors.append(f"Error executing {action.action_type} for {action.user_email}: {e}")
-
-        # Step 7: Update cache with fresh data
-        try:
-            cache_module.set_cached_groups(ctx.s3_client, ctx.cache_config, all_groups)
-        except Exception as e:
-            logger.warning(f"Failed to update groups cache: {e}")
 
         return _finalize_result(result)
 
@@ -499,12 +486,6 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
             "body": {"error": "IDENTITY_STORE_ID not configured", "success": False},
         }
 
-    # Create cache config directly from environment variables
-    cache_config = cache_module.CacheConfig(
-        bucket_name=os.environ.get("CONFIG_BUCKET_NAME", "sso-elevator-config"),
-        enabled=os.environ.get("CACHE_ENABLED", "true").lower() == "true",
-    )
-
     # Get slack channel ID from environment
     slack_channel_id = os.environ.get("SLACK_CHANNEL_ID", "")
 
@@ -519,7 +500,6 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
         s3_client=_s3_client,
         slack_client=slack_client,
         config=config,
-        cache_config=cache_config,
         slack_channel_id=slack_channel_id,
         audit_bucket_name=audit_bucket_name,
         audit_bucket_prefix=audit_bucket_prefix,

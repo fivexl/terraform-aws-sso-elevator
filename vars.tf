@@ -422,7 +422,7 @@ EOT
 variable "attribute_sync_manual_assignment_policy" {
   description = "Policy for handling manual assignments (users in managed groups who don't match any rules): 'warn' only logs and notifies, 'remove' automatically removes them."
   type        = string
-  default     = "warn"
+  default     = "remove"
 
   validation {
     condition     = contains(["warn", "remove"], var.attribute_sync_manual_assignment_policy)
