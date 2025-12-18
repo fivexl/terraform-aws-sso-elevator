@@ -50,9 +50,8 @@ repos:
       exclude: ^(tests|src/tests)/
     - id: terraform_docs
       exclude: ^(tests|src/tests)/
-      verbose: true
       args:
-        - --hook-config=--output-check-diff=true
+        - --args=--lockfile=false
     - id: terraform_trivy
       exclude: ^(tests|src/tests)/
       args:

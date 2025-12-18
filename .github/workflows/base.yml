@@ -54,6 +54,14 @@ jobs:
       - name: Run tests
         run: bash run-tests.sh
 
+      - name: Show uncommitted changes
+        if: always()
+        run: |
+          echo "=== Git Status ==="
+          git status
+          echo "=== Git Diff ==="
+          git diff
+
   # localstack:
   #   name: localstack
   #   runs-on: ubuntu-22.04
