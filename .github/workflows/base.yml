@@ -40,7 +40,7 @@ jobs:
 
       - name: Install terraform-docs
         run: |
-          curl -Lo ./terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.16.0/terraform-docs-v0.16.0-linux-amd64.tar.gz
+          curl -Lo ./terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.21.0/terraform-docs-v0.21.0-linux-amd64.tar.gz
           tar -xzf terraform-docs.tar.gz
           chmod +x terraform-docs
           sudo mv terraform-docs /usr/local/bin/
@@ -52,20 +52,6 @@ jobs:
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update
           sudo apt-get install trivy -y
-
-      - name: Debug - show git status and README line 256
-        run: |
-          echo "=== Git status ==="
-          git status
-          echo "=== Git log (last 5 commits) ==="
-          git log --oneline -5
-          echo "=== README.md line 254-258 ==="
-          sed -n '254,258p' README.md
-          echo "=== Search for 'avaialble' in all files ==="
-          grep -rn "avaialble" . --include="*.md" --include="*.py" --include="*.tf" || echo "Not found"
-          echo "=== README.md total lines ==="
-          wc -l README.md
-          find . -type f -name "README.md" -exec wc -l {} \;
 
       - name: Run tests
         run: bash run-tests.sh
