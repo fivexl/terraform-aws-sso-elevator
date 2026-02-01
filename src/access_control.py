@@ -6,6 +6,7 @@ import boto3
 
 import config
 import entities
+import organizations
 import s3
 import schedule
 import sso
@@ -222,6 +223,9 @@ def execute_decision(  # noqa: PLR0913
         account_assignment,
     )
 
+    # Fetch account name now to avoid API call during revocation
+    account = organizations.describe_account(org_client, account_id)
+
     s3.log_operation(
         audit_entry=s3.AuditEntry(
             account_id=account_id,
@@ -245,19 +249,16 @@ def execute_decision(  # noqa: PLR0913
         schedule_client=schedule_client,
         approver=approver,
         requester=requester,
-        user_account_assignment=sso.UserAccountAssignment(
-            instance_arn=sso_instance.arn,
-            account_id=account_id,
-            permission_set_arn=permission_set.arn,
-            user_principal_id=sso_user_principal_id,
-        ),
+        user_account_assignment=account_assignment,
         thread_ts=thread_ts,
+        permission_set_name=permission_set.name,
+        account_name=account.name,
     )
 
     return ExecuteDecisionResult(
         granted=True,
         schedule_name=schedule_name,
-        instance_arn=sso_instance.arn,
+        instance_arn=cfg.sso_instance_arn,
         permission_set_arn=permission_set.arn,
         permission_set_name=permission_set.name,
         account_id=account_id,
