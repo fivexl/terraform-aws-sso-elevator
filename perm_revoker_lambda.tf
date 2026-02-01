@@ -53,6 +53,7 @@ module "access_revoker" {
       SCHEDULE_GROUP_NAME  = var.schedule_group_name
 
       SSO_INSTANCE_ARN            = local.sso_instance_arn
+      IDENTITY_STORE_ID           = local.identity_store_id
       POWERTOOLS_LOGGER_LOG_EVENT = true
 
       POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack

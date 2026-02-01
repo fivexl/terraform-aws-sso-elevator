@@ -330,7 +330,7 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
 
     _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identity_store_client,
-        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+        identity_store_id=sso.get_identity_store_id(cfg, sso_client),
         email=get_user(slack_client, id=requester_slack_id).email,
         cfg=cfg,
     )
@@ -501,10 +501,10 @@ def create_slack_mention_by_principal_id(
     identitystore_client: IdentityStoreClient,
     slack_client: WebClient,
 ) -> str:
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    identity_store_id = sso.get_identity_store_id(cfg, sso_client)
     aws_user_emails = sso.get_user_emails(
         identitystore_client,
-        sso_instance.identity_store_id,
+        identity_store_id,
         sso_user_id,
     )
     user_name = None

@@ -15,6 +15,9 @@ class RevokeEvent(BaseModel):
     user_account_assignment: sso.UserAccountAssignment
     permission_duration: timedelta
     thread_ts: str | None = None
+    # Optional cached names to avoid API calls during revocation
+    permission_set_name: str | None = None
+    account_name: str | None = None
 
 
 class GroupRevokeEvent(BaseModel):

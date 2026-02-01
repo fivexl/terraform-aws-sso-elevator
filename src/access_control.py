@@ -6,6 +6,7 @@ import boto3
 
 import config
 import entities
+import organizations
 import s3
 import schedule
 import sso
@@ -202,14 +203,14 @@ def execute_decision(  # noqa: PLR0913
         logger.info("Access request denied")
         return ExecuteDecisionResult(granted=False)
 
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
+    identity_store_id = sso.get_identity_store_id(cfg, sso_client)
+    permission_set = sso.get_permission_set(sso_client, cfg.sso_instance_arn, permission_set_name)
     sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
+        identity_store_client=identitystore_client, identity_store_id=identity_store_id, email=requester.email, cfg=cfg
     )
 
     account_assignment = sso.UserAccountAssignment(
-        instance_arn=sso_instance.arn,
+        instance_arn=cfg.sso_instance_arn,
         account_id=account_id,
         permission_set_arn=permission_set.arn,
         user_principal_id=sso_user_principal_id,
@@ -221,6 +222,9 @@ def execute_decision(  # noqa: PLR0913
         sso_client,
         account_assignment,
     )
+
+    # Fetch account name now to avoid API call during revocation
+    account = organizations.describe_account(org_client, account_id)
 
     s3.log_operation(
         audit_entry=s3.AuditEntry(
@@ -245,19 +249,16 @@ def execute_decision(  # noqa: PLR0913
         schedule_client=schedule_client,
         approver=approver,
         requester=requester,
-        user_account_assignment=sso.UserAccountAssignment(
-            instance_arn=sso_instance.arn,
-            account_id=account_id,
-            permission_set_arn=permission_set.arn,
-            user_principal_id=sso_user_principal_id,
-        ),
+        user_account_assignment=account_assignment,
         thread_ts=thread_ts,
+        permission_set_name=permission_set.name,
+        account_name=account.name,
     )
 
     return ExecuteDecisionResult(
         granted=True,
         schedule_name=schedule_name,
-        instance_arn=sso_instance.arn,
+        instance_arn=cfg.sso_instance_arn,
         permission_set_arn=permission_set.arn,
         permission_set_name=permission_set.name,
         account_id=account_id,
@@ -282,7 +283,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
 
     sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identitystore_client,
-        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+        identity_store_id=identity_store_id,
         email=requester.email,
         cfg=cfg,
     )

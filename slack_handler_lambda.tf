@@ -55,6 +55,7 @@ module "access_requester_slack_handler" {
       POST_UPDATE_TO_SLACK = var.revoker_post_update_to_slack
 
       SSO_INSTANCE_ARN                            = local.sso_instance_arn
+      IDENTITY_STORE_ID                           = local.identity_store_id
       POWERTOOLS_LOGGER_LOG_EVENT                 = true
       SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
       REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn

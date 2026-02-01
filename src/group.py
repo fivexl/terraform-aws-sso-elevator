@@ -25,8 +25,7 @@ session = boto3._get_default_session()
 sso_client: SSOAdminClient = session.client("sso-admin")
 identity_store_client: IdentityStoreClient = session.client("identitystore")
 schedule_client: EventBridgeSchedulerClient = session.client("scheduler")
-sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-identity_store_id = sso_instance.identity_store_id
+identity_store_id = sso.get_identity_store_id(cfg, sso_client)
 
 
 @handle_errors

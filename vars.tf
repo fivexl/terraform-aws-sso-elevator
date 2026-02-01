@@ -462,7 +462,14 @@ variable "attribute_sync_event_rule_name" {
 }
 
 variable "identity_store_id" {
-  description = "The Identity Store ID. If not provided and sso_instance_arn is also not provided, it will be automatically discovered."
+  description = <<EOT
+The Identity Store ID (e.g., "d-1234567890").
+If not provided and sso_instance_arn is also not provided, it will be automatically discovered.
+
+Providing this value is RECOMMENDED for API efficiency - it eliminates describe_sso_instance API calls
+on every Lambda invocation. You can find this value in the AWS IAM Identity Center console or via:
+  aws sso-admin list-instances --query 'Instances[0].IdentityStoreId' --output text
+EOT
   type        = string
   default     = ""
 }

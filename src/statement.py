@@ -15,11 +15,12 @@ class ResourceType(str, Enum):
 AWSAccountId = Annotated[str, Field(pattern=r"^\d{12}$")]
 AWSOUName = Annotated[str, Field(pattern=r"^[\s\S]{1,128}$")]
 PermissionSetName = Annotated[str, Field(pattern=r"^[\w+=,.@-]{1,32}$")]
+PermissionSetArn = Annotated[str, Field(pattern=r"^arn:aws:sso:::permissionSet/ssoins-[a-f0-9]+/ps-[a-f0-9]+$")]
 WildCard = Annotated[str, Field(pattern=r"^\*$")]
 
 
 class BaseStatement(BaseModel):
-    permission_set: FrozenSet[Union[PermissionSetName, WildCard]]
+    permission_set: FrozenSet[Union[PermissionSetName, PermissionSetArn, WildCard]]
 
     allow_self_approval: bool | None = None
     approval_is_not_required: bool | None = None

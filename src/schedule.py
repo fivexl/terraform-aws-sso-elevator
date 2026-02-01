@@ -138,6 +138,8 @@ def schedule_revoke_event(  # noqa: PLR0913
     requester: entities.slack.User,
     user_account_assignment: sso.UserAccountAssignment,
     thread_ts: str | None = None,
+    permission_set_name: str | None = None,
+    account_name: str | None = None,
 ) -> tuple[scheduler_type_defs.CreateScheduleOutputTypeDef, str]:
     """Schedule a revoke event.
 
@@ -154,6 +156,8 @@ def schedule_revoke_event(  # noqa: PLR0913
         user_account_assignment=user_account_assignment,
         permission_duration=permission_duration,
         thread_ts=thread_ts,
+        permission_set_name=permission_set_name,
+        account_name=account_name,
     )
     logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
     result = schedule_client.create_schedule(

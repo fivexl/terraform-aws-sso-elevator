@@ -127,6 +127,7 @@ class Config(BaseSettings):
     send_dm_if_user_not_in_channel: bool = True
 
     sso_instance_arn: str
+    identity_store_id: str = ""
 
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"
