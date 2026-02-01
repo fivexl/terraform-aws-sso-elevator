@@ -165,8 +165,10 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
         user_principal_id=user_principal_id,
     )
 
-    # Cache user_group_ids for use in handle_account_selection
+    # Cache user info for use in handle_account_selection and handle_request_for_access_submittion
     user_view_map[f"{view_key}:group_ids"] = user_group_ids
+    user_view_map[f"{view_key}:user_principal_id"] = user_principal_id
+    user_view_map[f"{view_key}:user_email"] = user_email
 
     # Filter accounts based on user's eligible statements
     eligible_account_ids = statement.get_accounts_for_user(cfg.statements, user_group_ids)
@@ -414,19 +416,32 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
     logger.info("View submitted", extra={"view": request})
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)
 
-    # Get user's group memberships for eligibility check (defense in depth)
+    # Try to use cached user info from load_select_options_for_account_access_request
+    callback_id = slack_helpers.RequestForAccessView.CALLBACK_ID
+    view_key = f"{request.requester_slack_id}:{callback_id}"
+    cached_user_principal_id = user_view_map.get(f"{view_key}:user_principal_id")
+    cached_group_ids = user_view_map.get(f"{view_key}:group_ids")
+
     identity_store_id = sso.get_identity_store_id(cfg, sso_client)
-    user_principal_id, _ = sso.get_user_principal_id_by_email(
-        identity_store_client=identity_store_client,
-        identity_store_id=identity_store_id,
-        email=requester.email,
-        cfg=cfg,
-    )
-    user_group_ids = sso.get_user_group_ids(
-        identity_store_client=identity_store_client,
-        identity_store_id=identity_store_id,
-        user_principal_id=user_principal_id,
-    )
+
+    if cached_user_principal_id and cached_group_ids is not None:
+        logger.debug("Using cached user info", extra={"view_key": view_key})
+        user_principal_id = cached_user_principal_id
+        user_group_ids = cached_group_ids
+    else:
+        # Fall back to API calls if cache miss (defense in depth)
+        logger.debug("Cache miss, fetching user info from API", extra={"view_key": view_key})
+        user_principal_id, _ = sso.get_user_principal_id_by_email(
+            identity_store_client=identity_store_client,
+            identity_store_id=identity_store_id,
+            email=requester.email,
+            cfg=cfg,
+        )
+        user_group_ids = sso.get_user_group_ids(
+            identity_store_client=identity_store_client,
+            identity_store_id=identity_store_id,
+            user_principal_id=user_principal_id,
+        )
 
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
