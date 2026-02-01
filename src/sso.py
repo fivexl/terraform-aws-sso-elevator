@@ -470,7 +470,8 @@ def get_permission_sets_from_config(client: SSOAdminClient, cfg: config.Config) 
         permission_sets = list(list_permission_sets(client, cfg.sso_instance_arn))
     else:
         permission_sets = [
-            ps for ps in list_permission_sets(client, cfg.sso_instance_arn)
+            ps
+            for ps in list_permission_sets(client, cfg.sso_instance_arn)
             if ps.name in cfg.permission_sets or ps.arn in cfg.permission_sets
         ]
     return permission_sets
