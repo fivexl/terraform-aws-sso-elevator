@@ -59,7 +59,7 @@ def capture(event: str, distinct_id: str, properties: dict | None = None) -> Non
     client = get_posthog_client()
     if client:
         all_properties = {"application": APPLICATION, **(properties or {})}
-        client.capture(distinct_id, event, properties=all_properties)
+        client.capture(distinct_id=distinct_id, event=event, properties=all_properties)
 
 
 def shutdown() -> None:
