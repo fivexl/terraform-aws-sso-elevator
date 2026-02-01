@@ -50,6 +50,8 @@ jobs:
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update
           sudo apt-get install trivy -y
+          # Pre-download policy bundle to avoid race condition when pre-commit runs parallel scans
+          trivy fs --scanners misconfig --cache-dir ~/.cache/trivy .
 
       - name: Run tests
         run: bash run-tests.sh
