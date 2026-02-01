@@ -570,11 +570,20 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
             return None
         raise
 
-    permission_set = sso.describe_permission_set(
-        sso_client,
-        sso_instance_arn=user_account_assignment.instance_arn,
-        permission_set_arn=user_account_assignment.permission_set_arn,
-    )
+    # Use cached names from event if available, otherwise fall back to API calls
+    # (for backwards compatibility with old events that don't have cached names)
+    if revoke_event.permission_set_name:
+        permission_set = entities.aws.PermissionSet(
+            arn=user_account_assignment.permission_set_arn,
+            name=revoke_event.permission_set_name,
+            description=None,
+        )
+    else:
+        permission_set = sso.describe_permission_set(
+            sso_client,
+            sso_instance_arn=user_account_assignment.instance_arn,
+            permission_set_arn=user_account_assignment.permission_set_arn,
+        )
 
     s3.log_operation(
         s3.AuditEntry(
@@ -595,13 +604,17 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
 
     if cfg.post_update_to_slack:
-        try:
-            account = organizations.describe_account(org_client, user_account_assignment.account_id)
-        except Exception:
-            logger.warning(
-                "Failed to describe account, using account ID as fallback", extra={"account_id": user_account_assignment.account_id}
-            )
-            account = entities.aws.Account(id=user_account_assignment.account_id, name=user_account_assignment.account_id)
+        # Use cached account name from event if available
+        if revoke_event.account_name:
+            account = entities.aws.Account(id=user_account_assignment.account_id, name=revoke_event.account_name)
+        else:
+            try:
+                account = organizations.describe_account(org_client, user_account_assignment.account_id)
+            except Exception:
+                logger.warning(
+                    "Failed to describe account, using account ID as fallback", extra={"account_id": user_account_assignment.account_id}
+                )
+                account = entities.aws.Account(id=user_account_assignment.account_id, name=user_account_assignment.account_id)
         slack_notify_user_on_revoke(
             cfg=cfg,
             account_assignment=user_account_assignment,
