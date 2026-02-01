@@ -463,9 +463,7 @@ def slack_notify_user_on_revoke(  # noqa: PLR0913
             )
         # Delete the early revoke button from the thread
         slack_helpers.delete_early_revoke_button(slack_client, cfg.slack_channel_id, thread_ts)
-        # Simplified message for threads (context already in thread)
-        # Change the "Access revoked." message to something friendly and maybe even a bit cheeky. It's too serious. At a minimum "Access expired""ended"/"completed"
-        text = "Access revoked."
+        text = "Session complete."
     else:
         # Full message when not in a thread
         mention = slack_helpers.create_slack_mention_by_principal_id(
@@ -515,9 +513,7 @@ def slack_notify_user_on_group_access_revoke(  # noqa: PLR0913
             )
         # Delete the early revoke button from the thread
         slack_helpers.delete_early_revoke_button(slack_client, cfg.slack_channel_id, thread_ts)
-        # Simplified message for threads (context already in thread)
-        # Change the "Access revoked." message to something friendly and maybe even a bit cheeky. It's too serious. At a minimum "Access expired""ended"/"completed"
-        text = "Access revoked."
+        text = "Session complete."
     else:
         # Full message when not in a thread
         mention = slack_helpers.create_slack_mention_by_principal_id(

@@ -137,7 +137,7 @@ class RequestForAccessView:
                 action_id=cls.PERMISSION_SET_ACTION_ID,
                 placeholder=PlainTextObject(text="Select permission set"),
                 options=[
-                    Option(text=PlainTextObject(text=permission_set.name), value=permission_set.name)
+                    Option(text=PlainTextObject(text=permission_set.name), value=permission_set.arn)
                     for permission_set in sorted_permission_sets
                 ],
             ),

@@ -43,9 +43,10 @@ def determine_affected_statements(
     account_id: str | None = None,
     permission_set_name: str | None = None,
     group_id: str | None = None,
+    permission_set_arn: str | None = None,
 ) -> FrozenSet[Statement] | FrozenSet[GroupStatement]:
     if isinstance(statements, FrozenSet) and all(isinstance(item, Statement) for item in statements):
-        return get_affected_statements(statements, account_id, permission_set_name)  # type: ignore # noqa: PGH003
+        return get_affected_statements(statements, account_id, permission_set_name, permission_set_arn)  # type: ignore # noqa: PGH003
 
     if isinstance(statements, FrozenSet) and all(isinstance(item, GroupStatement) for item in statements):
         return get_affected_group_statements(statements, group_id)  # type: ignore # noqa: PGH003
@@ -63,6 +64,7 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
     account_id: str | None = None,
     group_id: str | None = None,
     user_group_ids: set[str] | None = None,
+    permission_set_arn: str | None = None,
 ) -> AccessRequestDecision:
     """Make a decision on an access request.
 
@@ -75,13 +77,14 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
         user_group_ids: The set of SSO group IDs the user belongs to.
             If None, group-based filtering is skipped (backwards compatible).
             If an empty set, only statements without required_group_membership will match.
+        permission_set_arn: The ARN of the permission set (optional, for matching ARN-based config).
     """
     # Filter statements by user's group membership eligibility if user_group_ids provided
     # This is only applicable to Statement (not GroupStatement)
     if user_group_ids is not None and isinstance(statements, frozenset) and all(isinstance(s, Statement) for s in statements):
         statements = get_eligible_statements_for_user(statements, user_group_ids)  # type: ignore # noqa: PGH003
 
-    affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
+    affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id, permission_set_arn)
 
     decision_based_on_statements: set[Statement] | set[GroupStatement] = set()
     potential_approvers = set()
@@ -168,8 +171,9 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     permission_set_name: str | None = None,
     account_id: str | None = None,
     group_id: str | None = None,
+    permission_set_arn: str | None = None,
 ) -> ApproveRequestDecision:
-    affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
+    affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id, permission_set_arn)
 
     for statement in affected_statements:
         if approver_email in statement.approvers:
