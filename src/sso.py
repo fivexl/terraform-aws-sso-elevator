@@ -316,6 +316,34 @@ def get_permission_set_by_name(client: SSOAdminClient, sso_instance_arn: str, pe
     raise errors.NotFound(f"Permission set with name {permission_set_name} not found")
 
 
+# Pattern to detect permission set ARN format
+_PERMISSION_SET_ARN_PATTERN = r"^arn:aws:sso:::permissionSet/ssoins-[a-f0-9]+/ps-[a-f0-9]+$"
+
+
+def get_permission_set(client: SSOAdminClient, sso_instance_arn: str, permission_set_name_or_arn: str) -> entities.aws.PermissionSet:
+    """Get permission set by name or ARN.
+
+    If the input matches the ARN pattern, uses describe_permission_set directly (1 API call).
+    Otherwise, falls back to get_permission_set_by_name (lists all permission sets).
+
+    Args:
+        client: SSO Admin client
+        sso_instance_arn: SSO instance ARN
+        permission_set_name_or_arn: Permission set name or ARN
+
+    Returns:
+        PermissionSet object
+    """
+    import re
+
+    if re.match(_PERMISSION_SET_ARN_PATTERN, permission_set_name_or_arn):
+        logger.debug("Permission set input is ARN, using direct describe", extra={"arn": permission_set_name_or_arn})
+        return describe_permission_set(client, sso_instance_arn, permission_set_name_or_arn)
+    else:
+        logger.debug("Permission set input is name, resolving", extra={"name": permission_set_name_or_arn})
+        return get_permission_set_by_name(client, sso_instance_arn, permission_set_name_or_arn)
+
+
 def list_permission_sets_arns(client: SSOAdminClient, sso_instance_arn: str) -> Generator[str, None, None]:
     paginator = client.get_paginator("list_permission_sets")
     for page in paginator.paginate(InstanceArn=sso_instance_arn):

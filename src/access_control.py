@@ -203,7 +203,7 @@ def execute_decision(  # noqa: PLR0913
         return ExecuteDecisionResult(granted=False)
 
     identity_store_id = sso.get_identity_store_id(cfg, sso_client)
-    permission_set = sso.get_permission_set_by_name(sso_client, cfg.sso_instance_arn, permission_set_name)
+    permission_set = sso.get_permission_set(sso_client, cfg.sso_instance_arn, permission_set_name)
     sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identitystore_client, identity_store_id=identity_store_id, email=requester.email, cfg=cfg
     )
