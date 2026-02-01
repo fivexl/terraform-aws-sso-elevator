@@ -32,14 +32,26 @@ class Statement(BaseStatement):
     resource_type: ResourceType = Field(default=ResourceType.Account, frozen=True)
     resource: FrozenSet[Union[AWSAccountId, WildCard]]
 
-    def affects(self, account_id: str, permission_set_name: str) -> bool:  # noqa: ANN101
-        return (account_id in self.resource or "*" in self.resource) and (
-            permission_set_name in self.permission_set or "*" in self.permission_set
+    def affects(self, account_id: str, permission_set_name: str, permission_set_arn: str | None = None) -> bool:  # noqa: ANN101
+        account_match = account_id in self.resource or "*" in self.resource
+        ps_match = (
+            permission_set_name in self.permission_set
+            or "*" in self.permission_set
+            or (permission_set_arn is not None and permission_set_arn in self.permission_set)
         )
+        return account_match and ps_match
 
 
-def get_affected_statements(statements: FrozenSet[Statement], account_id: str, permission_set_name: str) -> FrozenSet[Statement]:
-    return frozenset(statement for statement in statements if statement.affects(account_id, permission_set_name))
+def get_affected_statements(
+    statements: FrozenSet[Statement],
+    account_id: str,
+    permission_set_name: str,
+    permission_set_arn: str | None = None,
+) -> FrozenSet[Statement]:
+    return frozenset(
+        statement for statement in statements
+        if statement.affects(account_id, permission_set_name, permission_set_arn)
+    )
 
 
 def get_permission_sets_for_account(statements: FrozenSet[Statement], account_id: str) -> set[str]:

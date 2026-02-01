@@ -500,7 +500,7 @@ def get_permission_sets_from_config_with_cache(
     if "*" in cfg.permission_sets:
         return all_permission_sets
     else:
-        return [ps for ps in all_permission_sets if ps.name in cfg.permission_sets]
+        return [ps for ps in all_permission_sets if ps.name in cfg.permission_sets or ps.arn in cfg.permission_sets]
 
 
 def get_account_assignment_information(

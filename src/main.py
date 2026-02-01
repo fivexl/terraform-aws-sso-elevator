@@ -258,6 +258,9 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     cache_for_dublicate_requests["account_id"] = payload.request.account_id
     cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
 
+    # Look up permission set to get ARN for matching and name for display
+    permission_set = sso.get_permission_set(sso_client, cfg.sso_instance_arn, payload.request.permission_set_name)
+
     if payload.action == entities.ApproverAction.Discard:
         blocks = slack_helpers.HeaderSectionBlock.set_status(
             blocks=payload.message["blocks"],
@@ -281,7 +284,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             distinct_id=requester.email,
             properties={
                 "account_id": payload.request.account_id,
-                "permission_set": payload.request.permission_set_name,
+                "permission_set": permission_set.name,
                 "approver_email": approver.email,
                 "requester_email": requester.email,
             },
@@ -304,6 +307,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         permission_set_name=payload.request.permission_set_name,
         approver_email=approver.email,
         requester_email=requester.email,
+        permission_set_arn=permission_set.arn,
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -349,7 +353,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             distinct_id=requester.email,
             properties={
                 "account_id": payload.request.account_id,
-                "permission_set": payload.request.permission_set_name,
+                "permission_set": permission_set.name,
                 "approver_email": approver.email,
                 "requester_email": requester.email,
                 "duration_hours": payload.request.permission_duration.total_seconds() / 3600,
@@ -443,12 +447,16 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             user_principal_id=user_principal_id,
         )
 
+    # Look up permission set to get ARN for matching against ARN-based config
+    permission_set = sso.get_permission_set(sso_client, cfg.sso_instance_arn, request.permission_set_name)
+
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
         account_id=request.account_id,
         permission_set_name=request.permission_set_name,
         requester_email=requester.email,
         user_group_ids=user_group_ids,
+        permission_set_arn=permission_set.arn,
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -457,7 +465,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         distinct_id=requester.email,
         properties={
             "account_id": request.account_id,
-            "permission_set": request.permission_set_name,
+            "permission_set": permission_set.name,
             "requester_email": requester.email,
             "decision_reason": decision.reason.value,
             "granted": decision.grant,
@@ -478,7 +486,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             slack_client=client,
             requester_slack_id=request.requester_slack_id,
             account=account,
-            role_name=request.permission_set_name,
+            role_name=permission_set.name,
             reason=request.reason,
             permission_duration=request.permission_duration,
             show_buttons=show_buttons,
@@ -590,7 +598,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             distinct_id=requester.email,
             properties={
                 "account_id": request.account_id,
-                "permission_set": request.permission_set_name,
+                "permission_set": permission_set.name,
                 "approver_email": requester.email,
                 "requester_email": requester.email,
                 "duration_hours": request.permission_duration.total_seconds() / 3600,
