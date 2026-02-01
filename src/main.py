@@ -82,7 +82,7 @@ def build_initial_form_handler(
         try:
             sso.get_user_principal_id_by_email(
                 identity_store_client=identity_store_client,
-                identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+                identity_store_id=sso.get_identity_store_id(cfg, sso_client),
                 email=slack_helpers.get_user(client, id=body.get("user", {}).get("id")).email,
                 cfg=cfg,
             )
@@ -118,8 +118,8 @@ def build_initial_form_handler(
 def load_select_options_for_group_access_request(client: WebClient, body: dict) -> SlackResponse:
     logger.info("Loading select options for view (groups)")
     logger.debug("Request body", extra={"body": body})
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    groups = sso.get_groups_from_config(sso_instance.identity_store_id, identity_store_client, cfg)
+    identity_store_id = sso.get_identity_store_id(cfg, sso_client)
+    groups = sso.get_groups_from_config(identity_store_id, identity_store_client, cfg)
 
     user_id = body.get("user", {}).get("id")
     callback_id = slack_helpers.RequestForGroupAccessView.CALLBACK_ID
@@ -151,17 +151,17 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
     view_key = f"{user_id}:{callback_id}"
 
     # Get user's SSO info and group memberships for filtering
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    identity_store_id = sso.get_identity_store_id(cfg, sso_client)
     user_email = slack_helpers.get_user(client, id=user_id).email
     user_principal_id, _ = sso.get_user_principal_id_by_email(
         identity_store_client=identity_store_client,
-        identity_store_id=sso_instance.identity_store_id,
+        identity_store_id=identity_store_id,
         email=user_email,
         cfg=cfg,
     )
     user_group_ids = sso.get_user_group_ids(
         identity_store_client=identity_store_client,
-        identity_store_id=sso_instance.identity_store_id,
+        identity_store_id=identity_store_id,
         user_principal_id=user_principal_id,
     )
 
@@ -415,16 +415,16 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)
 
     # Get user's group memberships for eligibility check (defense in depth)
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+    identity_store_id = sso.get_identity_store_id(cfg, sso_client)
     user_principal_id, _ = sso.get_user_principal_id_by_email(
         identity_store_client=identity_store_client,
-        identity_store_id=sso_instance.identity_store_id,
+        identity_store_id=identity_store_id,
         email=requester.email,
         cfg=cfg,
     )
     user_group_ids = sso.get_user_group_ids(
         identity_store_client=identity_store_client,
-        identity_store_id=sso_instance.identity_store_id,
+        identity_store_id=identity_store_id,
         user_principal_id=user_principal_id,
     )
 

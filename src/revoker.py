@@ -464,6 +464,7 @@ def slack_notify_user_on_revoke(  # noqa: PLR0913
         # Delete the early revoke button from the thread
         slack_helpers.delete_early_revoke_button(slack_client, cfg.slack_channel_id, thread_ts)
         # Simplified message for threads (context already in thread)
+        # Change the "Access revoked." message to something friendly and maybe even a bit cheeky. It's too serious. At a minimum "Access expired""ended"/"completed"
         text = "Access revoked."
     else:
         # Full message when not in a thread
@@ -515,6 +516,7 @@ def slack_notify_user_on_group_access_revoke(  # noqa: PLR0913
         # Delete the early revoke button from the thread
         slack_helpers.delete_early_revoke_button(slack_client, cfg.slack_channel_id, thread_ts)
         # Simplified message for threads (context already in thread)
+        # Change the "Access revoked." message to something friendly and maybe even a bit cheeky. It's too serious. At a minimum "Access expired""ended"/"completed"
         text = "Access revoked."
     else:
         # Full message when not in a thread
@@ -738,9 +740,7 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
     cfg: config.Config,
     slack_client: slack_sdk.WebClient,
 ) -> None:
-    sso_instance_arn = cfg.sso_instance_arn
-    sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
-    identity_store_id = sso_instance.identity_store_id
+    identity_store_id = sso.get_identity_store_id(cfg, sso_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
     group_assignments_from_events = [
@@ -791,9 +791,7 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
     cfg: config.Config,
     slack_client: slack_sdk.WebClient,
 ) -> None:
-    sso_instance_arn = cfg.sso_instance_arn
-    sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
-    identity_store_id = sso_instance.identity_store_id
+    identity_store_id = sso.get_identity_store_id(cfg, sso_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
     group_assignments_from_events = [
@@ -851,7 +849,6 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
 ) -> None:
     account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     account_assignments_from_events = [
         sso.AccountAssignment(
             permission_set_arn=scheduled_event.revoke_event.user_account_assignment.permission_set_arn,
@@ -875,7 +872,7 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
                     account_id=account_assignment.account_id,
                     permission_set_arn=account_assignment.permission_set_arn,
                     user_principal_id=account_assignment.principal_id,
-                    instance_arn=sso_instance.arn,
+                    instance_arn=cfg.sso_instance_arn,
                 ),
                 sso_client=sso_client,
                 org_client=org_client,

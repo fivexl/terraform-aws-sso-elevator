@@ -233,6 +233,24 @@ def describe_sso_instance(client: SSOAdminClient, instance_arn: str) -> IAMIdent
     return next(instance for instance in sso_instances if instance.arn == instance_arn)
 
 
+def get_identity_store_id(cfg: "config.Config", sso_client: SSOAdminClient) -> str:
+    """Get identity store ID from config or by querying SSO.
+
+    If cfg.identity_store_id is set, returns it directly (no API call).
+    Otherwise falls back to describe_sso_instance.
+
+    Args:
+        cfg: Config object
+        sso_client: SSO Admin client
+
+    Returns:
+        Identity store ID
+    """
+    if cfg.identity_store_id:
+        return cfg.identity_store_id
+    return describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id
+
+
 @dataclass
 class AccountAssignment:
     account_id: str
