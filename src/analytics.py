@@ -18,6 +18,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from typing import TYPE_CHECKING
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     import posthog as posthog_module
 
 APPLICATION = "aws-sso-elevator"
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -50,16 +52,20 @@ def capture(event: str, distinct_id: str, properties: dict | None = None) -> Non
     """Capture an analytics event if PostHog is configured.
 
     Adds the global "application" property to all events for filtering.
+    Failures are logged but don't crash the app.
 
     Args:
         event: The event name (e.g., "aws_access_requested").
         distinct_id: Unique identifier for the user (typically email).
         properties: Optional dict of event properties.
     """
-    client = get_posthog_client()
-    if client:
-        all_properties = {"application": APPLICATION, **(properties or {})}
-        client.capture(distinct_id, event, properties=all_properties)
+    try:
+        client = get_posthog_client()
+        if client:
+            all_properties = {"application": APPLICATION, **(properties or {})}
+            client.capture(event, distinct_id=distinct_id, properties=all_properties)
+    except Exception:
+        logger.exception("Failed to capture analytics event")
 
 
 def shutdown() -> None:
