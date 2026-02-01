@@ -469,6 +469,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             "requester_email": requester.email,
             "decision_reason": decision.reason.value,
             "granted": decision.grant,
+            "duration_hours": request.permission_duration.total_seconds() / 3600,
         },
     )
 

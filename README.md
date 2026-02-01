@@ -1,66 +1,16 @@
-[![FivexL](https://releases.fivexl.io/fivexlbannergit_new.png)](https://fivexl.io/#email-subscription)
+# Terraform AWS SSO Elevator
 
-### Want practical AWS infrastructure insights?
+Temporary elevated access to AWS accounts via AWS IAM Identity Center (SSO) and Slack.
 
-👉 [Subscribe to our newsletter](https://fivexl.io/#email-subscription) to get:
+> **Note**: This is a fork of [FivexL/terraform-aws-sso-elevator](https://github.com/fivexl/terraform-aws-sso-elevator). Credit to FivexL for creating and maintaining the original module.
 
-- Real stories from real AWS projects  
-- No-nonsense DevOps tactics  
-- Cost, security & compliance patterns that actually work  
-- Expert guidance from engineers in the field
+## Overview
 
-=========================================================================
+AWS IAM Identity Center doesn't support temporary assignment of permission sets. This module enables temporary elevated access to AWS accounts, achieving the principle of least privilege access without permanently assigned permission sets.
 
-# Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack
+Users request access via a Slack form. Requests are approved/denied by designated approvers. Access is automatically revoked when the time expires.
 
-- [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack)
-- [Introduction](#introduction)
-- [Functionality](#functionality)
-  - [Group Assignments Mode](#group-assignments-mode)
-  - [Attribute-Based Group Sync](#attribute-based-group-sync)
-- [Important Considerations and Assumptions](#important-considerations-and-assumptions)
-- [Module configuration, and features](#module-configuration-and-features)
-  - [Configuration structure](#configuration-structure)
-    - [Explicit Deny](#explicit-deny)
-    - [Automatic Approval](#automatic-approval)
-    - [Aggregation of Rules](#aggregation-of-rules)
-    - [Single Approver](#single-approver)
-    - [Diagram of processing a request:](#diagram-of-processing-a-request)
-  - [Secondary Subdomain Fallback Feature:](#secondary-subdomain-fallback-feature)
-  - [Sending direct messages to users feature](#sending-direct-messages-to-users-feature)
-  - [API gateway feature](#api-gateway-feature)
-- [Deployment and Usage](#deployment-and-usage)
-  - [SSO Delegation](#sso-delegation)
-  - [Build Process](#build-process)
-  - [Terraform deployment example](#terraform-deployment-example)
-  - [Slack App creation](#slack-app-creation)
-- [Terraform docs](#terraform-docs)
-  - [Requirements](#requirements)
-  - [Providers](#providers)
-  - [Modules](#modules)
-  - [Resources](#resources)
-  - [Inputs](#inputs)
-  - [Outputs](#outputs)
-  - [More info](#more-info)
-- [Development](#development)
-  - [Post review](#post-review)
-
-
-# Introduction
-Currently, AWS IAM Identity Center does not support the temporary assignment of permission sets to users. As a result, teams using AWS IAM Identity Center are forced to either create highly restricted permission sets or rely on AWS IAM role chaining. Both approaches have significant drawbacks and result in an overly complex security model. The desired solution is one where AWS operators are granted access only when necessary and for the exact duration needed, with a default state of no access or read-only access.
-
-The terraform-aws-sso-elevator module addresses this issue by allowing the implementation of temporary elevated access to AWS accounts while avoiding permanently assigned permission sets, thereby achieving the principle of least privilege access.
-
-For more information on temporary elevated access for AWS and the AWS-provided solution, visit [Managing temporary elevated access to your AWS environment](https://aws.amazon.com/blogs/security/managing-temporary-elevated-access-to-your-aws-environment/).
-
-The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a Slack form. We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
-
-AWS announced that [Customers of AWS IAM Identity Center (successor to AWS Single Sign-On) can use CyberArk Secure Cloud Access, Ermetic, and Okta Access Requests for temporary elevated access](https://aws.amazon.com/about-aws/whats-new/2023/05/aws-partners-temporary-elevated-access-capabilities-iam-identity-center/). So if you are already using one of those vendors we recommend checking their offering first.
-
-Watch demo
-[![Demo](https://img.youtube.com/vi/iR3Rdjd7QMU/maxresdefault.jpg)](https://youtu.be/iR3Rdjd7QMU)
-
-# Functionality
+## How It Works
 
 ```mermaid
 sequenceDiagram
@@ -78,625 +28,64 @@ sequenceDiagram
     AWS Lambda - Access Revoker->>Slack:  send notification about revocation
 ```
 
-The module deploys two AWS Lambda functions: access-requester and access-revoker. The access-requester handles requests from Slack, creating user-level permission set assignments and an Amazon EventBridge trigger that activates the access-revoker Lambda when it is time to revoke access. The access-revoker revokes user access when triggered by EventBridge and also runs daily to revoke any user-level permission set assignments without an associated EventBridge trigger. Group-level permission sets are not affected.
-
-For auditing purposes, information about all access grants and revocations is stored in S3. See [documentation here](athena_query/) to find out how to configure AWS Athena to query audit logs.
-
-Additionally, the Access-Revoker continuously reconciles the revocation schedule with all user-level permission set assignments and issues warnings if it detects assignments without a revocation schedule (presumably created by someone manually). By default, the Access-Revoker will automatically revoke all unknown user-level permission set assignments daily. However, you can configure it to operate more or less frequently.
-
-## Group Assignments Mode
-Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access. SSO elevator now can add users to a groups, to do so, you will need to use /group-access command, which, instead of showing the form for account assignments, will present a Slack form where the user can select a group they want access to, specify a reason, and define the duration for which access is required.
-
-The basic logic for access, configuration, and Slack integration remains the same as before. To enable the new Group Assignments Mode, you need to provide the module with a new group_config Terraform variable:
-```hcl
-group_config = [
-    {              
-      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "ApprovalIsNotRequired": true
-    },
-    {              
-      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "AllowSelfApproval" : true,
-    },
-    {
-      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-    },
-]
-```
-There are two key differences compared to the standard Elevator configuration:
-- ResourceType is not required for group access configurations.
-- In the Resource field, you must provide group IDs instead of account IDs.
-
-The Elevator will only work with groups specified in the configuration.
-
-If you were using Terraform AWS SSO Elevator before version 2.0.0, you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
-{
-    "name": "group-access",
-    "type": "global",
-    "callback_id": "request_for_group_membership",
-    "description": "Request access to SSO Group"
-}
-To disable this functionality, simply remove the shortcut from the manifest.
-
-
-## Attribute-Based Group Sync
-
-Starting from version 3.0, SSO Elevator introduces automatic user-to-group synchronization based on IAM Identity Center user attributes. This feature allows you to automatically add users to groups based on their organizational attributes (e.g., department, job title, cost center) without manual intervention.
-
-### How It Works
-
-```mermaid
-sequenceDiagram
-    EventBridge->>Lambda (attribute-syncer): Triggers on schedule (e.g., hourly)
-    Lambda (attribute-syncer)->>Identity Store: Query all users with attributes
-    Lambda (attribute-syncer)->>Identity Store: Query managed group memberships
-    Lambda (attribute-syncer)->>Lambda (attribute-syncer): Evaluate users against mapping rules
-    Lambda (attribute-syncer)->>Identity Store: Add users matching rules to groups
-    Lambda (attribute-syncer)->>Identity Store: Detect manual assignments
-    Lambda (attribute-syncer)->>S3 Bucket: Write audit entries
-    Lambda (attribute-syncer)->>Slack: Send notifications
-```
-
-The attribute syncer Lambda runs on a configurable schedule and:
-1. Reads attribute mapping rules from configuration
-2. Queries all users and their attributes from the Identity Store
-3. Evaluates users against mapping rules (exact string matching with AND logic)
-4. Adds users to groups when they match rules
-5. Detects manually-added users who don't match any rules
-6. Optionally removes manual assignments based on policy
-7. Logs all operations to the audit bucket
-8. Sends Slack notifications for important events
-
-### Configuration
-
-To enable attribute-based group sync, add the following to your Terraform configuration:
+## Quick Start
 
 ```hcl
-module "aws_sso_elevator" {
-  # ... existing configuration ...
-
-  # Enable the feature
-  attribute_sync_enabled = true
-
-  # List of groups to manage (by name)
-  attribute_sync_managed_groups = [
-    "Engineering",
-    "Finance",
-    "DevOps",
-  ]
-
-  # Attribute mapping rules
-  attribute_sync_rules = [
-    {
-      group_name = "Engineering"
-      attributes = {
-        department   = "Engineering"
-        employeeType = "FullTime"
-      }
-    },
-    {
-      group_name = "Finance"
-      attributes = {
-        department = "Finance"
-      }
-    },
-    {
-      group_name = "DevOps"
-      attributes = {
-        department = "Engineering"
-        jobTitle   = "DevOps Engineer"
-      }
-    },
-  ]
-
-  # Policy for handling manual assignments: "warn" or "remove"
-  attribute_sync_manual_assignment_policy = "warn"
-
-  # How often to run the sync
-  attribute_sync_schedule = "rate(1 hour)"
-}
-```
-
-### Configuration Options
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `attribute_sync_enabled` | Enable/disable the feature | `false` |
-| `attribute_sync_managed_groups` | List of group names to manage | `[]` |
-| `attribute_sync_rules` | Attribute mapping rules | `[]` |
-| `attribute_sync_manual_assignment_policy` | Policy for manual assignments: `warn` or `remove` | `"warn"` |
-| `attribute_sync_schedule` | Schedule expression (e.g., `rate(1 hour)`) | `"rate(1 hour)"` |
-| `attribute_sync_lambda_memory` | Lambda memory in MB | `512` |
-| `attribute_sync_lambda_timeout` | Lambda timeout in seconds | `300` |
-
-### Attribute Mapping Rules
-
-Each rule specifies:
-- **group_name**: The name of the group to add users to (must be in `attribute_sync_managed_groups`)
-- **attributes**: A map of attribute conditions that must ALL match (AND logic)
-
-Supported attributes include any SCIM attributes in your Identity Store:
-- `department`
-- `employeeType`
-- `costCenter`
-- `jobTitle`
-- Custom attributes
-
-### Manual Assignment Policy
-
-When the syncer detects users in managed groups who don't match any rules:
-
-- **warn** (default): Logs a warning and sends a Slack notification, but does not remove the user
-- **remove**: Automatically removes the user from the group and sends a notification
-
-### Audit Logging
-
-All sync operations are logged to the same S3 audit bucket used by SSO Elevator:
-- `sync_add`: User added to group based on attribute match
-- `sync_remove`: User removed from group (no longer matches rules)
-- `manual_detected`: Manual assignment detected (user doesn't match rules)
-
-### Slack Notifications
-
-The syncer sends notifications for:
-- Users added to groups
-- Manual assignments detected
-- Manual assignments removed (when policy is `remove`)
-- Sync errors
-
-### Migration Guide for Existing Deployments
-
-If you're upgrading from a previous version of SSO Elevator:
-
-**Phase 1: Deploy with feature disabled (default)**
-```hcl
-# No changes needed - feature is disabled by default
-module "aws_sso_elevator" {
-  source  = "fivexl/sso-elevator/aws"
-  version = "3.0.0"
-  # ... existing configuration ...
-}
-```
-
-**Phase 2: Configure and enable**
-```hcl
-module "aws_sso_elevator" {
-  source  = "fivexl/sso-elevator/aws"
-  version = "3.0.0"
-  # ... existing configuration ...
-
-  attribute_sync_enabled = true
-  attribute_sync_managed_groups = ["Engineering", "Finance"]
-  attribute_sync_rules = [
-    {
-      group_name = "Engineering"
-      attributes = { department = "Engineering" }
-    },
-    {
-      group_name = "Finance"
-      attributes = { department = "Finance" }
-    },
-  ]
-  # Start with "warn" to review manual assignments
-  attribute_sync_manual_assignment_policy = "warn"
-}
-```
-
-**Phase 3: Monitor and adjust**
-- Review Slack notifications for manual assignments
-- Adjust mapping rules as needed
-- Once confident, change policy from `warn` to `remove` if desired
-
-### Rollback Strategy
-
-If issues arise after enabling attribute sync:
-
-**Immediate rollback** - Set `attribute_sync_enabled = false` and apply:
-```hcl
-attribute_sync_enabled = false
-```
-This will:
-- Stop scheduled syncs immediately
-- Preserve existing group memberships (no users removed)
-- Keep all audit logs in S3
-
-**Complete removal** - Remove all attribute sync configuration:
-- The Lambda function and EventBridge rule will be deleted
-- Existing group memberships remain unchanged
-- Audit logs remain in S3 for compliance
-
-### Important Considerations
-
-1. **Managed Groups Only**: The syncer only operates on groups explicitly listed in `attribute_sync_managed_groups`. All other groups are completely ignored.
-
-2. **Group Names**: Configuration uses human-readable group names. The Lambda resolves names to IDs at runtime.
-
-3. **Attribute Matching**: Uses exact string matching. Attribute values must match exactly (case-sensitive).
-
-4. **AND Logic**: When multiple attributes are specified in a rule, ALL must match for the user to be added.
-
-5. **Caching**: The syncer uses the same caching mechanism as SSO Elevator to minimize API calls.
-
-6. **Error Handling**: If an error occurs processing one group or user, the syncer continues with others and reports errors in the summary notification.
-
-7. **No Overlap with group_config**: Groups in `attribute_sync_managed_groups` must NOT also appear in `group_config`. The attribute syncer adds users permanently based on attributes, while `group_config` is for JIT (just-in-time) access with scheduled revocation. If the same group is in both, the revoker will see attribute-synced users as "inconsistent assignments" and warn about them. Terraform will fail with a validation error if overlap is detected.
-
-# Important Considerations and Assumptions
-
-SSO elevator assumes that your Slack user email will match SSO user id otherwise it won't be able to match Slack user sending request to an AWS SSO user.
-
-When onboarding your organization, be aware that the access-revoker will revoke all user-level Permission Set assignments in the AWS accounts you specified in the module configuration. If you specify Accounts: '*' in any of rules, it will remove user-level assignments from all accounts. Therefore, if you want to maintain some permanent SSO assignments (e.g., read-only in production and admin in development or test accounts), you should use group-level assignments. It is advisable to ensure your AWS admin has the necessary access level to your AWS SSO management account through group-level assignments so that you can experiment with the module's configuration.
-
-The same behavior applies to group-level assignments: if you specify a group in the `group_configuration`, SSO Elevator will remove any users from that group if they were not added by SSO Elevator.
-
-
-
-# Module configuration, and features
-
-## Configuration structure
-
-The configuration is a list of dictionaries, where each dictionary represents a single configuration rule.
-
-Each configuration rule specifies which resource(s) the rule applies to, which permission set(s) are being requested, who the approvers are, and any additional options for approving the request.
-
-The fields in the configuration dictionary are:
-
-- **ResourceType**: This field specifies the type of resource being requested, such as "Account." As of now, the only supported value is "Account."
-- **Resource**: This field defines the specific resource(s) being requested. It accepts either a single string or a list of strings. Setting this field to "*" allows the rule to match all resources associated with the specified `ResourceType`.
-- **PermissionSet**: Here, you indicate the permission set(s) being requested. This can be either a single string or a list of strings. You can specify permission sets by **name** (e.g., `"AdministratorAccess"`) or by **ARN** (e.g., `"arn:aws:sso:::permissionSet/ssoins-1234567890abcdef/ps-1234567890abcdef"`). Using ARNs is recommended for Terraform users as it reduces API calls and allows direct reference to `aws_ssoadmin_permission_set.*.arn`. If set to "*", the rule matches all permission sets available for the defined `Resource` and `ResourceType`.
-- **Approvers**: This field lists the potential approvers for the request. It accepts either a single string or a list of strings representing different approvers.
-- **AllowSelfApproval**: This field can be a boolean, indicating whether the requester, if present in the `Approvers` list, is permitted to approve their own request. It defaults to `None`.
-- **ApprovalIsNotRequired**: This field can also be a boolean, signifying whether the approval can be granted automatically, bypassing the approvers entirely. The default value is `None`.
-- 
-### Explicit Deny
-In the system, an explicit denial in any statement overrides any approvals. For instance, if one statement designates an individual as an approver for all accounts, but another statement specifies that the same individual is not allowed to self-approve or to bypass the approval process for a particular account and permission set (by setting "allow_self_approval" and "approval_is_not_required" to `False`), then that individual will not be able to approve requests for that specific account, thereby enforcing a stricter control.
-
-### Automatic Approval
-Requests will be approved automatically if either of the following conditions are met:
-
-- AllowSelfApproval is set to true and the requester is in the Approvers list.
-- ApprovalIsNotRequired is set to true.
-
-### Aggregation of Rules
-The approval decision and final list of reviewers will be calculated dynamically based on the aggregate of all rules. If you have a rule that specifies that someone is an approver for all accounts, then that person will be automatically added to all requests, even if there are more detailed rules for specific accounts or permission sets.
-
-### Single Approver
-If there is only one approver and AllowSelfApproval is not set to true, nobody will be able to approve the request.
-
-### Diagram of processing a request:
-![Diagram of processing a request](docs/Diagram_of_processing_a_request.png)
-
-## Secondary Subdomain Fallback Feature:
-WARNING: 
-This feature is STRONGLY DISCOURAGED because it can introduce security risks.
-
-SSO Elevator uses Slack email addresses to find users in AWS SSO. In some cases, the domain of a Slack user's email 
-(e.g., "john.doe@old.domain") differs from the domain defined in AWS SSO (e.g., "john.doe@new.domain"). By setting 
-these fallback domains, SSO Elevator will attempt to replace the original domain from Slack with each secondary domain 
-in order to locate a matching AWS SSO user. 
- 
-- This mechanism should only be used in rare or critical situations where you cannot align Slack and AWS SSO domains.
-
-Example:
-- Slack email: john.doe@old.domain
-- AWS SSO email: john.doe@new.domain
-
-Without fallback domains, SSO Elevator cannot find the SSO user due to the domain mismatch. By setting 
-secondary_fallback_email_domains = ["@new.domain"], SSO Elevator will try to swap out "@old.domain" for "@new.domain"
-(and any other domain in the list) and attempt to locate "john.doe@new.domain" in AWS SSO.
-
-Security Risks & Recommendations:
-- If multiple SSO users share the same local-part (before the "@") across different domains, SSO Elevator may 
-  grant permissions to the wrong user.
-- Disable or remove entries in this variable as soon as you no longer need domain fallback functionality 
-  to restore a more secure configuration.
-
-IN SUMMARY:
-Use "secondary_fallback_email_domains" ONLY if absolutely necessary. It is best practice to maintain 
-consistent, verified email domains in Slack and AWS SSO. Remove these fallback entries as soon as you 
-resolve the underlying domain mismatch to minimize security exposure.
-
-SSO Elevator will update request message in channel with Warning, if fallback domains are in use.
-
-Notes:
-- SSO Elevator always prioritizes the primary domain from Slack (the Slack user's email) when searching for a user in AWS SSO.
-- SSO Elevator adds a large warning message in Slack if it uses a secondary fallback domain to find a user in AWS SSO.
-- The secondary domain feature works **ONLY** for the requester, approvers in the configuration must have the same email domain as in Slack.
-
-## Sending direct messages to users feature
-SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one except them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
-
-## API gateway feature
-The module uses API Gateway to expose the Lambda function to Slack. This avoids the [lambda-1](https://docs.aws.amazon.com/securityhub/latest/userguide/lambda-controls.html#lambda-1) SecurityHub control alert that would be triggered by using Lambda function URLs with a FunctionURLAllowPublicAccess resource-based policy.
-
-The API Gateway URL is available in the `requester_api_endpoint_url` output. Use this URL as the Request URL in your Slack App manifest.
-
-# Deployment and Usage
-
-The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
-
-## SSO Delegation
-AWS recommends delegating SSO administration to a separate “delegated SSO administrator account.” We also recommend creating a dedicated “sso-tooling” account to manage access across your entire organization. You can learn more about how to use SSO Elevator in the delegated SSO administrator account here: [SSO delegation](/docs/docs.md#sso-delegation)
-
-## Build Process
-There are three ways to build an SSO elevator:
-
-1. Using pre-created images pulled from ECR (Default)
-2. Using Docker build to build images locally (provide the variable use_pre_created_image = false)
-3. There is also an option to host ECR yourself by providing the following variables:
-```hcl
-ecr_repo_name = "example_repo_name"
-ecr_owner_account_id = "<example_account_id>"
-```
-
-GitHub CI of this repository pre-builds the requester and revoker lambda Docker images on every release and push them to FivexL's private ECR. Users can use these pre-built Docker images to build lambdas.
-
-ECR is private for the following reasons:
-
-- AWS Lambda can't use any other source of images except ECR.
-- AWS Lambda can't use public ECR.
-- AWS Lambda doesn't support pulling container images from Amazon ECR using a pull-through cache rule (so we can't create a private repo from the user's side to pull images from the GHCR, for example).
-
-Images and repositories are replicated in every region that AWS SSO supports except these:
-```
-- ap_east_1
-- eu_south_1
-- ap_southeast_3
-- af_south_1
-- me_south_1
-- il_central_1
-- me_central_1
-- eu_south_2
-- ap_south_2
-- eu_central_2
-- ap_southeast_4
-- ca_west_1
-- us_gov_east_1
-- us_gov_west_1
-```
-Those regions are not enabled by default. If you need to use a region that is not supported by the module, please let us know by creating an issue, and we will add support for it. 
-
-## Terraform deployment example
-
-```terraform
-
 data "aws_ssoadmin_instances" "this" {}
 
-# You will have to create /sso-elevator/slack-signing-secret AWS SSM Parameter
-# and store Slack app signing secret there, if you have not created app yet then
-# you can leave a dummy value there and update it after Slack app is ready
-data "aws_ssm_parameter" "sso_elevator_slack_signing_secret" {
+data "aws_ssm_parameter" "slack_signing_secret" {
   name = "/sso-elevator/slack-signing-secret"
 }
 
-# You will have to create /sso-elevator/slack-bot-token AWS SSM Parameter
-# and store Slack bot token there, if you have not created app yet then
-# you can leave a dummy value there and update it after Slack app is ready
-data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
+data "aws_ssm_parameter" "slack_bot_token" {
   name = "/sso-elevator/slack-bot-token"
 }
 
 module "aws_sso_elevator" {
-  source  = "fivexl/sso-elevator/aws"
-  version = "2.0.2"
+  source = "github.com/PostHog/terraform-aws-sso-elevator"
 
-  slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
-  slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
-  slack_channel_id     = local.slack_channel_id
-
-  # Recommended: Pass identity_store_id to reduce API calls (eliminates describe_sso_instance calls)
-  identity_store_id = tolist(data.aws_ssoadmin_instances.this.identity_store_ids)[0]
+  slack_signing_secret = data.aws_ssm_parameter.slack_signing_secret.value
+  slack_bot_token      = data.aws_ssm_parameter.slack_bot_token.value
+  slack_channel_id     = "C01234567"
+  identity_store_id    = tolist(data.aws_ssoadmin_instances.this.identity_store_ids)[0]
 
   s3_logging = {
-    target_bucket = module.naming_conventions.s3_access_logs_bucket_name
-    target_prefix = "sso-elevator-logs/"
-  }
-
-  s3_bucket_partition_prefix = "sso-elevator-logs"
-
-  s3_object_lock = true
-  s3_object_lock_configuration = {
-    rule = {
-      default_retention = {
-        mode  = "GOVERNANCE"
-        years = 3
-      }
-    }
-  }
-  # The default object lock configuration is as follows:
-  # {
-  #  rule = {
-  #   default_retention = {
-  #      mode  = "GOVERNANCE"
-  #      years = 2
-  #    }
-  #  }
-  #}
-  # You can specify a different configuration here:
-  s3_object_lock_configuration = {
-    rule = {
-      default_retention = {
-        mode  = "GOVERNANCE"
-        years = 1
-      }
-    }
-  }
-
-  # s3_name_of_the_existing_bucket = "sso_elevator_audit_logs_bucket-<some_sha>"
-  # If you want to use your own bucket for storing SSO Elevator audit logs (logs about access requests), use the `s3_name_of_the_existing_bucket` variable.
-  # If `s3_name_of_the_existing_bucket` is left empty, the module creates a new bucket name based on `s3_bucket_name_for_audit_entry`.
-  # In that case, remember to specify `s3_logging` with at least the `target_bucket` key to enable access logging, otherwise, module deployment will fail.
-  s3_logging = {
-    target_bucket = "some_access_logging_bucket"
-    target_prefix = "some_prefix_for_access_logs"
+    target_bucket = "my-access-logs-bucket"
+    target_prefix = "sso-elevator/"
   }
 
   config = [
-    # This could be a config for dev/stage account where developers can self-serve
-    # permissions
-    # Allows Bob and Alice to approve requests for all
-    # PermissionSets in accounts dev_account_id and stage_account_id as
-    # well as approve its own requests
-    # You have to specify at AllowSelfApproval: true or specify two approvers
-    # so you do not lock out approver
-    {
-      "ResourceType" : "Account",
-      "Resource" : ["dev_account_id", "stage_account_id"],
-      "PermissionSet" : "*",
-      "Approvers" : ["bob@corp.com", "alice@corp.com"],
-      "AllowSelfApproval" : true,
-    },
-    # This could be an option for a financial person
-    # allows self approval for Billing PermissionSet
-    # for account_id for user finances@corp.com
-    {
-      "ResourceType" : "Account",
-      "Resource" : "account_id",
-      "PermissionSet" : "Billing",
-      "Approvers" : "finances@corp.com",
-      "AllowSelfApproval" : true,
-    },
-    # Your typical CTO - can approve all accounts and all permissions
-    # as well as his/hers own requests to avoid lock out
-    # Careful withi Resource * since it will cause revocation of all
-    # non-module-created user-level permission set assignments in all
-    # accounts, add this one later when you are done with single account
-    # testing
     {
       "ResourceType" : "Account",
       "Resource" : "*",
       "PermissionSet" : "*",
-      "Approvers" : "cto@corp.com",
+      "Approvers" : ["admin@company.com"],
       "AllowSelfApproval" : true,
     },
-    # Read only config for production accounts so developers
-    # can check prod when needed
-    {
-      "ResourceType" : "Account",
-      "Resource" : ["prod_account_id", "prod_account_id2"],
-      "PermissionSet" : "ReadOnly",
-      "AllowSelfApproval" : true,
-    },
-    # Prod access
-    {
-      "ResourceType" : "Account",
-      "Resource" : ["prod_account_id", "prod_account_id2"],
-      "PermissionSet" : "AdministratorAccess",
-      "Approvers" : ["manager@corp.com", "ciso@corp.com"],
-      "ApprovalIsNotRequired" : false,
-      "AllowSelfApproval" : false,
-    },
-    # example of list being used for permissions sets
-    {
-      "ResourceType" : "Account",
-      "Resource" : "account_id",
-      "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
-      "Approvers" : ["ciso@corp.com"],
-      "AllowSelfApproval" : true,
-    },
-    # Recommended: Use PermissionSet ARNs for better API efficiency
-    # This avoids list_permission_sets API calls when resolving names
-    {
-      "ResourceType" : "Account",
-      "Resource" : "account_id",
-      "PermissionSet" : aws_ssoadmin_permission_set.developer.arn,
-      "Approvers" : ["tech-lead@corp.com"],
-      "AllowSelfApproval" : true,
-    },
-
   ]
-group_config = [
-    {              
-      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "ApprovalIsNotRequired": true
-    },
-    {              
-      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "AllowSelfApproval" : true,
-    },
-    {
-      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-    },
-]
 }
 
-output "aws_sso_elevator_api_endpoint_url" {
+output "api_endpoint_url" {
   value = module.aws_sso_elevator.requester_api_endpoint_url
 }
 ```
 
-## Slack App creation
-1. Go to https://api.slack.com/
-2. Click `create an app`
-3. Click `From an app manifest`
-4. Select workspace, click `next`
-5. Choose `yaml` for app manifest format
-6. Update the request URL (from output `requester_api_endpoint_url`) in the `request_url` field and paste the following into the text box: 
-```yaml
-display_information:
-  name: AWS SSO Access Elevator
-  description: Slack bot to temporary assign AWS SSO Permission set to a user
-features:
-  bot_user:
-    display_name: AWS SSO Access Elevator
-    always_online: false
-  shortcuts:
-    - name: access
-      type: global
-      callback_id: request_for_access
-      description: Request access to Permission Set in AWS Account
-    - name: group-access # Delete this shortcut if you want to prohibit access to the Group Assignments Mode
-      type: global
-      callback_id: request_for_group_membership
-      description: Request access to SSO Group
-oauth_config:
-  scopes:
-    bot:
-      # 'commands': This permission adds shortcuts and/or slash commands that people can use.
-      - commands
-      # 'chat:write': This permission is required for the app to post messages to Slack.
-      - chat:write
-      # 'users:read' and 'users:read.email': These permissions are required for the app to find the user's email address, which is necessary for  creating AWS account assignments and including user mentions in requests.
-      - users:read.email
-      - users:read
-      # 'channels:history': This permission is needed for the app to find old messages in order to handle "discard button" events.
-      - channels:history
-      # Permissions below are required if you want to use the feature of sending direct messages to users if they are not in the channel
-      - "channels:read", # View basic information about public channels in a workspace. It allows app to determine if requester is in the channel.
-      - "groups:read", # View basic information about private channels that slack app has been added to. Same as above but for private channels
-      - "im:write" # Allows the app to send direct messages to members of a workspace. It is used to send messages to the user if they are not in the channel.
-settings:
-  interactivity:
-    is_enabled: true
-    request_url: <API GATEWAY URL GOES HERE - GET IT FROM THE requester_api_endpoint_url TERRAFORM OUTPUT> 
-  org_deploy_enabled: false
-  socket_mode_enabled: false
-  token_rotation_enabled: false
-```
-7. Check permissions and click `create`
-8. Click `install to workspace`
-9. Copy `Signing Secret` # for `slack_signing_secret` module input
-10. Copy `Bot User OAuth Token` # for `slack_bot_token` module input
+## Documentation
 
-# Terraform docs 
+- **[Configuration](docs/CONFIGURATION.md)** - Configuration structure, rules, explicit deny, auto-approval
+- **[Group Access](docs/GROUP_ACCESS.md)** - Group assignments mode, attribute-based sync
+- **[Deployment](docs/DEPLOYMENT.md)** - SSO delegation, build process, Terraform examples, Slack app setup
+- **[Features](docs/FEATURES.md)** - Secondary domains, direct messages, API gateway, request expiration
+- **[Cache Implementation](docs/CACHE_IMPLEMENTATION.md)** - Details on caching mechanism
+- **[Athena Queries](athena_query/)** - Query audit logs with AWS Athena
+
+## Important Considerations
+
+- Your Slack user email must match your SSO user ID for requests to work.
+- The access-revoker will revoke all user-level Permission Set assignments not created by SSO Elevator. Use group-level assignments for permanent access.
+- If using `group_config`, SSO Elevator will remove users from those groups if they weren't added by SSO Elevator.
+
+## Terraform Docs
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -839,13 +228,7 @@ settings:
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END_TF_DOCS -->
 
-## More info
+## More Info
+
 - [Permission Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
 - [User and groups](https://docs.aws.amazon.com/singlesignon/latest/userguide/users-groups-provisioning.html)
-
-# Development
-
-## Post review
-
-- Post review [url](https://github.com/fivexl/terraform-aws-sso-elevator/compare/review...main)
-- ToC generated with [this](https://ecotrust-canada.github.io/markdown-toc/)
