@@ -352,7 +352,7 @@ The fields in the configuration dictionary are:
 
 - **ResourceType**: This field specifies the type of resource being requested, such as "Account." As of now, the only supported value is "Account."
 - **Resource**: This field defines the specific resource(s) being requested. It accepts either a single string or a list of strings. Setting this field to "*" allows the rule to match all resources associated with the specified `ResourceType`.
-- **PermissionSet**: Here, you indicate the permission set(s) being requested. This can be either a single string or a list of strings. If set to "*", the rule matches all permission sets available for the defined `Resource` and `ResourceType`.
+- **PermissionSet**: Here, you indicate the permission set(s) being requested. This can be either a single string or a list of strings. You can specify permission sets by **name** (e.g., `"AdministratorAccess"`) or by **ARN** (e.g., `"arn:aws:sso:::permissionSet/ssoins-1234567890abcdef/ps-1234567890abcdef"`). Using ARNs is recommended for Terraform users as it reduces API calls and allows direct reference to `aws_ssoadmin_permission_set.*.arn`. If set to "*", the rule matches all permission sets available for the defined `Resource` and `ResourceType`.
 - **Approvers**: This field lists the potential approvers for the request. It accepts either a single string or a list of strings representing different approvers.
 - **AllowSelfApproval**: This field can be a boolean, indicating whether the requester, if present in the `Approvers` list, is permitted to approve their own request. It defaults to `None`.
 - **ApprovalIsNotRequired**: This field can also be a boolean, signifying whether the approval can be granted automatically, bypassing the approvers entirely. The default value is `None`.
@@ -486,12 +486,15 @@ data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
 }
 
 module "aws_sso_elevator" {
-  source                           = "github.com/fivexl/terraform-aws-sso-elevator.git"
   source  = "fivexl/sso-elevator/aws"
   version = "2.0.2"
-  slack_signing_secret  = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
-  slack_bot_token       = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
-  slack_channel_id      = local.slack_channel_id
+
+  slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
+  slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
+  slack_channel_id     = local.slack_channel_id
+
+  # Recommended: Pass identity_store_id to reduce API calls (eliminates describe_sso_instance calls)
+  identity_store_id = tolist(data.aws_ssoadmin_instances.this.identity_store_ids)[0]
 
   s3_logging = {
     target_bucket = module.naming_conventions.s3_access_logs_bucket_name
@@ -597,7 +600,16 @@ module "aws_sso_elevator" {
       "ResourceType" : "Account",
       "Resource" : "account_id",
       "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
-      "Approvers" : ["ciso@corp.com"], 
+      "Approvers" : ["ciso@corp.com"],
+      "AllowSelfApproval" : true,
+    },
+    # Recommended: Use PermissionSet ARNs for better API efficiency
+    # This avoids list_permission_sets API calls when resolving names
+    {
+      "ResourceType" : "Account",
+      "Resource" : "account_id",
+      "PermissionSet" : aws_ssoadmin_permission_set.developer.arn,
+      "Approvers" : ["tech-lead@corp.com"],
       "AllowSelfApproval" : true,
     },
 
