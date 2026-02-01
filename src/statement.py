@@ -48,10 +48,7 @@ def get_affected_statements(
     permission_set_name: str,
     permission_set_arn: str | None = None,
 ) -> FrozenSet[Statement]:
-    return frozenset(
-        statement for statement in statements
-        if statement.affects(account_id, permission_set_name, permission_set_arn)
-    )
+    return frozenset(statement for statement in statements if statement.affects(account_id, permission_set_name, permission_set_arn))
 
 
 def get_permission_sets_for_account(statements: FrozenSet[Statement], account_id: str) -> set[str]:
