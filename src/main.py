@@ -685,7 +685,7 @@ def handle_account_selection(ack: Ack, body: dict, client: WebClient) -> SlackRe
         permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
     else:
         all_ps = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
-        permission_sets = [ps for ps in all_ps if ps.name in valid_ps_names]
+        permission_sets = [ps for ps in all_ps if ps.name in valid_ps_names or ps.arn in valid_ps_names]
 
     # Handle case where filtered list is empty (configured names don't exist in SSO)
     if not permission_sets:
