@@ -24,7 +24,7 @@ def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Lo
 logger = get_logger(service="config")
 
 
-def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: str) -> dict:
+def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: str) -> tuple[dict, str | None]:
     """
     Load approval configuration from S3.
 
@@ -34,7 +34,7 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
         s3_key: Key of the S3 object containing configuration
 
     Returns:
-        Dictionary with 'statements' and 'group_statements' keys
+        Tuple of (config dict with 'statements' and 'group_statements' keys, ETag string or None)
 
     Raises:
         Exception: If S3 retrieval or JSON parsing fails
@@ -42,6 +42,7 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
     try:
         logger.info(f"Loading approval config from s3://{bucket_name}/{s3_key}")
         response = s3_client.get_object(Bucket=bucket_name, Key=s3_key)
+        etag = response.get("ETag")
         content = response["Body"].read().decode("utf-8")
         config_data = json.loads(content)
 
@@ -52,7 +53,7 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
             config_data.setdefault("group_statements", [])
 
         logger.info("Successfully loaded approval config from S3")
-        return config_data
+        return config_data, etag
 
     except s3_client.exceptions.NoSuchKey:
         logger.error(f"S3 object not found: s3://{bucket_name}/{s3_key}")
@@ -66,6 +67,9 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
             exc_info=True,
         )
         raise
+
+
+_initial_config_etag: str | None = None
 
 
 def parse_statement(_dict: dict) -> Statement:
@@ -168,6 +172,7 @@ class Config(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
+        global _initial_config_etag  # noqa: PLW0603
         import boto3
 
         config_s3_key = values.get("config_s3_key", "")
@@ -176,7 +181,8 @@ class Config(BaseSettings):
         if config_s3_key:
             s3_client = boto3.client("s3")
             config_bucket_name = values.get("config_bucket_name", "sso-elevator-config")
-            config_data = load_approval_config_from_s3(s3_client, config_bucket_name, config_s3_key)
+            config_data, etag = load_approval_config_from_s3(s3_client, config_bucket_name, config_s3_key)
+            _initial_config_etag = etag
             statements_raw = config_data.get("statements")
             group_statements_raw = config_data.get("group_statements")
         else:
@@ -221,10 +227,40 @@ class Config(BaseSettings):
 
 
 _config: Optional[Config] = None
+_config_etag: Optional[str] = None
 
 
 def get_config() -> Config:
-    global _config  # noqa: PLW0603
+    global _config, _config_etag  # noqa: PLW0603
     if _config is None:
         _config = Config()  # type: ignore # noqa: PGH003
+        _config_etag = _initial_config_etag
+    return _config
+
+
+def check_and_refresh_config(s3_client: S3Client) -> Config:
+    """Check S3 ETag, reload config if changed."""
+    global _config, _config_etag  # noqa: PLW0603
+
+    if _config is None:
+        return get_config()
+
+    config_s3_key = os.environ.get("CONFIG_S3_KEY", "")
+    if not config_s3_key:
+        return _config
+
+    bucket = os.environ.get("CONFIG_BUCKET_NAME", "sso-elevator-config")
+
+    try:
+        response = s3_client.head_object(Bucket=bucket, Key=config_s3_key)
+        current_etag = response.get("ETag")
+
+        if current_etag and current_etag != _config_etag:
+            logger.info(f"Config changed (ETag: {_config_etag} -> {current_etag}), reloading")
+            _config = None  # Reset to force reload
+            _config = get_config()
+            _config_etag = current_etag
+    except Exception as e:
+        logger.warning(f"Failed to check config freshness: {e}")
+
     return _config

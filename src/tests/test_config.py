@@ -194,9 +194,10 @@ def test_config_init(dict_config: dict):
 
 def test_load_approval_config_from_s3_success(mock_s3_client, mock_s3_approval_config):
     """Test successful S3 retrieval and JSON parsing."""
-    result = config.load_approval_config_from_s3(mock_s3_client, "test-bucket", "config/approval-config.json")
+    result, etag = config.load_approval_config_from_s3(mock_s3_client, "test-bucket", "config/approval-config.json")
 
     assert result == mock_s3_approval_config
+    assert etag is None  # mock_s3_client doesn't set ETag
     mock_s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="config/approval-config.json")
 
 
@@ -231,7 +232,7 @@ def test_load_approval_config_from_s3_missing_keys(mock_s3_client):
     mock_response = {"Body": MagicMock(read=lambda: json.dumps(incomplete_config).encode("utf-8"))}
     mock_s3_client.get_object.return_value = mock_response
 
-    result = config.load_approval_config_from_s3(mock_s3_client, "test-bucket", "config/approval-config.json")
+    result, _etag = config.load_approval_config_from_s3(mock_s3_client, "test-bucket", "config/approval-config.json")
 
     assert result["statements"] == []
     assert result["group_statements"] == []
@@ -318,3 +319,102 @@ def test_config_group_statement_parsing_with_s3(mock_s3_client, monkeypatch):
     group_statement = list(cfg.group_statements)[0]
     assert "11e111e1-e111-11ee-e111-1e11e1ee11e1" in group_statement.resource
     assert group_statement.allow_self_approval is True
+
+
+# Tests for ETag-based config refresh
+
+
+def test_check_and_refresh_config_no_change(mock_s3_client_with_head, monkeypatch):
+    """ETag unchanged → no reload."""
+    monkeypatch.setenv("CONFIG_S3_KEY", "config/test.json")
+    monkeypatch.setenv("CONFIG_BUCKET_NAME", "test-bucket")
+
+    # Initialize config state
+    config._config = MagicMock()
+    config._config_etag = '"initial-etag-123"'
+
+    result = config.check_and_refresh_config(mock_s3_client_with_head)
+
+    mock_s3_client_with_head.head_object.assert_called_once_with(Bucket="test-bucket", Key="config/test.json")
+    mock_s3_client_with_head.get_object.assert_not_called()
+    assert result is config._config
+
+
+def test_check_and_refresh_config_etag_changed(mock_s3_client_with_head, monkeypatch):
+    """ETag changed → reload config."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("CONFIG_S3_KEY", "config/test.json")
+    monkeypatch.setenv("CONFIG_BUCKET_NAME", "test-bucket")
+
+    original_config = MagicMock()
+    config._config = original_config
+    config._config_etag = '"old-etag"'
+    mock_s3_client_with_head.head_object.return_value = {"ETag": '"new-etag"'}
+
+    # Need to mock Config() construction
+    with patch.object(config, "Config") as mock_config_class:
+        new_config = MagicMock()
+        mock_config_class.return_value = new_config
+        config.check_and_refresh_config(mock_s3_client_with_head)
+
+    assert config._config_etag == '"new-etag"'
+
+
+def test_check_and_refresh_config_head_fails(mock_s3_client_with_head, monkeypatch):
+    """HEAD request fails → continue with cached config."""
+    monkeypatch.setenv("CONFIG_S3_KEY", "config/test.json")
+    monkeypatch.setenv("CONFIG_BUCKET_NAME", "test-bucket")
+
+    original_config = MagicMock()
+    config._config = original_config
+    config._config_etag = '"etag"'
+    mock_s3_client_with_head.head_object.side_effect = Exception("S3 error")
+
+    result = config.check_and_refresh_config(mock_s3_client_with_head)
+
+    assert result is original_config
+
+
+def test_check_and_refresh_config_no_s3_key(mock_s3_client_with_head, monkeypatch):
+    """No S3 key → skip check."""
+    monkeypatch.delenv("CONFIG_S3_KEY", raising=False)
+
+    original_config = MagicMock()
+    config._config = original_config
+
+    result = config.check_and_refresh_config(mock_s3_client_with_head)
+
+    mock_s3_client_with_head.head_object.assert_not_called()
+    assert result is original_config
+
+
+def test_check_and_refresh_config_no_existing_config(mock_s3_client_with_head, monkeypatch):
+    """No existing config → call get_config()."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("CONFIG_S3_KEY", "config/test.json")
+
+    config._config = None
+    config._config_etag = None
+
+    with patch.object(config, "get_config") as mock_get_config:
+        new_config = MagicMock()
+        mock_get_config.return_value = new_config
+        result = config.check_and_refresh_config(mock_s3_client_with_head)
+
+    mock_get_config.assert_called_once()
+    assert result is new_config
+
+
+def test_load_approval_config_returns_etag(mock_s3_client):
+    """load_approval_config_from_s3 returns ETag."""
+    mock_s3_client.get_object.return_value = {
+        "Body": MagicMock(read=lambda: b'{"statements":[],"group_statements":[]}'),
+        "ETag": '"test-etag"',
+    }
+
+    data, etag = config.load_approval_config_from_s3(mock_s3_client, "bucket", "key")
+
+    assert etag == '"test-etag"'
+    assert data == {"statements": [], "group_statements": []}

@@ -39,6 +39,8 @@ app = App(
 
 
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
+    global cfg  # noqa: PLW0603
+    cfg = config.check_and_refresh_config(s3_client)
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
 
