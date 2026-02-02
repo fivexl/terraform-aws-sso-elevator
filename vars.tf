@@ -488,7 +488,6 @@ variable "posthog_api_key" {
   description = "PostHog API key for analytics. Leave empty to disable analytics tracking."
   type        = string
   default     = ""
-  sensitive   = true
 }
 
 variable "posthog_host" {
