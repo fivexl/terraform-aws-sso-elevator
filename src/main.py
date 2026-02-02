@@ -782,10 +782,11 @@ def handle_early_revoke_button_click(body: dict, client: WebClient, context: Bol
         approver_emails=button_payload.approver_emails,
         client=client,
     ):
+        who_can = "requester or approvers" if button_payload.approver_emails else "requester"
         return client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            text=f"<@{clicker_slack_id}> You are not authorized to end this session. Only the requester{' or approvers' if button_payload.approver_emails else ''} can do this.",
+            text=f"<@{clicker_slack_id}> You are not authorized to end this session. Only the {who_can} can do this.",
         )
 
     # Determine if this is account access or group access
