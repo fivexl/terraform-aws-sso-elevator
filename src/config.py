@@ -163,7 +163,7 @@ class Config(BaseSettings):
     granted_status: str = ":white_check_mark: *GRANTED*"
     denied_status: str = ":x: *DENIED*"
     timed_out_status: str = ":clock1: *TIMED OUT*"
-    access_ended_status: str = ":lock: *ACCESS ENDED*"
+    access_ended_status: str = ":checkered_flag: *SESSION COMPLETE*"
 
     @model_validator(mode="before")
     @classmethod
