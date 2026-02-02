@@ -90,3 +90,19 @@ def mock_s3_client(mock_s3_approval_config):
     mock_client.exceptions.NoSuchKey = type("NoSuchKey", (Exception,), {})
     mock_client.exceptions.NoSuchBucket = type("NoSuchBucket", (Exception,), {})
     return mock_client
+
+
+@pytest.fixture
+def mock_s3_client_with_head(mock_s3_approval_config):
+    """S3 client with head_object support for ETag checking."""
+    mock_client = MagicMock()
+    mock_response = {
+        "Body": MagicMock(read=lambda: json.dumps(mock_s3_approval_config).encode("utf-8")),
+        "ETag": '"initial-etag-123"',
+    }
+    mock_client.get_object.return_value = mock_response
+    mock_client.head_object.return_value = {"ETag": '"initial-etag-123"'}
+    mock_client.exceptions = MagicMock()
+    mock_client.exceptions.NoSuchKey = type("NoSuchKey", (Exception,), {})
+    mock_client.exceptions.NoSuchBucket = type("NoSuchBucket", (Exception,), {})
+    return mock_client
