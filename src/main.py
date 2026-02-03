@@ -302,6 +302,21 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
 
+    # Create a resolver function that resolves approver groups per-statement
+    # This prevents cross-statement authorization bypass where someone in GroupY
+    # could approve requests for Statement A just because Statement A has some groups
+    resolver_cache: dict[frozenset[str], set[str]] = {}
+
+    def approver_group_resolver(group_ids: frozenset[str]) -> set[str]:
+        if not group_ids:
+            return set()
+        if group_ids in resolver_cache:
+            return resolver_cache[group_ids]
+        group_users, _ = slack_helpers.resolve_approver_groups(client, group_ids)
+        result = {u.id for u in group_users}
+        resolver_cache[group_ids] = result
+        return result
+
     decision = access_control.make_decision_on_approve_request(
         action=payload.action,
         statements=cfg.statements,
@@ -310,6 +325,8 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         approver_email=approver.email,
         requester_email=requester.email,
         permission_set_arn=permission_set.arn,
+        approver_slack_id=approver.id,
+        approver_group_resolver=approver_group_resolver,
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -370,7 +387,9 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
 
     # Post the "End session early" button after permissions are granted
     if result.granted and result.schedule_name:
-        approver_emails = list(decision.based_on_statements)[0].approvers if decision.based_on_statements else []
+        first_statement = list(decision.based_on_statements)[0] if decision.based_on_statements else None
+        approver_emails = list(first_statement.approvers) if first_statement else []
+        approver_groups = list(first_statement.approver_groups) if first_statement else []
         early_revoke_payload = slack_helpers.EarlyRevokeButtonPayload(
             schedule_name=result.schedule_name,
             requester_slack_id=requester.id,
@@ -379,7 +398,8 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             permission_set_arn=result.permission_set_arn,
             instance_arn=result.instance_arn,
             user_principal_id=result.user_principal_id,
-            approver_emails=list(approver_emails),
+            approver_emails=approver_emails,
+            approver_groups=approver_groups,
         )
         client.chat_postMessage(
             channel=payload.channel_id,
@@ -452,6 +472,19 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
     # Look up permission set to get ARN for matching against ARN-based config
     permission_set = sso.get_permission_set(sso_client, cfg.sso_instance_arn, request.permission_set_name)
 
+    # Create a resolver function for self-approval via group membership
+    resolver_cache: dict[frozenset[str], set[str]] = {}
+
+    def approver_group_resolver(group_ids: frozenset[str]) -> set[str]:
+        if not group_ids:
+            return set()
+        if group_ids in resolver_cache:
+            return resolver_cache[group_ids]
+        group_users, _ = slack_helpers.resolve_approver_groups(client, group_ids)
+        result = {u.id for u in group_users}
+        resolver_cache[group_ids] = result
+        return result
+
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
         account_id=request.account_id,
@@ -459,6 +492,8 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         requester_email=requester.email,
         user_group_ids=user_group_ids,
         permission_set_arn=permission_set.arn,
+        requester_slack_id=request.requester_slack_id,
+        approver_group_resolver=approver_group_resolver,
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -530,7 +565,9 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
                 client,
                 decision.approvers,  # type: ignore # noqa: PGH003
             )
-            if not approvers:
+            group_mentions = slack_helpers.build_approver_group_mentions(decision.approver_groups)
+
+            if not approvers and not decision.approver_groups:
                 text = """
                 None of the approvers from configuration could be found in Slack.
                 Request cannot be processed. Please discard the request and check the module configuration.
@@ -542,14 +579,15 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
                 status_text = cfg.denied_status
             else:
                 mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
-                text = f"{mention_approvers} there is a request waiting for the approval."
+                all_mentions = " ".join(filter(None, [mention_approvers, group_mentions]))
+                text = f"{all_mentions} there is a request waiting for the approval."
                 if approver_emails_not_found:
                     missing_emails = ", ".join(approver_emails_not_found)
                     text += f"""
                     Note: Some approvers ({missing_emails}) could not be found in Slack.
                     Please discard the request and check the module configuration.
                     """
-                dm_text = f"Your request is waiting for the approval from {mention_approvers}."
+                dm_text = f"Your request is waiting for the approval from {all_mentions}."
                 status_text = cfg.pending_status
         case access_control.DecisionReason.NoApprovers:
             text = "Nobody can approve this request."
@@ -622,7 +660,9 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
 
         # Post the "End session early" button
         if result.schedule_name:
-            approver_emails = list(decision.based_on_statements)[0].approvers if decision.based_on_statements else []
+            first_statement = list(decision.based_on_statements)[0] if decision.based_on_statements else None
+            approver_emails = list(first_statement.approvers) if first_statement else []
+            approver_groups = list(first_statement.approver_groups) if first_statement else []
             early_revoke_payload = slack_helpers.EarlyRevokeButtonPayload(
                 schedule_name=result.schedule_name,
                 requester_slack_id=requester.id,
@@ -631,7 +671,8 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
                 permission_set_arn=result.permission_set_arn,
                 instance_arn=result.instance_arn,
                 user_principal_id=result.user_principal_id,
-                approver_emails=list(approver_emails),
+                approver_emails=approver_emails,
+                approver_groups=approver_groups,
             )
             client.chat_postMessage(
                 channel=cfg.slack_channel_id,
@@ -721,13 +762,15 @@ def check_early_revoke_authorization(
     requester_slack_id: str,
     approver_emails: list[str],
     client: WebClient,
+    approver_groups: list[str] | None = None,
 ) -> bool:
     """Check if the user clicking the button is authorized to end the session.
 
     Returns True if:
     - cfg.allow_anyone_to_end_session_early is True, OR
     - clicker is the requester, OR
-    - clicker is one of the approvers
+    - clicker is one of the individual approvers, OR
+    - clicker is a member of one of the approver groups
     """
     if cfg.allow_anyone_to_end_session_early:
         return True
@@ -736,13 +779,19 @@ def check_early_revoke_authorization(
     if clicker_slack_id == requester_slack_id:
         return True
 
-    # Check if clicker is an approver
+    # Check if clicker is an individual approver
     try:
         clicker = slack_helpers.get_user(client, id=clicker_slack_id)
         if clicker.email in approver_emails:
             return True
     except Exception as e:
         logger.warning(f"Failed to get user info for authorization check: {e}")
+
+    # Check if clicker is in an approver group
+    if approver_groups:
+        group_users, _ = slack_helpers.resolve_approver_groups(client, frozenset(approver_groups))
+        if clicker_slack_id in {u.id for u in group_users}:
+            return True
 
     return False
 
@@ -783,8 +832,9 @@ def handle_early_revoke_button_click(body: dict, client: WebClient, context: Bol
         requester_slack_id=button_payload.requester_slack_id,
         approver_emails=button_payload.approver_emails,
         client=client,
+        approver_groups=button_payload.approver_groups,
     ):
-        who_can = "requester or approvers" if button_payload.approver_emails else "requester"
+        who_can = "requester or approvers" if button_payload.approver_emails or button_payload.approver_groups else "requester"
         return client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,

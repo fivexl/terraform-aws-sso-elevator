@@ -83,6 +83,7 @@ def parse_statement(_dict: dict) -> Statement:
             "permission_set": to_set_if_list_or_str(_dict["PermissionSet"]),
             "resource": to_set_if_list_or_str(_dict["Resource"]),
             "approvers": to_set_if_list_or_str(_dict.get("Approvers", set())),
+            "approver_groups": to_set_if_list_or_str(_dict.get("ApproverGroups", set())),
             "resource_type": _dict.get("ResourceType"),
             "approval_is_not_required": _dict.get("ApprovalIsNotRequired"),
             "allow_self_approval": _dict.get("AllowSelfApproval"),
@@ -101,6 +102,7 @@ def parse_group_statement(_dict: dict) -> GroupStatement:
         {
             "resource": to_set_if_list_or_str(_dict["Resource"]),
             "approvers": to_set_if_list_or_str(_dict.get("Approvers", set())),
+            "approver_groups": to_set_if_list_or_str(_dict.get("ApproverGroups", set())),
             "approval_is_not_required": _dict.get("ApprovalIsNotRequired"),
             "allow_self_approval": _dict.get("AllowSelfApproval"),
         }

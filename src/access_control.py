@@ -1,6 +1,6 @@
 import datetime
 from enum import Enum
-from typing import FrozenSet
+from typing import Callable, FrozenSet
 
 import boto3
 
@@ -36,6 +36,7 @@ class AccessRequestDecision(BaseModel):
     reason: DecisionReason
     based_on_statements: FrozenSet[Statement] | FrozenSet[GroupStatement]
     approvers: FrozenSet[str] = frozenset()
+    approver_groups: FrozenSet[str] = frozenset()
 
 
 def determine_affected_statements(
@@ -65,6 +66,8 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
     group_id: str | None = None,
     user_group_ids: set[str] | None = None,
     permission_set_arn: str | None = None,
+    requester_slack_id: str | None = None,
+    approver_group_resolver: Callable[[frozenset[str]], set[str]] | None = None,
 ) -> AccessRequestDecision:
     """Make a decision on an access request.
 
@@ -78,6 +81,9 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
             If None, group-based filtering is skipped (backwards compatible).
             If an empty set, only statements without required_group_membership will match.
         permission_set_arn: The ARN of the permission set (optional, for matching ARN-based config).
+        requester_slack_id: The Slack ID of the requester (for self-approval via group membership).
+        approver_group_resolver: Function that resolves approver group IDs to Slack user IDs.
+            Used for checking self-approval eligibility via group membership.
     """
     # Filter statements by user's group membership eligibility if user_group_ids provided
     # This is only applicable to Statement (not GroupStatement)
@@ -88,9 +94,21 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
 
     decision_based_on_statements: set[Statement] | set[GroupStatement] = set()
     potential_approvers = set()
+    potential_approver_groups: set[str] = set()
+
+    # Helper to check if requester is an approver for a statement (individual or via group)
+    def is_requester_approver_for_statement(stmt: Statement | GroupStatement) -> bool:
+        if requester_email in stmt.approvers:
+            return True
+        # Check group membership if resolver is available
+        if requester_slack_id and approver_group_resolver and stmt.approver_groups:
+            group_user_ids = approver_group_resolver(stmt.approver_groups)
+            if requester_slack_id in group_user_ids:
+                return True
+        return False
 
     explicit_deny_self_approval = any(
-        statement.allow_self_approval is False and requester_email in statement.approvers for statement in affected_statements
+        statement.allow_self_approval is False and is_requester_approver_for_statement(statement) for statement in affected_statements
     )
     explicit_deny_approval_not_required = any(statement.approval_is_not_required is False for statement in affected_statements)
 
@@ -101,7 +119,8 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
             )
-        if requester_email in statement.approvers and statement.allow_self_approval and not explicit_deny_self_approval:
+        # Check self-approval: requester must be an approver (individual or via group)
+        if is_requester_approver_for_statement(statement) and statement.allow_self_approval and not explicit_deny_self_approval:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.SelfApproval,
@@ -110,6 +129,7 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
 
         decision_based_on_statements.add(statement)  # type: ignore # noqa: PGH003
         potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
+        potential_approver_groups.update(statement.approver_groups)
 
     if not decision_based_on_statements:
         return AccessRequestDecision(
@@ -118,7 +138,7 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
             based_on_statements=frozenset(decision_based_on_statements),
         )
 
-    if not potential_approvers:
+    if not potential_approvers and not potential_approver_groups:
         return AccessRequestDecision(
             grant=False,
             reason=DecisionReason.NoApprovers,
@@ -129,6 +149,7 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
         grant=False,
         reason=DecisionReason.RequiresApproval,
         approvers=frozenset(potential_approvers),
+        approver_groups=frozenset(potential_approver_groups),
         based_on_statements=frozenset(decision_based_on_statements),
     )
 
@@ -172,11 +193,38 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     account_id: str | None = None,
     group_id: str | None = None,
     permission_set_arn: str | None = None,
+    approver_slack_id: str | None = None,
+    approver_group_resolver: Callable[[frozenset[str]], set[str]] | None = None,
 ) -> ApproveRequestDecision:
+    """Make a decision on an approval request.
+
+    Args:
+        action: The action being taken (Approve or Discard)
+        statements: The statements to evaluate
+        approver_email: Email of the approver
+        requester_email: Email of the requester
+        permission_set_name: Name of the permission set
+        account_id: AWS account ID
+        group_id: SSO group ID for group-based access
+        permission_set_arn: ARN of the permission set
+        approver_slack_id: Slack ID of the approver (for checking group membership)
+        approver_group_resolver: Function that resolves approver group IDs to Slack user IDs.
+            Takes a frozenset of group IDs and returns a set of Slack user IDs.
+            Resolution is done per-statement to prevent cross-statement authorization bypass.
+    """
     affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id, permission_set_arn)
 
     for statement in affected_statements:
-        if approver_email in statement.approvers:
+        is_individual_approver = approver_email in statement.approvers
+
+        # Check if approver is in THIS statement's approver groups (not globally)
+        is_group_approver = False
+        if approver_slack_id is not None and approver_group_resolver is not None and statement.approver_groups:
+            # Resolve only THIS statement's groups
+            statement_group_user_ids = approver_group_resolver(statement.approver_groups)
+            is_group_approver = approver_slack_id in statement_group_user_ids
+
+        if is_individual_approver or is_group_approver:
             is_self_approval = approver_email == requester_email
             if is_self_approval and statement.allow_self_approval or not is_self_approval:
                 return ApproveRequestDecision(
