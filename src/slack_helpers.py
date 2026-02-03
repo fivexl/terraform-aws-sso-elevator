@@ -446,8 +446,8 @@ class ButtonClickedPayload(BaseModel):
     @staticmethod
     def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
         for field in fields:
-            if field["text"].startswith(key):
-                return field["text"].split(": ")[1].strip()
+            if field["text"].startswith(f"*{key}*"):
+                return field["text"].split("\n", 1)[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
 
 
@@ -890,6 +890,6 @@ class ButtonGroupClickedPayload(BaseModel):
     @staticmethod
     def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
         for field in fields:
-            if field["text"].startswith(key):
-                return field["text"].split(": ")[1].strip()
+            if field["text"].startswith(f"*{key}*"):
+                return field["text"].split("\n", 1)[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
