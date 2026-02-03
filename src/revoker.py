@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import boto3
 import slack_sdk
+from mypy_boto3_cloudwatch import CloudWatchClient
 from mypy_boto3_events import EventBridgeClient
 from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_organizations import OrganizationsClient
@@ -38,7 +39,28 @@ sso_client = boto3.client("sso-admin")  # type: ignore # noqa: PGH003
 identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH003
 scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
+cloudwatch_client: CloudWatchClient = boto3.client("cloudwatch")  # type: ignore # noqa: PGH003
 slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
+
+
+def publish_stale_grants_metric(count: int, cloudwatch: CloudWatchClient) -> None:
+    """Publish a CloudWatch metric for stale grants detected.
+
+    This metric can be used to trigger alarms when grants exist that should have been revoked.
+    """
+    if count > 0:
+        logger.info("Publishing stale grants metric", extra={"count": count})
+    cloudwatch.put_metric_data(
+        Namespace="SSOElevator",
+        MetricData=[
+            {
+                "MetricName": "StaleGrantsDetected",
+                "Value": count,
+                "Unit": "Count",
+                "Timestamp": datetime.now(timezone.utc),
+            }
+        ],
+    )
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
@@ -80,7 +102,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
 
         case CheckOnInconsistency():
             logger.info("Handling CheckOnInconsistency event", extra={"event": parsed_event})
-            check_on_groups_inconsistency(
+            stale_group_count = check_on_groups_inconsistency(
                 identity_store_client=identitystore_client,
                 sso_client=sso_client,
                 scheduler_client=scheduler_client,
@@ -88,7 +110,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 cfg=cfg,
                 slack_client=slack_client,
             )
-            return handle_check_on_inconsistency(
+            stale_account_count = handle_check_on_inconsistency(
                 sso_client=sso_client,
                 cfg=cfg,
                 scheduler_client=scheduler_client,
@@ -97,6 +119,8 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 identitystore_client=identitystore_client,
                 events_client=events_client,
             )
+            publish_stale_grants_metric(stale_group_count + stale_account_count, cloudwatch_client)
+            return
 
         case SSOElevatorScheduledRevocation():
             logger.info("Handling SSOElevatorScheduledRevocation event", extra={"event": parsed_event})
@@ -687,7 +711,8 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
     events_client: EventBridgeClient,
-) -> None:
+) -> int:
+    """Check for inconsistent account assignments and return the count of stale grants found."""
     account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     account_assignments_from_events = [
@@ -701,8 +726,10 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
         if isinstance(scheduled_event, ScheduledRevokeEvent)
     ]
 
+    stale_count = 0
     for account_assignment in account_assignments:
         if account_assignment not in account_assignments_from_events:
+            stale_count += 1
             try:
                 account = organizations.describe_account(org_client, account_assignment.account_id)
             except Exception:
@@ -739,6 +766,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
                     f"The unidentified assignment will be automatically revoked.{time_notice}"
                 ),
             )
+    return stale_count
 
 
 def check_on_groups_inconsistency(  # noqa: PLR0913
@@ -748,7 +776,8 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
     events_client: EventBridgeClient,
     cfg: config.Config,
     slack_client: slack_sdk.WebClient,
-) -> None:
+) -> int:
+    """Check for inconsistent group assignments and return the count of stale grants found."""
     identity_store_id = sso.get_identity_store_id(cfg, sso_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
@@ -763,8 +792,10 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
         for scheduled_event in scheduled_revoke_events
         if isinstance(scheduled_event, ScheduledGroupRevokeEvent)
     ]
+    stale_count = 0
     for group_assignment in group_assignments:
         if group_assignment not in group_assignments_from_events:
+            stale_count += 1
             logger.warning("Group assignment is not in the scheduled events", extra={"assignment": group_assignment})
             mention = slack_helpers.create_slack_mention_by_principal_id(
                 sso_user_id=group_assignment.user_principal_id,
@@ -791,6 +822,7 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
                     f"The unidentified assignment will be automatically revoked.{time_notice}"
                 ),
             )
+    return stale_count
 
 
 def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
