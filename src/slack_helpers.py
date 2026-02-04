@@ -424,7 +424,7 @@ class ButtonClickedPayload(BaseModel):
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
-        humanized_permission_duration = cls.find_in_fields(fields, "Permission duration")
+        humanized_permission_duration = cls.find_in_fields(fields, "Duration")
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         account = cls.find_in_fields(fields, "Account")
         account_id = account.split("#")[-1]
@@ -437,7 +437,7 @@ class ButtonClickedPayload(BaseModel):
             "request": RequestForAccess(
                 requester_slack_id=requester_slack_id,
                 account_id=account_id,
-                permission_set_name=cls.find_in_fields(fields, "Role name"),
+                permission_set_name=cls.find_in_fields(fields, "Permission Set"),
                 reason=cls.find_in_fields(fields, "Reason"),
                 permission_duration=permission_duration,
             ),
@@ -446,8 +446,8 @@ class ButtonClickedPayload(BaseModel):
     @staticmethod
     def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
         for field in fields:
-            if field["text"].startswith(key):
-                return field["text"].split(": ")[1].strip()
+            if field["text"].startswith(f"*{key}*"):
+                return field["text"].split("\n", 1)[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
 
 
@@ -609,26 +609,28 @@ def get_usergroup_members(client: WebClient, usergroup_id: str) -> list[str]:
         List of Slack user IDs in the group
     """
     logger.info(f"Getting members of Slack usergroup: {usergroup_id}")
-    start = datetime.datetime.now(timezone.utc)
-    timeout_seconds = 30
-    try:
-        response = client.usergroups_users_list(usergroup=usergroup_id)
-        users = response.get("users", [])
-        logger.info(f"Found {len(users)} members in usergroup {usergroup_id}")
-        return users
-    except slack_sdk.errors.SlackApiError as e:
-        if e.response["error"] == "ratelimited":
-            if datetime.datetime.now(timezone.utc) - start >= datetime.timedelta(seconds=timeout_seconds):
+    deadline = datetime.datetime.now(timezone.utc) + datetime.timedelta(seconds=30)
+
+    while True:
+        try:
+            response = client.usergroups_users_list(usergroup=usergroup_id)
+            users = response.get("users", [])
+            logger.info(f"Found {len(users)} members in usergroup {usergroup_id}")
+            return users
+        except slack_sdk.errors.SlackApiError as e:
+            if e.response["error"] == "ratelimited":
+                if datetime.datetime.now(timezone.utc) >= deadline:
+                    logger.error(f"Timeout after rate limiting when getting usergroup {usergroup_id}")
+                    raise e
+                logger.info(f"Rate limited when getting usergroup members. Sleeping for 3 seconds. {e}")
+                time.sleep(3)
+                continue
+            elif e.response["error"] == "no_such_subteam":
+                logger.warning(f"Slack usergroup {usergroup_id} not found")
+                return []
+            else:
+                logger.error(f"Error when getting usergroup members: {e}")
                 raise e
-            logger.info(f"Rate limited when getting usergroup members. Sleeping for 3 seconds. {e}")
-            time.sleep(3)
-            return get_usergroup_members(client, usergroup_id)
-        elif e.response["error"] == "no_such_subteam":
-            logger.warning(f"Slack usergroup {usergroup_id} not found")
-            return []
-        else:
-            logger.error(f"Error when getting usergroup members: {e}")
-            raise e
 
 
 def resolve_approver_groups(client: WebClient, group_ids: frozenset[str]) -> tuple[list[entities.slack.User], list[str]]:
@@ -956,7 +958,7 @@ class ButtonGroupClickedPayload(BaseModel):
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
-        humanized_permission_duration = cls.find_in_fields(fields, "Permission duration")
+        humanized_permission_duration = cls.find_in_fields(fields, "Duration")
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         group = cls.find_in_fields(fields, "Group")
         group_id = group.split("#")[-1]
@@ -977,6 +979,6 @@ class ButtonGroupClickedPayload(BaseModel):
     @staticmethod
     def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
         for field in fields:
-            if field["text"].startswith(key):
-                return field["text"].split(": ")[1].strip()
+            if field["text"].startswith(f"*{key}*"):
+                return field["text"].split("\n", 1)[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")

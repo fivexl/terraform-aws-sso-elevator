@@ -34,3 +34,14 @@ output "attribute_sync_schedule_rule_arn" {
   description = "The ARN of the EventBridge rule that triggers the attribute syncer."
   value       = var.attribute_sync_enabled ? aws_cloudwatch_event_rule.attribute_sync_schedule[0].arn : null
 }
+
+# Alerting-related outputs
+output "revoker_lambda_name" {
+  description = "The name of the revoker Lambda function."
+  value       = module.access_revoker.lambda_function_name
+}
+
+output "schedule_group_name" {
+  description = "The name of the EventBridge Scheduler schedule group."
+  value       = aws_scheduler_schedule_group.one_time_schedule_group.name
+}

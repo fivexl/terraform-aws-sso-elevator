@@ -1,4 +1,5 @@
 import functools
+import inspect
 
 from aws_lambda_powertools import Logger
 from slack_bolt import BoltContext
@@ -51,13 +52,27 @@ def error_handler(client: WebClient, e: Exception, logger: Logger, context: Bolt
 def handle_errors(fn):  # noqa: ANN001, ANN201
     # Default slack error handler (app.error) does not handle all exceptions. Or at least I did not find how to do it.
     # So I created this error handler.
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.keys())
+
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         try:
             return fn(*args, **kwargs)
         except Exception as e:
-            client: WebClient = kwargs["client"]
-            context: BoltContext = kwargs["context"]
+            # Extract client and context from args or kwargs (Slack Bolt passes positional args)
+            if "client" in kwargs:
+                client = kwargs["client"]
+            else:
+                client_idx = params.index("client")
+                client = args[client_idx]
+
+            if "context" in kwargs:
+                context = kwargs["context"]
+            else:
+                context_idx = params.index("context")
+                context = args[context_idx]
+
             error_handler(client=client, e=e, logger=logger, context=context, cfg=cfg)
 
     return wrapper

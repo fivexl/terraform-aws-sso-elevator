@@ -190,6 +190,19 @@ data "aws_iam_policy_document" "revoker" {
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
   }
+  statement {
+    sid    = "AllowCloudWatchPutMetricData"
+    effect = "Allow"
+    actions = [
+      "cloudwatch:PutMetricData"
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["SSOElevator"]
+    }
+  }
 
 }
 
