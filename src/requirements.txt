@@ -78,6 +78,10 @@ idna==3.11 \
     # via
     #   email-validator
     #   requests
+mypy-boto3-cloudwatch==1.40.63 \
+    --hash=sha256:ac8b21249d87a2104f5d895617ecb7298ec6b92e5a773616ae3965d18ec7a995 \
+    --hash=sha256:badeaeca5bba29f01985a31262ebf4ca374a6790aa70e24d15088df0e45243a7
+    # via boto3-stubs
 mypy-boto3-events==1.40.55 \
     --hash=sha256:6a7caffb6711db02e3babe04e43d7889c2199533ff963c339a1c9c28472cc3bd \
     --hash=sha256:9aee38df8b97b535767aaf2bca688deeea8b0e89dc17099d8b4b2522e7304a34

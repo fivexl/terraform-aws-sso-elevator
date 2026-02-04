@@ -96,6 +96,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+cloudwatch = [
+    { name = "mypy-boto3-cloudwatch" },
+]
 events = [
     { name = "mypy-boto3-events" },
 ]
@@ -299,6 +302,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/00/2a/e867e8531cf3e36b41201936b7fa7ba7b5702dbef42922193f05c8976cd6/jmespath-1.0.1.tar.gz", hash = "sha256:90261b206d6defd58fdd5e85f478bf633a2901798906be2ad389150c5c60edbe", size = 25843, upload-time = "2022-06-17T18:00:12.224Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/b4/b9b800c45527aadd64d5b442f9b932b00648617eb5d63d2c7a6587b7cafc/jmespath-1.0.1-py3-none-any.whl", hash = "sha256:02e2e4cc71b5bcab88332eebf907519190dd9e6e82107fa7f83b1003a6252980", size = 20256, upload-time = "2022-06-17T18:00:10.251Z" },
+]
+
+[[package]]
+name = "mypy-boto3-cloudwatch"
+version = "1.40.63"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ab/b6/24a9208b0f924c20d5c504fc02e96012d029a6028ed895dd6255c921316d/mypy_boto3_cloudwatch-1.40.63.tar.gz", hash = "sha256:ac8b21249d87a2104f5d895617ecb7298ec6b92e5a773616ae3965d18ec7a995", size = 33046, upload-time = "2025-10-30T19:44:05.56Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/35/f89ab0074c15152b2ff3bdf91239d9c28080b522a9bbb30e851b1be3507a/mypy_boto3_cloudwatch-1.40.63-py3-none-any.whl", hash = "sha256:badeaeca5bba29f01985a31262ebf4ca374a6790aa70e24d15088df0e45243a7", size = 44584, upload-time = "2025-10-30T19:44:03.317Z" },
 ]
 
 [[package]]
@@ -661,7 +673,7 @@ name = "sso-elevator"
 version = "3.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "boto3-stubs", extra = ["events", "identitystore", "organizations", "s3", "scheduler", "sso-admin"] },
+    { name = "boto3-stubs", extra = ["cloudwatch", "events", "identitystore", "organizations", "s3", "scheduler", "sso-admin"] },
     { name = "croniter" },
     { name = "posthog" },
     { name = "pydantic", extra = ["email"] },
@@ -682,7 +694,7 @@ dev = [
 requires-dist = [
     { name = "aws-lambda-powertools", extras = ["parser"], marker = "extra == 'dev'", specifier = ">=2.14.1" },
     { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.26.97" },
-    { name = "boto3-stubs", extras = ["identitystore", "organizations", "s3", "scheduler", "sso-admin", "events"], specifier = ">=1.26.134" },
+    { name = "boto3-stubs", extras = ["cloudwatch", "identitystore", "organizations", "s3", "scheduler", "sso-admin", "events"], specifier = ">=1.26.134" },
     { name = "croniter", specifier = ">=1.3.14" },
     { name = "hypothesis", extras = ["ghostwriter"], marker = "extra == 'dev'", specifier = ">=6.71.0" },
     { name = "posthog", specifier = ">=7.0.0" },
