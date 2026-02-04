@@ -1180,3 +1180,326 @@ class TestGroupBasedAccessFiltering:
         )
         assert decision.reason == DecisionReason.RequiresApproval
         assert decision.approvers == frozenset(["admin-approver@example.com", "regular-approver@example.com"])
+
+
+class TestApproverGroupsSelfApproval:
+    """Tests for self-approval via approver group membership."""
+
+    def test_user_in_approver_group_can_self_approve(self):
+        """User in approver group can self-approve when allow_self_approval is True."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": [],  # No individual approvers
+                        "approver_groups": frozenset(["approver-group-1"]),
+                        "allow_self_approval": True,
+                    }
+                )
+            ]
+        )
+
+        # Resolver returns requester's Slack ID as member of the approver group
+        def mock_resolver(group_ids):
+            if "approver-group-1" in group_ids:
+                return {"U_REQUESTER"}
+            return set()
+
+        decision = make_decision_on_access_request(
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            requester_email="requester@example.com",
+            requester_slack_id="U_REQUESTER",
+            approver_group_resolver=mock_resolver,
+        )
+
+        assert decision.grant is True
+        assert decision.reason == DecisionReason.SelfApproval
+
+    def test_user_in_approver_group_blocked_when_self_approval_denied(self):
+        """User in approver group is blocked when allow_self_approval is False."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": ["other-approver@example.com"],
+                        "approver_groups": frozenset(["approver-group-1"]),
+                        "allow_self_approval": False,
+                    }
+                )
+            ]
+        )
+
+        def mock_resolver(group_ids):
+            if "approver-group-1" in group_ids:
+                return {"U_REQUESTER"}
+            return set()
+
+        decision = make_decision_on_access_request(
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            requester_email="requester@example.com",
+            requester_slack_id="U_REQUESTER",
+            approver_group_resolver=mock_resolver,
+        )
+
+        assert decision.grant is False
+        assert decision.reason == DecisionReason.RequiresApproval
+        # Requester should not be in the approvers list
+        assert "requester@example.com" not in decision.approvers
+
+    def test_user_not_in_approver_group_cannot_self_approve(self):
+        """User not in any approver group cannot self-approve."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": ["actual-approver@example.com"],
+                        "approver_groups": frozenset(["approver-group-1"]),
+                        "allow_self_approval": True,
+                    }
+                )
+            ]
+        )
+
+        # Resolver returns different user ID
+        def mock_resolver(group_ids):
+            if "approver-group-1" in group_ids:
+                return {"U_OTHER_USER"}
+            return set()
+
+        decision = make_decision_on_access_request(
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            requester_email="requester@example.com",
+            requester_slack_id="U_REQUESTER",
+            approver_group_resolver=mock_resolver,
+        )
+
+        assert decision.grant is False
+        assert decision.reason == DecisionReason.RequiresApproval
+
+    def test_explicit_deny_self_approval_blocks_group_member(self):
+        """Explicit deny in one statement blocks self-approval even if another allows it."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["*"],
+                        "permission_set": ["*"],
+                        "approvers": [],
+                        "approver_groups": frozenset(["approver-group-1"]),
+                        "allow_self_approval": True,
+                    }
+                ),
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": ["other-approver@example.com"],
+                        "approver_groups": frozenset(["approver-group-1"]),
+                        "allow_self_approval": False,
+                    }
+                ),
+            ]
+        )
+
+        def mock_resolver(group_ids):
+            if "approver-group-1" in group_ids:
+                return {"U_REQUESTER"}
+            return set()
+
+        decision = make_decision_on_access_request(
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            requester_email="requester@example.com",
+            requester_slack_id="U_REQUESTER",
+            approver_group_resolver=mock_resolver,
+        )
+
+        assert decision.grant is False
+        assert decision.reason == DecisionReason.RequiresApproval
+
+    def test_approver_groups_in_decision_output(self):
+        """Approver groups should be included in decision output."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": ["individual@example.com"],
+                        "approver_groups": frozenset(["group-1", "group-2"]),
+                    }
+                )
+            ]
+        )
+
+        decision = make_decision_on_access_request(
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            requester_email="requester@example.com",
+        )
+
+        assert decision.grant is False
+        assert decision.reason == DecisionReason.RequiresApproval
+        assert decision.approver_groups == frozenset(["group-1", "group-2"])
+
+    def test_only_approver_groups_no_individual_approvers(self):
+        """Statement with only approver groups (no individual approvers) works."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": [],
+                        "approver_groups": frozenset(["approver-group"]),
+                    }
+                )
+            ]
+        )
+
+        decision = make_decision_on_access_request(
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            requester_email="requester@example.com",
+        )
+
+        assert decision.grant is False
+        assert decision.reason == DecisionReason.RequiresApproval
+        assert decision.approvers == frozenset()
+        assert decision.approver_groups == frozenset(["approver-group"])
+
+
+class TestApproveRequestWithGroups:
+    """Tests for make_decision_on_approve_request with approver groups."""
+
+    def test_group_member_can_approve(self):
+        """User in approver group can approve requests."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": [],
+                        "approver_groups": frozenset(["approver-group"]),
+                    }
+                )
+            ]
+        )
+
+        def mock_resolver(group_ids):
+            if "approver-group" in group_ids:
+                return {"U_APPROVER"}
+            return set()
+
+        decision = make_decision_on_approve_request(
+            action=entities.ApproverAction.Approve,
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            approver_email="approver@example.com",
+            requester_email="requester@example.com",
+            approver_slack_id="U_APPROVER",
+            approver_group_resolver=mock_resolver,
+        )
+
+        assert decision.grant is True
+        assert decision.permit is True
+
+    def test_non_group_member_cannot_approve(self):
+        """User not in approver group cannot approve."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": [],
+                        "approver_groups": frozenset(["approver-group"]),
+                    }
+                )
+            ]
+        )
+
+        def mock_resolver(group_ids):
+            if "approver-group" in group_ids:
+                return {"U_OTHER_USER"}  # Not the approver
+            return set()
+
+        decision = make_decision_on_approve_request(
+            action=entities.ApproverAction.Approve,
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            approver_email="not-in-group@example.com",
+            requester_email="requester@example.com",
+            approver_slack_id="U_APPROVER",
+            approver_group_resolver=mock_resolver,
+        )
+
+        assert decision.grant is False
+        assert decision.permit is False
+
+    def test_per_statement_group_resolution(self):
+        """Approver groups are resolved per-statement to prevent cross-statement bypass."""
+        statements = frozenset(
+            [
+                Statement.model_validate(
+                    {
+                        "resource_type": "Account",
+                        "resource": ["111111111111"],
+                        "permission_set": ["AdministratorAccess"],
+                        "approvers": [],
+                        "approver_groups": frozenset(["group-for-admin-access"]),
+                    }
+                ),
+            ]
+        )
+
+        # Track which groups are resolved
+        resolved_groups = []
+
+        def mock_resolver(group_ids):
+            resolved_groups.append(set(group_ids))
+            if "group-for-admin-access" in group_ids:
+                return {"U_APPROVER"}
+            return set()
+
+        decision = make_decision_on_approve_request(
+            action=entities.ApproverAction.Approve,
+            statements=statements,
+            account_id="111111111111",
+            permission_set_name="AdministratorAccess",
+            approver_email="approver@example.com",
+            requester_email="requester@example.com",
+            approver_slack_id="U_APPROVER",
+            approver_group_resolver=mock_resolver,
+        )
+
+        assert decision.permit is True
+        # Resolver should have been called with only the statement's group
+        assert {"group-for-admin-access"} in [set(g) for g in resolved_groups]

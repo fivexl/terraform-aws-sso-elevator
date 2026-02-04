@@ -1,14 +1,18 @@
 """Tests for slack_helpers module."""
 
 from datetime import timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+import slack_sdk.errors
 
 from slack_helpers import (
     ButtonClickedPayload,
     ButtonGroupClickedPayload,
+    build_approver_group_mentions,
     get_max_duration_block,
+    get_usergroup_members,
+    resolve_approver_groups,
 )
 
 
@@ -278,3 +282,220 @@ class TestButtonGroupClickedPayload:
         ]
         with pytest.raises(ValueError, match="Could not find Group"):
             ButtonGroupClickedPayload.model_validate(bad_payload)
+
+
+class TestGetUsergroupMembers:
+    """Tests for get_usergroup_members function."""
+
+    def test_successful_retrieval(self):
+        """Successfully retrieves member IDs from a usergroup."""
+        mock_client = MagicMock()
+        mock_client.usergroups_users_list.return_value = {"users": ["U123", "U456", "U789"]}
+
+        result = get_usergroup_members(mock_client, "SAZ94GDB8")
+
+        assert result == ["U123", "U456", "U789"]
+        mock_client.usergroups_users_list.assert_called_once_with(usergroup="SAZ94GDB8")
+
+    def test_empty_usergroup_returns_empty_list(self):
+        """Usergroup with no members returns empty list."""
+        mock_client = MagicMock()
+        mock_client.usergroups_users_list.return_value = {"users": []}
+
+        result = get_usergroup_members(mock_client, "SAZ94GDB8")
+
+        assert result == []
+
+    def test_no_such_subteam_error_returns_empty_list(self):
+        """no_such_subteam error returns empty list instead of raising."""
+        mock_client = MagicMock()
+        error_response = MagicMock()
+        error_response.__getitem__ = MagicMock(return_value="no_such_subteam")
+        mock_client.usergroups_users_list.side_effect = slack_sdk.errors.SlackApiError(
+            message="no_such_subteam",
+            response=error_response,
+        )
+
+        result = get_usergroup_members(mock_client, "NONEXISTENT")
+
+        assert result == []
+
+    def test_rate_limiting_with_retry(self):
+        """Rate limiting triggers retry after sleep."""
+        mock_client = MagicMock()
+        error_response = MagicMock()
+        error_response.__getitem__ = MagicMock(return_value="ratelimited")
+        rate_limit_error = slack_sdk.errors.SlackApiError(
+            message="ratelimited",
+            response=error_response,
+        )
+        # First call raises rate limit, second succeeds
+        mock_client.usergroups_users_list.side_effect = [
+            rate_limit_error,
+            {"users": ["U123"]},
+        ]
+
+        with patch("slack_helpers.time.sleep") as mock_sleep:
+            result = get_usergroup_members(mock_client, "SAZ94GDB8")
+
+        assert result == ["U123"]
+        mock_sleep.assert_called_once_with(3)
+        assert mock_client.usergroups_users_list.call_count == 2
+
+    def test_other_errors_are_raised(self):
+        """Non-rate-limit, non-no_such_subteam errors are re-raised."""
+        mock_client = MagicMock()
+        error_response = MagicMock()
+        error_response.__getitem__ = MagicMock(return_value="invalid_auth")
+        mock_client.usergroups_users_list.side_effect = slack_sdk.errors.SlackApiError(
+            message="invalid_auth",
+            response=error_response,
+        )
+
+        with pytest.raises(slack_sdk.errors.SlackApiError):
+            get_usergroup_members(mock_client, "SAZ94GDB8")
+
+
+class TestResolveApproverGroups:
+    """Tests for resolve_approver_groups function."""
+
+    def test_resolves_multiple_groups(self):
+        """Resolves users from multiple usergroups."""
+        mock_client = MagicMock()
+
+        # Mock get_usergroup_members behavior
+        def mock_usergroups_users_list(usergroup):
+            groups = {
+                "GROUP1": {"users": ["U1", "U2"]},
+                "GROUP2": {"users": ["U3", "U4"]},
+            }
+            return groups.get(usergroup, {"users": []})
+
+        mock_client.usergroups_users_list.side_effect = mock_usergroups_users_list
+
+        # Mock get_user behavior
+        def mock_users_info(user):
+            users = {
+                "U1": {"user": {"id": "U1", "profile": {"email": "u1@test.com"}, "real_name": "User 1"}},
+                "U2": {"user": {"id": "U2", "profile": {"email": "u2@test.com"}, "real_name": "User 2"}},
+                "U3": {"user": {"id": "U3", "profile": {"email": "u3@test.com"}, "real_name": "User 3"}},
+                "U4": {"user": {"id": "U4", "profile": {"email": "u4@test.com"}, "real_name": "User 4"}},
+            }
+            response = MagicMock()
+            response.data = users.get(user, {})
+            return response
+
+        mock_client.users_info.side_effect = mock_users_info
+
+        users, failed_groups = resolve_approver_groups(mock_client, frozenset(["GROUP1", "GROUP2"]))
+
+        assert len(users) == 4
+        user_ids = {u.id for u in users}
+        assert user_ids == {"U1", "U2", "U3", "U4"}
+        assert failed_groups == []
+
+    def test_deduplicates_users_across_groups(self):
+        """Users appearing in multiple groups are only returned once."""
+        mock_client = MagicMock()
+
+        # User U2 appears in both groups
+        def mock_usergroups_users_list(usergroup):
+            groups = {
+                "GROUP1": {"users": ["U1", "U2"]},
+                "GROUP2": {"users": ["U2", "U3"]},
+            }
+            return groups.get(usergroup, {"users": []})
+
+        mock_client.usergroups_users_list.side_effect = mock_usergroups_users_list
+
+        def mock_users_info(user):
+            users = {
+                "U1": {"user": {"id": "U1", "profile": {"email": "u1@test.com"}, "real_name": "User 1"}},
+                "U2": {"user": {"id": "U2", "profile": {"email": "u2@test.com"}, "real_name": "User 2"}},
+                "U3": {"user": {"id": "U3", "profile": {"email": "u3@test.com"}, "real_name": "User 3"}},
+            }
+            response = MagicMock()
+            response.data = users.get(user, {})
+            return response
+
+        mock_client.users_info.side_effect = mock_users_info
+
+        users, failed_groups = resolve_approver_groups(mock_client, frozenset(["GROUP1", "GROUP2"]))
+
+        assert len(users) == 3
+        user_ids = {u.id for u in users}
+        assert user_ids == {"U1", "U2", "U3"}
+        # users_info should only be called 3 times (U2 is deduplicated)
+        assert mock_client.users_info.call_count == 3
+
+    def test_handles_failed_group_resolution(self):
+        """Groups that fail to resolve are tracked in failed_groups."""
+        mock_client = MagicMock()
+
+        error_response = MagicMock()
+        error_response.__getitem__ = MagicMock(return_value="invalid_auth")
+
+        def mock_usergroups_users_list(usergroup):
+            if usergroup == "GOOD_GROUP":
+                return {"users": ["U1"]}
+            raise slack_sdk.errors.SlackApiError(message="invalid_auth", response=error_response)
+
+        mock_client.usergroups_users_list.side_effect = mock_usergroups_users_list
+
+        def mock_users_info(user):
+            response = MagicMock()
+            response.data = {"user": {"id": user, "profile": {"email": f"{user}@test.com"}, "real_name": f"User {user}"}}
+            return response
+
+        mock_client.users_info.side_effect = mock_users_info
+
+        users, failed_groups = resolve_approver_groups(mock_client, frozenset(["GOOD_GROUP", "BAD_GROUP"]))
+
+        assert len(users) == 1
+        assert users[0].id == "U1"
+        assert failed_groups == ["BAD_GROUP"]
+
+    def test_empty_group_is_not_failure(self):
+        """Empty usergroups don't count as failures."""
+        mock_client = MagicMock()
+
+        def mock_usergroups_users_list(usergroup):
+            if usergroup == "EMPTY_GROUP":
+                return {"users": []}
+            return {"users": ["U1"]}
+
+        mock_client.usergroups_users_list.side_effect = mock_usergroups_users_list
+
+        def mock_users_info(user):
+            response = MagicMock()
+            response.data = {"user": {"id": user, "profile": {"email": f"{user}@test.com"}, "real_name": f"User {user}"}}
+            return response
+
+        mock_client.users_info.side_effect = mock_users_info
+
+        users, failed_groups = resolve_approver_groups(mock_client, frozenset(["EMPTY_GROUP", "NON_EMPTY_GROUP"]))
+
+        assert len(users) == 1
+        assert failed_groups == []
+
+
+class TestBuildApproverGroupMentions:
+    """Tests for build_approver_group_mentions function."""
+
+    def test_builds_single_group_mention(self):
+        """Builds correct mention format for single group."""
+        result = build_approver_group_mentions(frozenset(["SAZ94GDB8"]))
+        assert result == "<!subteam^SAZ94GDB8>"
+
+    def test_builds_multiple_group_mentions(self):
+        """Builds space-separated mentions for multiple groups."""
+        result = build_approver_group_mentions(frozenset(["GROUP1", "GROUP2"]))
+        # Order may vary due to frozenset, check both mentions are present
+        assert "<!subteam^GROUP1>" in result
+        assert "<!subteam^GROUP2>" in result
+        assert result.count("<!subteam^") == 2
+
+    def test_empty_groups_returns_empty_string(self):
+        """Empty frozenset returns empty string."""
+        result = build_approver_group_mentions(frozenset())
+        assert result == ""
