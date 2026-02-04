@@ -112,7 +112,7 @@ module "aws_sso_elevator" {
       "Resource" : "account_id",
       "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
       "Approvers" : ["email@gmail.com"],
-      "ApproverGroups" : ["SAZ94GDB8"],  # Slack usergroup ID
+      "ApproverGroups" : ["SAZ94GDB8"], # Slack usergroup ID
       "AllowSelfApproval" : true,
     },
     {
