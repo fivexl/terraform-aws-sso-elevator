@@ -25,6 +25,7 @@ class BaseStatement(BaseModel):
     allow_self_approval: bool | None = None
     approval_is_not_required: bool | None = None
     approvers: FrozenSet[EmailStr] = Field(default_factory=frozenset)
+    approver_groups: FrozenSet[str] = Field(default_factory=frozenset)
     required_group_membership: FrozenSet[str] = Field(default_factory=frozenset)
 
 
@@ -119,6 +120,7 @@ class GroupStatement(BaseModel):
     allow_self_approval: bool | None = None
     approval_is_not_required: bool | None = None
     approvers: FrozenSet[EmailStr] = Field(default_factory=frozenset)
+    approver_groups: FrozenSet[str] = Field(default_factory=frozenset)
 
     def affects(self, group_id: str) -> bool:  # noqa: ANN101
         return group_id in self.resource

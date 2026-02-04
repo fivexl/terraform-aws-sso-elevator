@@ -364,10 +364,10 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
                         value=entities.ApproverAction.Approve.value,
                     ),
                     ButtonElement(
-                        action_id=entities.ApproverAction.Discard.value,
-                        text=PlainTextObject(text="Discard"),
+                        action_id=entities.ApproverAction.Deny.value,
+                        text=PlainTextObject(text="Deny"),
                         style="danger",
-                        value=entities.ApproverAction.Discard.value,
+                        value=entities.ApproverAction.Deny.value,
                     ),
                 ],
             )
@@ -427,7 +427,7 @@ class ButtonClickedPayload(BaseModel):
         humanized_permission_duration = cls.find_in_fields(fields, "Duration")
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         account = cls.find_in_fields(fields, "Account")
-        account_id = account.split("#")[-1]
+        account_id = account.split("(")[-1].rstrip(")")
         return {
             "action": jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),
@@ -598,6 +598,94 @@ def find_approvers_in_slack(client: WebClient, approver_emails: list[str]) -> tu
     return approvers, approver_emails_not_found
 
 
+def get_usergroup_members(client: WebClient, usergroup_id: str) -> list[str]:
+    """Get list of user IDs in a Slack usergroup.
+
+    Args:
+        client: Slack WebClient
+        usergroup_id: Slack usergroup ID (e.g., 'SAZ94GDB8')
+
+    Returns:
+        List of Slack user IDs in the group
+    """
+    logger.info(f"Getting members of Slack usergroup: {usergroup_id}")
+    deadline = datetime.datetime.now(timezone.utc) + datetime.timedelta(seconds=30)
+
+    while True:
+        try:
+            response = client.usergroups_users_list(usergroup=usergroup_id)
+            users = response.get("users", [])
+            logger.info(f"Found {len(users)} members in usergroup {usergroup_id}")
+            return users
+        except slack_sdk.errors.SlackApiError as e:
+            if e.response["error"] == "ratelimited":
+                if datetime.datetime.now(timezone.utc) >= deadline:
+                    logger.error(f"Timeout after rate limiting when getting usergroup {usergroup_id}")
+                    raise e
+                logger.info(f"Rate limited when getting usergroup members. Sleeping for 3 seconds. {e}")
+                time.sleep(3)
+                continue
+            elif e.response["error"] == "no_such_subteam":
+                logger.warning(f"Slack usergroup {usergroup_id} not found")
+                return []
+            else:
+                logger.error(f"Error when getting usergroup members: {e}")
+                raise e
+
+
+def resolve_approver_groups(client: WebClient, group_ids: frozenset[str]) -> tuple[list[entities.slack.User], list[str]]:
+    """Resolve Slack usergroup IDs to User objects.
+
+    Args:
+        client: Slack WebClient
+        group_ids: Set of Slack usergroup IDs
+
+    Returns:
+        Tuple of (list of User objects, list of group IDs that could not be resolved)
+    """
+    users: list[entities.slack.User] = []
+    seen_user_ids: set[str] = set()
+    failed_groups: list[str] = []
+
+    for group_id in group_ids:
+        try:
+            member_ids = get_usergroup_members(client, group_id)
+            # Empty groups are valid - they just don't contribute any users
+            # Only treat as failure if get_usergroup_members raises an exception
+            if not member_ids:
+                logger.info(f"Usergroup {group_id} has no members")
+                continue
+
+            for user_id in member_ids:
+                if user_id not in seen_user_ids:
+                    try:
+                        user = get_user(client, id=user_id)
+                        users.append(user)
+                        seen_user_ids.add(user_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to get user info for {user_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to resolve usergroup {group_id}: {e}")
+            failed_groups.append(group_id)
+
+    return users, failed_groups
+
+
+def build_approver_group_mentions(group_ids: frozenset[str]) -> str:
+    """Build Slack mention string for usergroups.
+
+    Uses <!subteam^GROUP_ID> format which shows as @group-name in Slack
+    and notifies all group members.
+
+    Args:
+        group_ids: Set of Slack usergroup IDs
+
+    Returns:
+        Space-separated string of group mentions
+    """
+    return " ".join(f"<!subteam^{group_id}>" for group_id in group_ids)
+
+
 # Group
 # -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 # -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
@@ -624,6 +712,7 @@ class EarlyRevokeButtonPayload(BaseModel):
     membership_id: Optional[str] = None
     # For looking up approvers
     approver_emails: list[str] = []
+    approver_groups: list[str] = []
 
     @model_validator(mode="before")
     @classmethod
@@ -872,7 +961,7 @@ class ButtonGroupClickedPayload(BaseModel):
         humanized_permission_duration = cls.find_in_fields(fields, "Duration")
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         group = cls.find_in_fields(fields, "Group")
-        group_id = group.split("#")[-1]
+        group_id = group.split("(")[-1].rstrip(")")
         return {
             "action": jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),

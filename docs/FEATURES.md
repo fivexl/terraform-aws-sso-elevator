@@ -214,7 +214,7 @@ All events include `application: "aws-sso-elevator"` as a property.
 |-------|---------|------------|
 | `aws_access_requested` | User submits access request | account_id, permission_set, requester_email, granted, duration_hours |
 | `aws_access_approved` | Access approved | account_id, permission_set, approver_email, duration_hours, self_approved |
-| `aws_access_denied` | Request denied/discarded | account_id, permission_set, approver_email, requester_email |
+| `aws_access_denied` | Request denied | account_id, permission_set, approver_email, requester_email |
 | `aws_access_revoked_early` | Early revocation | account_id, permission_set, revoker_email, reason |
 | `aws_group_access_requested` | Group access request | group_id, group_name, requester_email |
 | `aws_group_access_approved` | Group access approved | group_id, group_name, duration_hours, self_approved |

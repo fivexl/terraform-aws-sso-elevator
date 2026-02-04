@@ -32,7 +32,8 @@ group_config = [
       "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
       "Approvers" : [
         "email@gmail.com"
-      ]
+      ],
+      "ApproverGroups" : ["SAZ94GDB8"],  # Slack usergroup ID
     },
 ]
 ```

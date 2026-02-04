@@ -71,11 +71,11 @@ module "aws_sso_elevator" {
     target_prefix = "some_prefix_for_access_logs"
   }
 
-  # "Resource", "PermissionSet", "Approvers" can be a string or a list of strings
+  # "Resource", "PermissionSet", "Approvers", "ApproverGroups" can be a string or a list of strings
   # "Resource" & "PermissionSet" can be set to "*" to match all
 
   # Request will be approved automatically if:
-  # - "AllowSelfApproval" is set to true, and requester is in "Approvers" list
+  # - "AllowSelfApproval" is set to true, and requester is in "Approvers" list or a member of an "ApproverGroups" group
   # - "ApprovalIsNotRequired" is set to true
 
   # If there is only one approver, and "AllowSelfApproval" isn't set to true, nobody will be able to approve the request
@@ -112,6 +112,7 @@ module "aws_sso_elevator" {
       "Resource" : "account_id",
       "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
       "Approvers" : ["email@gmail.com"],
+      "ApproverGroups" : ["SAZ94GDB8"], # Slack usergroup ID
       "AllowSelfApproval" : true,
     },
     {

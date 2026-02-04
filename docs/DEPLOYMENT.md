@@ -260,7 +260,7 @@ settings:
 | `chat:write` | Post messages to Slack |
 | `users:read.email` | Find user's email address for AWS account assignments |
 | `users:read` | Read user info for mentions in requests |
-| `channels:history` | Find old messages for "discard button" events |
+| `channels:history` | Find old messages for request expiration events |
 | `channels:read` | Determine if requester is in the channel |
 | `groups:read` | Same as above but for private channels |
 | `im:write` | Send direct messages to users not in the channel |
