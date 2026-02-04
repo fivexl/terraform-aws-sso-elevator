@@ -272,7 +272,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
         blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
 
-        text = f"Request was discarded by<@{approver.id}> "
+        text = f"Request was discarded by <@{approver.id}>."
         dm_text = f"Your request was discarded by <@{approver.id}>."
         client.chat_update(
             channel=payload.channel_id,
@@ -334,7 +334,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         cache_for_dublicate_requests.clear()
         return client.chat_postMessage(
             channel=payload.channel_id,
-            text=f"<@{approver.id}> you can not approve this request",
+            text=f"<@{approver.id}> You cannot approve this request.",
             thread_ts=payload.thread_ts,
         )
 
@@ -557,8 +557,8 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             dm_text = "Approval for this Permission Set & Account is not required. Your request will be approved automatically."
             status_text = cfg.granted_status
         case access_control.DecisionReason.SelfApproval:
-            text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
-            dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
+            text = "Self-approval is allowed and requester is an approver. Request will be approved automatically."
+            dm_text = "Self-approval is allowed and you are an approver. Your request will be approved automatically."
             status_text = cfg.granted_status
         case access_control.DecisionReason.RequiresApproval:
             approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(
@@ -580,14 +580,14 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             else:
                 mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
                 all_mentions = " ".join(filter(None, [mention_approvers, group_mentions]))
-                text = f"{all_mentions} there is a request waiting for the approval."
+                text = f"{all_mentions} Request awaiting approval."
                 if approver_emails_not_found:
                     missing_emails = ", ".join(approver_emails_not_found)
                     text += f"""
                     Note: Some approvers ({missing_emails}) could not be found in Slack.
                     Please discard the request and check the module configuration.
                     """
-                dm_text = f"Your request is waiting for the approval from {all_mentions}."
+                dm_text = f"Your request is awaiting approval from {all_mentions}."
                 status_text = cfg.pending_status
         case access_control.DecisionReason.NoApprovers:
             text = "Nobody can approve this request."

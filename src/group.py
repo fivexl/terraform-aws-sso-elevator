@@ -114,16 +114,16 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0915
             dm_text = "Approval for this Group is not required. Your request will be approved automatically."
             status_text = cfg.granted_status
         case access_control.DecisionReason.SelfApproval:
-            text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
-            dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
+            text = "Self-approval is allowed and requester is an approver. Request will be approved automatically."
+            dm_text = "Self-approval is allowed and you are an approver. Your request will be approved automatically."
             status_text = cfg.granted_status
         case access_control.DecisionReason.RequiresApproval:
             approvers = [slack_helpers.get_user_by_email(client, email) for email in decision.approvers]
             mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
             group_mentions = slack_helpers.build_approver_group_mentions(decision.approver_groups)
             all_mentions = " ".join(filter(None, [mention_approvers, group_mentions]))
-            text = f"{all_mentions} there is a request waiting for the approval."
-            dm_text = f"Your request is waiting for the approval from {all_mentions}."
+            text = f"{all_mentions} Request awaiting approval."
+            dm_text = f"Your request is awaiting approval from {all_mentions}."
             status_text = cfg.pending_status
         case access_control.DecisionReason.NoApprovers:
             text = "Nobody can approve this request."
@@ -251,7 +251,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
         blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
 
-        text = f"Request was discarded by<@{approver.id}> "
+        text = f"Request was discarded by <@{approver.id}>."
         dm_text = f"Your request was discarded by <@{approver.id}>."
         client.chat_update(
             channel=payload.channel_id,
@@ -301,7 +301,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         cache_for_dublicate_requests.clear()
         return client.chat_postMessage(
             channel=payload.channel_id,
-            text=f"<@{approver.id}> you can not approve this request",
+            text=f"<@{approver.id}> You cannot approve this request.",
             thread_ts=payload.thread_ts,
         )
 
