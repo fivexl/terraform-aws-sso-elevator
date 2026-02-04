@@ -263,7 +263,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     # Look up permission set to get ARN for matching and name for display
     permission_set = sso.get_permission_set(sso_client, cfg.sso_instance_arn, payload.request.permission_set_name)
 
-    if payload.action == entities.ApproverAction.Discard:
+    if payload.action == entities.ApproverAction.Deny:
         blocks = slack_helpers.HeaderSectionBlock.set_status(
             blocks=payload.message["blocks"],
             status_text=cfg.denied_status,
@@ -272,8 +272,8 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
         blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
 
-        text = f"Request was discarded by <@{approver.id}>."
-        dm_text = f"Your request was discarded by <@{approver.id}>."
+        text = f"Request was denied by <@{approver.id}>."
+        dm_text = f"Your request was denied by <@{approver.id}>."
         client.chat_update(
             channel=payload.channel_id,
             ts=payload.thread_ts,
@@ -424,7 +424,7 @@ app.action(entities.ApproverAction.Approve.value)(
     lazy=[handle_button_click],
 )
 
-app.action(entities.ApproverAction.Discard.value)(
+app.action(entities.ApproverAction.Deny.value)(
     ack=acknowledge_request,
     lazy=[handle_button_click],
 )
@@ -570,11 +570,11 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             if not approvers and not decision.approver_groups:
                 text = """
                 None of the approvers from configuration could be found in Slack.
-                Request cannot be processed. Please discard the request and check the module configuration.
+                Request cannot be processed. Please deny the request and check the module configuration.
                 """
                 dm_text = """
                 Your request cannot be processed because none of the approvers from configuration could be found in Slack.
-                Please discard the request and check the module configuration.
+                Please deny the request and check the module configuration.
                 """
                 status_text = cfg.denied_status
             else:
@@ -585,7 +585,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
                     missing_emails = ", ".join(approver_emails_not_found)
                     text += f"""
                     Note: Some approvers ({missing_emails}) could not be found in Slack.
-                    Please discard the request and check the module configuration.
+                    Please deny the request and check the module configuration.
                     """
                 dm_text = f"Your request is awaiting approval from {all_mentions}."
                 status_text = cfg.pending_status

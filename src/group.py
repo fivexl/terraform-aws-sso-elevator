@@ -242,7 +242,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
     cache_for_dublicate_requests["group_id"] = payload.request.group_id
 
-    if payload.action == entities.ApproverAction.Discard:
+    if payload.action == entities.ApproverAction.Deny:
         blocks = slack_helpers.HeaderSectionBlock.set_status(
             blocks=payload.message["blocks"],
             status_text=cfg.denied_status,
@@ -251,8 +251,8 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
         blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
 
-        text = f"Request was discarded by <@{approver.id}>."
-        dm_text = f"Your request was discarded by <@{approver.id}>."
+        text = f"Request was denied by <@{approver.id}>."
+        dm_text = f"Your request was denied by <@{approver.id}>."
         client.chat_update(
             channel=payload.channel_id,
             ts=payload.thread_ts,

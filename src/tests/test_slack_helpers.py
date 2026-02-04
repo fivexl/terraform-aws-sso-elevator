@@ -5,7 +5,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from slack_helpers import ButtonClickedPayload, ButtonGroupClickedPayload, get_max_duration_block
+from slack_helpers import (
+    ButtonClickedPayload,
+    ButtonGroupClickedPayload,
+    get_max_duration_block,
+)
 
 
 def _make_config(max_hours: int, override: list[str] | None = None) -> MagicMock:
@@ -172,10 +176,10 @@ class TestButtonClickedPayload:
         payload = ButtonClickedPayload.model_validate(self._make_payload(action="approve"))
         assert payload.action.value == "approve"
 
-    def test_parses_discard_action(self):
-        """Parses discard action from payload."""
-        payload = ButtonClickedPayload.model_validate(self._make_payload(action="discard"))
-        assert payload.action.value == "discard"
+    def test_parses_deny_action(self):
+        """Parses deny action from payload."""
+        payload = ButtonClickedPayload.model_validate(self._make_payload(action="deny"))
+        assert payload.action.value == "deny"
 
     def test_extracts_requester_slack_id(self):
         """Extracts requester ID from <@ID> format."""

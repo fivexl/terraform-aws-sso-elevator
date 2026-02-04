@@ -162,7 +162,7 @@ class Config(BaseSettings):
 
     waiting_result_emoji: str = ":large_yellow_circle:"
     bad_result_emoji: str = ":red_circle:"
-    discarded_result_emoji: str = ":white_circle:"
+    denied_result_emoji: str = ":white_circle:"
 
     # Status badges for Slack messages
     pending_status: str = ":hourglass_flowing_sand: *AWAITING APPROVAL*"

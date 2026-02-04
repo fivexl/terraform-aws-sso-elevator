@@ -364,10 +364,10 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
                         value=entities.ApproverAction.Approve.value,
                     ),
                     ButtonElement(
-                        action_id=entities.ApproverAction.Discard.value,
-                        text=PlainTextObject(text="Discard"),
+                        action_id=entities.ApproverAction.Deny.value,
+                        text=PlainTextObject(text="Deny"),
                         style="danger",
-                        value=entities.ApproverAction.Discard.value,
+                        value=entities.ApproverAction.Deny.value,
                     ),
                 ],
             )

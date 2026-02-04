@@ -199,7 +199,7 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     """Make a decision on an approval request.
 
     Args:
-        action: The action being taken (Approve or Discard)
+        action: The action being taken (Approve or Deny)
         statements: The statements to evaluate
         approver_email: Email of the approver
         requester_email: Email of the requester
