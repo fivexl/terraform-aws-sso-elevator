@@ -225,6 +225,8 @@ output "api_endpoint_url" {
 | <a name="output_config_s3_bucket_arn"></a> [config\_s3\_bucket\_arn](#output\_config\_s3\_bucket\_arn) | The ARN of the S3 bucket for storing configuration and cache data. |
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
+| <a name="output_revoker_lambda_name"></a> [revoker\_lambda\_name](#output\_revoker\_lambda\_name) | The name of the revoker Lambda function. |
+| <a name="output_schedule_group_name"></a> [schedule\_group\_name](#output\_schedule\_group\_name) | The name of the EventBridge Scheduler schedule group. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END_TF_DOCS -->
 
