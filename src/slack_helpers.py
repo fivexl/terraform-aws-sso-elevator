@@ -424,7 +424,7 @@ class ButtonClickedPayload(BaseModel):
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
-        humanized_permission_duration = cls.find_in_fields(fields, "Permission duration")
+        humanized_permission_duration = cls.find_in_fields(fields, "Duration")
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         account = cls.find_in_fields(fields, "Account")
         account_id = account.split("#")[-1]
@@ -437,7 +437,7 @@ class ButtonClickedPayload(BaseModel):
             "request": RequestForAccess(
                 requester_slack_id=requester_slack_id,
                 account_id=account_id,
-                permission_set_name=cls.find_in_fields(fields, "Role name"),
+                permission_set_name=cls.find_in_fields(fields, "Permission Set"),
                 reason=cls.find_in_fields(fields, "Reason"),
                 permission_duration=permission_duration,
             ),
@@ -869,7 +869,7 @@ class ButtonGroupClickedPayload(BaseModel):
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
-        humanized_permission_duration = cls.find_in_fields(fields, "Permission duration")
+        humanized_permission_duration = cls.find_in_fields(fields, "Duration")
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         group = cls.find_in_fields(fields, "Group")
         group_id = group.split("#")[-1]
