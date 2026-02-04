@@ -427,7 +427,7 @@ class ButtonClickedPayload(BaseModel):
         humanized_permission_duration = cls.find_in_fields(fields, "Duration")
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         account = cls.find_in_fields(fields, "Account")
-        account_id = account.split("#")[-1]
+        account_id = account.split("(")[-1].rstrip(")")
         return {
             "action": jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),
@@ -961,7 +961,7 @@ class ButtonGroupClickedPayload(BaseModel):
         humanized_permission_duration = cls.find_in_fields(fields, "Duration")
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         group = cls.find_in_fields(fields, "Group")
-        group_id = group.split("#")[-1]
+        group_id = group.split("(")[-1].rstrip(")")
         return {
             "action": jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),

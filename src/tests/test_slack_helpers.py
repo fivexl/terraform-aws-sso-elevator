@@ -148,7 +148,7 @@ class TestButtonClickedPayload:
         defaults = {
             "action": "approve",
             "requester": "<@U_REQUESTER>",
-            "account": "TestAccount#123456789012",
+            "account": "TestAccount (123456789012)",
             "permission_set": "AdminAccess",
             "duration": "0h 15m",
             "reason": "Testing",
@@ -190,10 +190,10 @@ class TestButtonClickedPayload:
         payload = ButtonClickedPayload.model_validate(self._make_payload(requester="<@U_REQUESTER>"))
         assert payload.request.requester_slack_id == "U_REQUESTER"
 
-    def test_extracts_account_id_from_hash_format(self):
-        """Extracts account ID after # separator."""
-        payload = ButtonClickedPayload.model_validate(self._make_payload(account="TestAccount#123456789012"))
-        assert payload.request.account_id == "123456789012"
+    def test_extracts_account_id_from_parentheses_format(self):
+        """Extracts account ID from Name (ID) format."""
+        payload = ButtonClickedPayload.model_validate(self._make_payload(account="Root (795637471508)"))
+        assert payload.request.account_id == "795637471508"
 
     def test_extracts_permission_set_name(self):
         """Extracts permission set name from field."""
@@ -234,7 +234,7 @@ class TestButtonGroupClickedPayload:
         self,
         action: str = "approve",
         requester: str = "<@U_REQUESTER>",
-        group: str = "TestGroup#group-123",
+        group: str = "TestGroup (group-123)",
         duration: str = "0h 15m",
         reason: str = "Testing",
     ) -> dict:
@@ -264,9 +264,9 @@ class TestButtonGroupClickedPayload:
         payload = ButtonGroupClickedPayload.model_validate(self._make_payload(action="approve"))
         assert payload.action.value == "approve"
 
-    def test_extracts_group_id_from_hash_format(self):
-        """Extracts group ID after # separator."""
-        payload = ButtonGroupClickedPayload.model_validate(self._make_payload(group="TestGroup#group-123"))
+    def test_extracts_group_id_from_parentheses_format(self):
+        """Extracts group ID from Name (ID) format."""
+        payload = ButtonGroupClickedPayload.model_validate(self._make_payload(group="MyGroup (group-123)"))
         assert payload.request.group_id == "group-123"
 
     def test_parses_duration(self):
