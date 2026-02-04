@@ -14,7 +14,8 @@ The fields in the configuration dictionary are:
 - **Resource**: This field defines the specific resource(s) being requested. It accepts either a single string or a list of strings. Setting this field to "*" allows the rule to match all resources associated with the specified `ResourceType`.
 - **PermissionSet**: Here, you indicate the permission set(s) being requested. This can be either a single string or a list of strings. You can specify permission sets by **name** (e.g., `"AdministratorAccess"`) or by **ARN** (e.g., `"arn:aws:sso:::permissionSet/ssoins-1234567890abcdef/ps-1234567890abcdef"`). Using ARNs is recommended for Terraform users as it reduces API calls and allows direct reference to `aws_ssoadmin_permission_set.*.arn`. If set to "*", the rule matches all permission sets available for the defined `Resource` and `ResourceType`.
 - **Approvers**: This field lists the potential approvers for the request. It accepts either a single string or a list of strings representing different approvers.
-- **AllowSelfApproval**: This field can be a boolean, indicating whether the requester, if present in the `Approvers` list, is permitted to approve their own request. It defaults to `None`.
+- **ApproverGroups**: This field lists Slack usergroup IDs whose members can approve the request. It accepts either a single string or a list of strings. Members of the specified Slack usergroups are resolved at request time and added to the list of approvers.
+- **AllowSelfApproval**: This field can be a boolean, indicating whether the requester, if present in the `Approvers` list or a member of an `ApproverGroups` group, is permitted to approve their own request. It defaults to `None`.
 - **ApprovalIsNotRequired**: This field can also be a boolean, signifying whether the approval can be granted automatically, bypassing the approvers entirely. The default value is `None`.
 - **RequiredGroupMembership**: This field restricts the rule to only users who are members of at least one of the specified SSO groups. Accepts a single group ID or a list of group IDs. If empty or omitted, the rule applies to all users.
 
@@ -26,16 +27,16 @@ In the system, an explicit denial in any statement overrides any approvals. For 
 
 Requests will be approved automatically if either of the following conditions are met:
 
-- AllowSelfApproval is set to true and the requester is in the Approvers list.
+- AllowSelfApproval is set to true and the requester is in the Approvers list or a member of an ApproverGroups group.
 - ApprovalIsNotRequired is set to true.
 
 ## Aggregation of Rules
 
-The approval decision and final list of reviewers will be calculated dynamically based on the aggregate of all rules. If you have a rule that specifies that someone is an approver for all accounts, then that person will be automatically added to all requests, even if there are more detailed rules for specific accounts or permission sets.
+The approval decision and final list of reviewers will be calculated dynamically based on the aggregate of all rules. Approvers from both `Approvers` and `ApproverGroups` are combined. If you have a rule that specifies that someone is an approver for all accounts, then that person will be automatically added to all requests, even if there are more detailed rules for specific accounts or permission sets.
 
 ## Single Approver
 
-If there is only one approver and AllowSelfApproval is not set to true, nobody will be able to approve the request.
+If there is only one approver (whether from `Approvers` or `ApproverGroups`) and AllowSelfApproval is not set to true, nobody will be able to approve the request.
 
 ## Request Processing Diagram
 
@@ -110,6 +111,7 @@ Require explicit approval for production admin access:
   "Resource" : ["prod_account_id", "prod_account_id2"],
   "PermissionSet" : "AdministratorAccess",
   "Approvers" : ["manager@corp.com", "ciso@corp.com"],
+  "ApproverGroups" : ["SAZ94GDB8"],  # Slack usergroup ID for the SRE team
   "ApprovalIsNotRequired" : false,
   "AllowSelfApproval" : false,
 }
