@@ -233,6 +233,7 @@ oauth_config:
       - channels:history
       - channels:read
       - groups:read
+      - usergroups:read
       - im:write
 settings:
   interactivity:
@@ -263,4 +264,5 @@ settings:
 | `channels:history` | Find old messages for request expiration events |
 | `channels:read` | Determine if requester is in the channel |
 | `groups:read` | Same as above but for private channels |
+| `usergroups:read` | Resolve Slack user group members for approver groups |
 | `im:write` | Send direct messages to users not in the channel |

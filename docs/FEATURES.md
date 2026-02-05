@@ -52,6 +52,7 @@ Your Slack app must have these permissions:
 
 - `channels:read` - View basic information about public channels
 - `groups:read` - View basic information about private channels the app has been added to
+- `usergroups:read` - Resolve Slack user group members for approver groups
 - `im:write` - Send direct messages to workspace members
 
 ---
