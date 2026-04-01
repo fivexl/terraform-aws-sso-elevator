@@ -4,15 +4,6 @@ variable "create_api_gateway" {
   default     = true
 }
 
-variable "create_lambda_url" {
-  description = <<-EOT
-  If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future
-  If false, Lambda url will be deleted.
-  EOT
-  type        = bool
-  default     = true
-}
-
 variable "ecr_repo_name" {
   description = "The name of the ECR repository."
   type        = string
@@ -464,4 +455,10 @@ variable "identity_store_id" {
   description = "The Identity Store ID. If not provided and sso_instance_arn is also not provided, it will be automatically discovered."
   type        = string
   default     = ""
+}
+
+variable "slack_handler_provisioned_concurrent_executions" {
+  description = "Provisioned concurrent executions for the Slack handler Lambda. Set to a positive number to reduce cold starts."
+  type        = number
+  default     = -1
 }

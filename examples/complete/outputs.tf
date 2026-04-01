@@ -1,3 +1,4 @@
-output "aws_sso_elevator_lambda_function_url" {
-  value = module.aws_sso_elevator.lambda_function_url
+output "requester_api_endpoint_url" {
+  description = "The URL to invoke the Lambda function"
+  value       = module.aws_sso_elevator.requester_api_endpoint_url
 }

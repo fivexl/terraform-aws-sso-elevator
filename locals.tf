@@ -5,7 +5,7 @@ locals {
   python_version = join(".", slice(split(".", local.full_python_version), 0, 2))
 
   revoker_lambda_arn   = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.revoker_lambda_name}"
-  requester_lambda_arn = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+  requester_lambda_arn = var.slack_handler_provisioned_concurrent_executions > 0 ? "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}:live" : "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
   sso_instance_arn     = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].arns[0] : var.sso_instance_arn
   identity_store_id    = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].identity_store_ids[0] : var.identity_store_id
 
@@ -24,6 +24,13 @@ locals {
   api_resource_path = "/access-requester"
   api_stage_name    = "default"
   full_api_url      = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
+
+  api_gateway_allowed_triggers = var.create_api_gateway ? {
+    AllowExecutionFromAPIGateway = {
+      service    = "apigateway"
+      source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path}"
+    }
+  } : {}
 
   # Event Bridge rule names with fallback to deprecated variables
   event_bridge_check_on_inconsistency_rule_name = coalesce(
