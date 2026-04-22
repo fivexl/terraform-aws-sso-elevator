@@ -92,11 +92,31 @@ def handle_request_for_group_access_submittion(
             dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
             color_coding_emoji = cfg.good_result_emoji
         case access_control.DecisionReason.RequiresApproval:
-            approvers = [slack_helpers.get_user_by_email(client, email) for email in decision.approvers]
-            mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
-            text = f"{mention_approvers} there is a request waiting for the approval."
-            dm_text = f"Your request is waiting for the approval from {mention_approvers}."
-            color_coding_emoji = cfg.waiting_result_emoji
+            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(
+                client,
+                decision.approvers,  # type: ignore # noqa: PGH003
+            )
+            if not approvers:
+                text = """
+                None of the approvers from configuration could be found in Slack.
+                Request cannot be processed. Please discard the request and check the module configuration.
+                """
+                dm_text = """
+                Your request cannot be processed because none of the approvers from configuration could be found in Slack.
+                Please discard the request and check the module configuration.
+                """
+                color_coding_emoji = cfg.bad_result_emoji
+            else:
+                mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
+                text = f"{mention_approvers} there is a request waiting for the approval."
+                if approver_emails_not_found:
+                    missing_emails = ", ".join(approver_emails_not_found)
+                    text += f"""
+                    Note: Some approvers ({missing_emails}) could not be found in Slack.
+                    Please discard the request and check the module configuration.
+                    """
+                dm_text = f"Your request is waiting for the approval from {mention_approvers}."
+                color_coding_emoji = cfg.waiting_result_emoji
         case access_control.DecisionReason.NoApprovers:
             text = "Nobody can approve this request."
             dm_text = "Nobody can approve this request."
