@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
@@ -109,14 +109,21 @@ def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str
 class Config(BaseSettings):
     model_config = SettingsConfigDict(frozen=True)
 
+    chat_platform: Literal["slack", "teams"] = "slack"
+
     schedule_policy_arn: str
     revoker_function_arn: str
     revoker_function_name: str
     schedule_group_name: str
 
     post_update_to_slack: bool = False
-    slack_channel_id: str
-    slack_bot_token: str
+    slack_channel_id: str = ""
+    slack_bot_token: str = ""
+
+    teams_microsoft_app_id: str = ""
+    teams_microsoft_app_password: str = ""
+    teams_azure_tenant_id: str = ""
+    teams_approval_conversation_id: str = ""
 
     approver_renotification_initial_wait_time: int
     approver_renotification_backoff_multiplier: int

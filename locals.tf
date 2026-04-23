@@ -1,4 +1,16 @@
 locals {
+  # Default CORS allow_origins when var.requester_cors_allow_origins is null: Slack request URL, or common Bot Framework / Teams endpoints
+  # (override with var.requester_cors_allow_origins if your environment uses a different service URL)
+  _teams_requester_cors_default_origins = [
+    "https://smba.trafficmanager.net",
+    "https://smba.trafficmanager.net:443",
+    "https://dev.botframework.com",
+  ]
+
+  requester_cors_allow_origins = var.requester_cors_allow_origins != null ? var.requester_cors_allow_origins : (
+    var.chat_platform == "slack" ? ["https://slack.com"] : local._teams_requester_cors_default_origins
+  )
+
   # Full python version is used for checking the python version before deployment in check_python_version.tf
   full_python_version = "3.13.0"
   # Python version is used for building the docker image in slack_handler_lambda.tf/perm_revoker_lambda.tf/layers.tf

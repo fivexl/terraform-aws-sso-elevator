@@ -46,10 +46,18 @@ module "access_revoker" {
   environment_variables = {
     LOG_LEVEL = var.log_level
 
+    CHAT_PLATFORM = var.chat_platform
+
     SLACK_SIGNING_SECRET = var.slack_signing_secret
     SLACK_BOT_TOKEN      = var.slack_bot_token
     SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = var.schedule_group_name
+
+    TEAMS_MICROSOFT_APP_ID         = var.teams_microsoft_app_id
+    TEAMS_MICROSOFT_APP_PASSWORD   = var.teams_microsoft_app_password
+    TEAMS_AZURE_TENANT_ID          = var.teams_azure_tenant_id
+    TEAMS_APPROVAL_CONVERSATION_ID = var.teams_approval_conversation_id
+
+    SCHEDULE_GROUP_NAME = var.schedule_group_name
 
     SSO_INSTANCE_ARN            = local.sso_instance_arn
     POWERTOOLS_LOGGER_LOG_EVENT = true
