@@ -43,6 +43,12 @@ variable "tags" {
   default     = {}
 }
 
+variable "elevator_requests_table_name" {
+  description = "DynamoDB table name for access-request state. If empty, a unique name is generated (sso-elevator-requests-<suffix>)."
+  type        = string
+  default     = ""
+}
+
 variable "aws_sns_topic_subscription_email" {
   description = "value for the email address to subscribe to the SNS topic"
   type        = string

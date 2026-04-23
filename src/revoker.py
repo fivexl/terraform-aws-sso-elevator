@@ -13,10 +13,12 @@ from slack_sdk.web.slack_response import SlackResponse
 import config
 import entities
 import organizations
+import request_store
 import s3
 import schedule
 import slack_helpers
 import sso
+from entities.elevator_request import ElevatorRequestStatus
 from events import (
     ApproverNotificationEvent,
     CheckOnInconsistency,
@@ -558,6 +560,8 @@ def handle_discard_buttons_event(
                 text=text,
             )
             logger.info("Buttons were removed", extra={"event": event})
+            if event.elevator_request_id:
+                request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
             return
 
     logger.info("Buttons were not found", extra={"event": event})
@@ -592,7 +596,11 @@ def handle_approvers_renotification_event(
             logger.debug("Slack response:", extra={"slack_response": slack_response})
 
             schedule.schedule_approver_notification_event(
-                schedule_client=scheduler_client, channel_id=event.channel_id, message_ts=message["ts"], time_to_wait=time_to_wait
+                schedule_client=scheduler_client,
+                channel_id=event.channel_id,
+                message_ts=message["ts"],
+                time_to_wait=time_to_wait,
+                elevator_request_id=event.elevator_request_id,
             )
             return
 

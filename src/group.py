@@ -1,3 +1,4 @@
+import uuid
 from datetime import timedelta
 
 import boto3
@@ -12,9 +13,11 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
+import request_store
 import schedule
 import slack_helpers
 import sso
+from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from errors import handle_errors
 
 logger = config.get_logger(service="main")
@@ -29,7 +32,7 @@ identity_store_id = sso_instance.identity_store_id
 
 
 @handle_errors
-def handle_request_for_group_access_submittion(
+def handle_request_for_group_access_submittion(  # noqa: PLR0915
     body: dict,
     ack: Ack,  # noqa: ARG001
     client: WebClient,
@@ -48,6 +51,19 @@ def handle_request_for_group_access_submittion(
         group_id=request.group_id,
     )
 
+    elevator_id = str(uuid.uuid4())
+    request_store.put_access_request(
+        ElevatorRequestRecord(
+            elevator_request_id=elevator_id,
+            kind=ElevatorRequestKind.group,
+            status=ElevatorRequestStatus.awaiting_approval,
+            requester_slack_id=request.requester_slack_id,
+            reason=request.reason,
+            permission_duration_seconds=int(request.permission_duration.total_seconds()),
+            group_id=request.group_id,
+        )
+    )
+
     show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
         blocks=slack_helpers.build_approval_request_message_blocks(
@@ -60,10 +76,13 @@ def handle_request_for_group_access_submittion(
             permission_duration=request.permission_duration,
             show_buttons=show_buttons,
             color_coding_emoji=cfg.waiting_result_emoji,
+            elevator_request_id=elevator_id,
         ),
         channel=cfg.slack_channel_id,
         text=f"Request for access to {group.name} group from {requester.real_name}",
     )
+    if slack_response.get("ts") is not None:
+        request_store.update_slack_presentation(elevator_id, cfg.slack_channel_id, str(slack_response["ts"]))
 
     if show_buttons:
         ts = slack_response["ts"]
@@ -72,6 +91,7 @@ def handle_request_for_group_access_submittion(
                 schedule_client=schedule_client,  # type: ignore # noqa: PGH003
                 time_stamp=ts,
                 channel_id=cfg.slack_channel_id,
+                elevator_request_id=elevator_id,
             )
             schedule.schedule_approver_notification_event(
                 schedule_client=schedule_client,  # type: ignore # noqa: PGH003
@@ -80,6 +100,7 @@ def handle_request_for_group_access_submittion(
                 time_to_wait=timedelta(
                     minutes=cfg.approver_renotification_initial_wait_time,
                 ),
+                elevator_request_id=elevator_id,
             )
 
     match decision.reason:
@@ -138,7 +159,10 @@ def handle_request_for_group_access_submittion(
         reason=request.reason,
         decision=decision,
         identity_store_id=identity_store_id,
+        elevator_request_id=elevator_id,
     )
+    if decision.grant and elevator_id:
+        request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
 
     if decision.grant:
         client.chat_postMessage(
@@ -153,9 +177,6 @@ def handle_request_for_group_access_submittion(
             )
 
 
-cache_for_dublicate_requests = {}
-
-
 @handle_errors
 def handle_group_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # type: ignore # noqa: PGH003 ARG001
     logger.info("Handling button click")
@@ -165,17 +186,17 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
-    if (
-        cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
-        and cache_for_dublicate_requests["group_id"] == payload.request.group_id
+    if not request_store.try_begin_in_flight_approval(
+        requester_slack_id=payload.request.requester_slack_id,
+        account_id=None,
+        permission_set_name=None,
+        group_id=payload.request.group_id,
     ):
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> request is already in progress, please wait for the result.",
             thread_ts=payload.thread_ts,
         )
-    cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
-    cache_for_dublicate_requests["group_id"] = payload.request.group_id
 
     if payload.action == entities.ApproverAction.Discard:
         blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
@@ -194,8 +215,15 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             blocks=blocks,
             text=text,
         )
+        if payload.elevator_request_id:
+            request_store.update_request_status(payload.elevator_request_id, ElevatorRequestStatus.discarded)
 
-        cache_for_dublicate_requests.clear()
+        request_store.end_in_flight_approval(
+            requester_slack_id=payload.request.requester_slack_id,
+            account_id=None,
+            permission_set_name=None,
+            group_id=payload.request.group_id,
+        )
         if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
             logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
             client.chat_postMessage(channel=requester.id, text=dm_text)
@@ -216,7 +244,12 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
     if not decision.permit:
-        cache_for_dublicate_requests.clear()
+        request_store.end_in_flight_approval(
+            requester_slack_id=payload.request.requester_slack_id,
+            account_id=None,
+            permission_set_name=None,
+            group_id=payload.request.group_id,
+        )
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> you can not approve this request",
@@ -247,8 +280,16 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         requester=requester,
         reason=payload.request.reason,
         identity_store_id=identity_store_id,
+        elevator_request_id=payload.elevator_request_id,
     )
-    cache_for_dublicate_requests.clear()
+    if payload.elevator_request_id:
+        request_store.update_request_status(payload.elevator_request_id, ElevatorRequestStatus.completed)
+    request_store.end_in_flight_approval(
+        requester_slack_id=payload.request.requester_slack_id,
+        account_id=None,
+        permission_set_name=None,
+        group_id=payload.request.group_id,
+    )
     if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
         logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
         client.chat_postMessage(channel=requester.id, text=dm_text)

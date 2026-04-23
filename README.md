@@ -734,6 +734,7 @@ settings:
 | [aws_cloudwatch_event_target.attribute_sync_schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_cloudwatch_event_target.check_inconsistency](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_cloudwatch_event_target.sso_elevator_scheduled_revocation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
+| [aws_dynamodb_table.elevator_requests](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table) | resource |
 | [aws_iam_role.eventbridge_role](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy.eventbridge_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_lambda_permission.eventbridge](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
@@ -779,6 +780,7 @@ settings:
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
 | <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.2.0"` | no |
+| <a name="input_elevator_requests_table_name"></a> [elevator\_requests\_table\_name](#input\_elevator\_requests\_table\_name) | DynamoDB table name for access-request state. If empty, a unique name is generated (sso-elevator-requests-<suffix>). | `string` | `""` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |
 | <a name="input_event_brige_check_on_inconsistency_rule_name"></a> [event\_brige\_check\_on\_inconsistency\_rule\_name](#input\_event\_brige\_check\_on\_inconsistency\_rule\_name) | DEPRECATED: Use event\_bridge\_check\_on\_inconsistency\_rule\_name instead. This variable contains a typo and will be removed in a future version. | `string` | `"sso-elevator-check-on-inconsistency"` | no |
@@ -825,6 +827,7 @@ settings:
 | <a name="output_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#output\_attribute\_syncer\_lambda\_name) | The name of the attribute syncer Lambda function. |
 | <a name="output_config_s3_bucket_arn"></a> [config\_s3\_bucket\_arn](#output\_config\_s3\_bucket\_arn) | The ARN of the S3 bucket for storing configuration and cache data. |
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
+| <a name="output_elevator_requests_table_name"></a> [elevator\_requests\_table\_name](#output\_elevator\_requests\_table\_name) | DynamoDB table name holding access request state and ephemeral UI keys. |
 | <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |

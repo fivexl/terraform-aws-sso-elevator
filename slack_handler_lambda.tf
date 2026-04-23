@@ -70,6 +70,7 @@ module "access_requester_slack_handler" {
     CONFIG_BUCKET_NAME                          = local.config_bucket_name
     CONFIG_S3_KEY                               = "config/approval-config.json"
     CACHE_ENABLED                               = var.cache_enabled
+    ELEVATOR_REQUESTS_TABLE_NAME                = aws_dynamodb_table.elevator_requests.name
   }
 
   allowed_triggers = var.create_api_gateway ? {
@@ -235,6 +236,17 @@ data "aws_iam_policy_document" "slack_handler" {
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
+  }
+  statement {
+    sid    = "ElevatorRequestsDynamoDB"
+    effect = "Allow"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+    ]
+    resources = [aws_dynamodb_table.elevator_requests.arn]
   }
 }
 

@@ -53,6 +53,7 @@ class DiscardButtonsEvent(BaseModel):
     schedule_name: str
     time_stamp: str
     channel_id: str
+    elevator_request_id: str | None = None
 
 
 class CheckOnInconsistency(BaseModel):
@@ -69,6 +70,7 @@ class ApproverNotificationEvent(BaseModel):
     time_stamp: str
     channel_id: str
     time_to_wait_in_seconds: float
+    elevator_request_id: str | None = None
 
 
 Event = RootModel[

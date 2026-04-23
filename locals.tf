@@ -71,6 +71,8 @@ locals {
       try(tolist(stmt.Resource), [stmt.Resource])
     )
   ]))
+
+  elevator_requests_ddb_table_name = var.elevator_requests_table_name != "" ? var.elevator_requests_table_name : "sso-elevator-requests-${random_string.random.result}"
 }
 
 resource "random_string" "random" {

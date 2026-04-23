@@ -23,6 +23,11 @@ output "config_s3_bucket_arn" {
   value       = module.config_bucket.s3_bucket_arn
 }
 
+output "elevator_requests_table_name" {
+  description = "DynamoDB table name holding access request state and ephemeral UI keys."
+  value       = aws_dynamodb_table.elevator_requests.name
+}
+
 
 # Attribute Syncer Outputs
 output "attribute_syncer_lambda_arn" {

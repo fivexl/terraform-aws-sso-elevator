@@ -29,6 +29,7 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "secondary_fallback_email_domains": json.dumps(["domen.com"]),
         "permission_duration_list_override": json.dumps(["00:25", "01:00"]),
         "config_bucket_name": "test-config-bucket",
+        "ELEVATOR_REQUESTS_TABLE_NAME": "memory",
         "cache_enabled": "true",
         "statements": json.dumps(
             [

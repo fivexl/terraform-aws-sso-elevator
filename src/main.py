@@ -1,3 +1,4 @@
+import uuid
 from datetime import timedelta
 from typing import Callable
 
@@ -12,9 +13,11 @@ import config
 import entities
 import group
 import organizations
+import request_store
 import schedule
 import slack_helpers
 import sso
+from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from errors import SSOUserNotFound, handle_errors
 
 logger = config.get_logger(service="main")
@@ -37,21 +40,6 @@ app = App(
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
-
-
-user_view_map = {}
-# To update the view, it is necessary to know the view_id. It is returned when the view is opened.
-# But shortcut 'request_for_access' handled by two functions. The first one opens the view and the second one updates it.
-# So we need to store the view_id somewhere. We use user_id + callback_id as the key since:
-# - It's available in both handler functions
-# - It persists across Lambda invocations within the same container
-# - It's unique per user per request type
-# - A user can only have one active modal of each type at a time
-#
-# NOTE: This in-memory map still has limitations in AWS Lambda:
-# - Lambda containers can be recycled between invocations, causing the map to be empty
-# - For production use with high traffic, consider using DynamoDB or ElastiCache
-# - Current implementation gracefully handles missing view_id by opening a new view
 
 
 def build_initial_form_handler(
@@ -100,11 +88,13 @@ def build_initial_form_handler(
         callback_id = view_class.CALLBACK_ID
 
         response = client.views_open(trigger_id=trigger_id, view=view_class.build())
-
-        # Store view_id using user_id + callback_id as key for persistence across Lambda invocations
-        view_key = f"{user_id}:{callback_id}"
-        user_view_map[view_key] = response.data["view"]["id"]  # type: ignore # noqa: PGH003
-        logger.debug(f"Stored view_id for key: {view_key}")
+        if user_id:
+            request_store.put_view_id(
+                str(user_id),
+                callback_id,
+                str(response.data["view"]["id"]),  # type: ignore # noqa: PGH003
+            )
+        logger.debug("Stored view_id in request store for modal update")
 
         return response
 
@@ -119,12 +109,11 @@ def load_select_options_for_group_access_request(client: WebClient, body: dict) 
 
     user_id = body.get("user", {}).get("id")
     callback_id = slack_helpers.RequestForGroupAccessView.CALLBACK_ID
-    view_key = f"{user_id}:{callback_id}"
 
-    view_id = user_view_map.get(view_key)
+    view_id = request_store.get_view_id(str(user_id), callback_id) if user_id else None
     if not view_id:
         logger.warning(
-            f"View ID not found for key: {view_key}. "
+            f"View ID not found for user {user_id} callback {callback_id}. "
             "This happens when Lambda container is recycled between shortcut invocations. "
             "Opening a new view as fallback."
         )
@@ -133,7 +122,6 @@ def load_select_options_for_group_access_request(client: WebClient, body: dict) 
         view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
         return client.views_open(trigger_id=trigger_id, view=view)
 
-    logger.debug(f"Updating view with view_id from key: {view_key}")
     view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
     return client.views_update(view_id=view_id, view=view)
 
@@ -147,12 +135,11 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
 
     user_id = body.get("user", {}).get("id")
     callback_id = slack_helpers.RequestForAccessView.CALLBACK_ID
-    view_key = f"{user_id}:{callback_id}"
 
-    view_id = user_view_map.get(view_key)
+    view_id = request_store.get_view_id(str(user_id), callback_id) if user_id else None
     if not view_id:
         logger.warning(
-            f"View ID not found for key: {view_key}. "
+            f"View ID not found for user {user_id} callback {callback_id}. "
             "This happens when Lambda container is recycled between shortcut invocations. "
             "Opening a new view as fallback."
         )
@@ -163,7 +150,6 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
         )
         return client.views_open(trigger_id=trigger_id, view=view)
 
-    logger.debug(f"Updating view with view_id from key: {view_key}")
     view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
     return client.views_update(view_id=view_id, view=view)
 
@@ -177,8 +163,6 @@ app.shortcut("request_for_group_membership")(
     build_initial_form_handler(view_class=slack_helpers.RequestForGroupAccessView),  # type: ignore # noqa: PGH003
     load_select_options_for_group_access_request,
 )
-
-cache_for_dublicate_requests = {}
 
 
 @handle_errors
@@ -206,19 +190,17 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
-    if (
-        cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
-        and cache_for_dublicate_requests.get("account_id") == payload.request.account_id
-        and cache_for_dublicate_requests.get("permission_set_name") == payload.request.permission_set_name
+    if not request_store.try_begin_in_flight_approval(
+        requester_slack_id=payload.request.requester_slack_id,
+        account_id=payload.request.account_id,
+        permission_set_name=payload.request.permission_set_name,
+        group_id=None,
     ):
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> request is already in progress, please wait for the result.",
             thread_ts=payload.thread_ts,
         )
-    cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
-    cache_for_dublicate_requests["account_id"] = payload.request.account_id
-    cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
 
     if payload.action == entities.ApproverAction.Discard:
         blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
@@ -237,8 +219,15 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             blocks=blocks,
             text=text,
         )
+        if payload.elevator_request_id:
+            request_store.update_request_status(payload.elevator_request_id, ElevatorRequestStatus.discarded)
 
-        cache_for_dublicate_requests.clear()
+        request_store.end_in_flight_approval(
+            requester_slack_id=payload.request.requester_slack_id,
+            account_id=payload.request.account_id,
+            permission_set_name=payload.request.permission_set_name,
+            group_id=None,
+        )
         if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
             logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
             client.chat_postMessage(channel=requester.id, text=dm_text)
@@ -259,7 +248,12 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
     if not decision.permit:
-        cache_for_dublicate_requests.clear()
+        request_store.end_in_flight_approval(
+            requester_slack_id=payload.request.requester_slack_id,
+            account_id=payload.request.account_id,
+            permission_set_name=payload.request.permission_set_name,
+            group_id=None,
+        )
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> you can not approve this request",
@@ -291,8 +285,16 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         approver=approver,
         requester=requester,
         reason=payload.request.reason,
+        elevator_request_id=payload.elevator_request_id,
     )
-    cache_for_dublicate_requests.clear()
+    if payload.elevator_request_id:
+        request_store.update_request_status(payload.elevator_request_id, ElevatorRequestStatus.completed)
+    request_store.end_in_flight_approval(
+        requester_slack_id=payload.request.requester_slack_id,
+        account_id=payload.request.account_id,
+        permission_set_name=payload.request.permission_set_name,
+        group_id=None,
+    )
     if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
         logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
         client.chat_postMessage(channel=requester.id, text=dm_text)
@@ -339,6 +341,20 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
 
     account = organizations.describe_account(org_client, request.account_id)
 
+    elevator_id = str(uuid.uuid4())
+    request_store.put_access_request(
+        ElevatorRequestRecord(
+            elevator_request_id=elevator_id,
+            kind=ElevatorRequestKind.account,
+            status=ElevatorRequestStatus.awaiting_approval,
+            requester_slack_id=request.requester_slack_id,
+            reason=request.reason,
+            permission_duration_seconds=int(request.permission_duration.total_seconds()),
+            account_id=request.account_id,
+            permission_set_name=request.permission_set_name,
+        )
+    )
+
     show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
         blocks=slack_helpers.build_approval_request_message_blocks(
@@ -352,10 +368,13 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
             permission_duration=request.permission_duration,
             show_buttons=show_buttons,
             color_coding_emoji=cfg.waiting_result_emoji,
+            elevator_request_id=elevator_id,
         ),
         channel=cfg.slack_channel_id,
         text=f"Request for access to {account.name} account from {requester.real_name}",
     )
+    if slack_response.get("ts") is not None:
+        request_store.update_slack_presentation(elevator_id, cfg.slack_channel_id, str(slack_response["ts"]))
 
     if show_buttons:
         ts = slack_response["ts"]
@@ -364,6 +383,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
                 schedule_client=schedule_client,
                 time_stamp=ts,
                 channel_id=cfg.slack_channel_id,
+                elevator_request_id=elevator_id,
             )
             schedule.schedule_approver_notification_event(
                 schedule_client=schedule_client,
@@ -372,6 +392,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
                 time_to_wait=timedelta(
                     minutes=cfg.approver_renotification_initial_wait_time,
                 ),
+                elevator_request_id=elevator_id,
             )
 
     match decision.reason:
@@ -450,7 +471,10 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         approver=requester,
         requester=requester,
         reason=request.reason,
+        elevator_request_id=elevator_id,
     )
+    if decision.grant and elevator_id:
+        request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
 
     if decision.grant:
         client.chat_postMessage(

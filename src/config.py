@@ -149,6 +149,9 @@ class Config(BaseSettings):
     config_s3_key: str = ""
     cache_enabled: bool = True
 
+    #: DynamoDB table for request state. Use `memory` for unit tests (in-process store).
+    elevator_requests_table_name: str = "memory"
+
     good_result_emoji: str = ":large_green_circle:"
 
     waiting_result_emoji: str = ":large_yellow_circle:"

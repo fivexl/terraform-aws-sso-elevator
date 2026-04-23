@@ -71,6 +71,7 @@ module "access_revoker" {
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
     SECONDARY_FALLBACK_EMAIL_DOMAINS           = jsonencode(var.secondary_fallback_email_domains)
     SEND_DM_IF_USER_NOT_IN_CHANNEL             = var.send_dm_if_user_not_in_channel
+    ELEVATOR_REQUESTS_TABLE_NAME               = aws_dynamodb_table.elevator_requests.name
   }
 
   allowed_triggers = {
@@ -182,6 +183,17 @@ data "aws_iam_policy_document" "revoker" {
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
+  }
+  statement {
+    sid    = "ElevatorRequestsDynamoDB"
+    effect = "Allow"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+    ]
+    resources = [aws_dynamodb_table.elevator_requests.arn]
   }
 
 }
