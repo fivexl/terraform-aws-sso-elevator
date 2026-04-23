@@ -356,7 +356,7 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
     org_client: OrganizationsClient,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
     identitystore_client: IdentityStoreClient,
 ) -> SlackResponse | None:
     logger.info("Handling scheduled account assignment deletion", extra={"revoke_event": revoke_event})
@@ -392,15 +392,30 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
 
     if cfg.post_update_to_slack:
         account = organizations.describe_account(org_client, user_account_assignment.account_id)
-        slack_notify_user_on_revoke(
-            cfg=cfg,
-            account_assignment=user_account_assignment,
-            permission_set=permission_set,
-            account=account,
-            sso_client=sso_client,
-            identitystore_client=identitystore_client,
-            slack_client=slack_client,
-        )
+        if cfg.chat_platform == "teams":
+            import asyncio
+
+            assert isinstance(slack_client, TeamsNotifier)
+            text = f"Revoked role {permission_set.name} for user {revoke_event.requester.real_name} in account {account.name}"
+
+            async def _send_teams_revoke_notification() -> None:
+                try:
+                    await slack_client.send_message(text)
+                except Exception as e:
+                    logger.exception(f"Failed to send Teams revocation notification: {e}")
+
+            asyncio.run(_send_teams_revoke_notification())
+        else:
+            assert isinstance(slack_client, slack_sdk.WebClient)
+            slack_notify_user_on_revoke(
+                cfg=cfg,
+                account_assignment=user_account_assignment,
+                permission_set=permission_set,
+                account=account,
+                sso_client=sso_client,
+                identitystore_client=identitystore_client,
+                slack_client=slack_client,
+            )
 
 
 def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
@@ -408,7 +423,7 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     sso_client: SSOAdminClient,
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
     identitystore_client: IdentityStoreClient,
 ) -> SlackResponse | None:
     logger.info("Handling scheduled group access revokation", extra={"revoke_event": group_revoke_event})
@@ -431,13 +446,28 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
     if cfg.post_update_to_slack:
-        slack_notify_user_on_group_access_revoke(
-            cfg=cfg,
-            group_assignment=group_assignment,
-            sso_client=sso_client,
-            identitystore_client=identitystore_client,
-            slack_client=slack_client,
-        )
+        if cfg.chat_platform == "teams":
+            import asyncio
+
+            assert isinstance(slack_client, TeamsNotifier)
+            text = f"User {group_revoke_event.requester.real_name} has been removed from the group {group_assignment.group_name}."
+
+            async def _send_teams_group_revoke_notification() -> None:
+                try:
+                    await slack_client.send_message(text)
+                except Exception as e:
+                    logger.exception(f"Failed to send Teams group revocation notification: {e}")
+
+            asyncio.run(_send_teams_group_revoke_notification())
+        else:
+            assert isinstance(slack_client, slack_sdk.WebClient)
+            slack_notify_user_on_group_access_revoke(
+                cfg=cfg,
+                group_assignment=group_assignment,
+                sso_client=sso_client,
+                identitystore_client=identitystore_client,
+                slack_client=slack_client,
+            )
 
 
 def handle_check_on_inconsistency(  # noqa: PLR0913
