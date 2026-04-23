@@ -39,21 +39,21 @@
 - [x] 7. Extend `src/config.py` — Teams platform validation
   - [x] 7.1 Add `model_validator(mode="after")` named `validate_platform_config` that raises `ValueError` listing missing fields when `chat_platform == "teams"` and any of `teams_microsoft_app_id`, `teams_microsoft_app_password`, `teams_azure_tenant_id`, `teams_approval_conversation_id` are empty
 
-- [-] 8. Add `TeamsNotifier` class to `src/revoker.py`
-  - [ ] 8.1 Implement `TeamsNotifier.__init__(self, cfg)` storing app credentials
-  - [ ] 8.2 Implement `async TeamsNotifier.send_message(text, card=None) -> str` — posts to approval channel, returns activity_id
-  - [ ] 8.3 Implement `async TeamsNotifier.update_message(activity_id, card) -> None` — updates existing card by activity_id
-  - [ ] 8.4 Implement `async TeamsNotifier.send_thread_reply(parent_activity_id, text) -> None`
-  - [ ] 8.5 Implement `async TeamsNotifier.send_proactive_dm(conversation_reference, text) -> None`
-  - [ ] 8.6 Add `get_notifier(cfg) -> slack_sdk.WebClient | TeamsNotifier` factory function
+- [x] 8. Add `TeamsNotifier` class to `src/revoker.py`
+  - [x] 8.1 Implement `TeamsNotifier.__init__(self, cfg)` storing app credentials
+  - [x] 8.2 Implement `async TeamsNotifier.send_message(text, card=None) -> str` — posts to approval channel, returns activity_id
+  - [x] 8.3 Implement `async TeamsNotifier.update_message(activity_id, card) -> None` — updates existing card by activity_id
+  - [x] 8.4 Implement `async TeamsNotifier.send_thread_reply(parent_activity_id, text) -> None`
+  - [x] 8.5 Implement `async TeamsNotifier.send_proactive_dm(conversation_reference, text) -> None`
+  - [x] 8.6 Add `get_notifier(cfg) -> slack_sdk.WebClient | TeamsNotifier` factory function
 
-- [~] 9. Update `src/revoker.py` — platform-aware event handling
-  - [ ] 9.1 Replace the module-level `slack_client = slack_sdk.WebClient(...)` with a call to `get_notifier(cfg)` so the revoker uses Teams when `chat_platform == "teams"`
-  - [ ] 9.2 Update `handle_discard_buttons_event` to branch on `cfg.chat_platform`: for Teams, call `TeamsNotifier.update_message` using `event.teams_conversation_id` / `event.teams_activity_id`; for Slack, keep existing logic
-  - [ ] 9.3 Update `handle_approvers_renotification_event` to branch on `cfg.chat_platform`: for Teams, call `TeamsNotifier.send_thread_reply`; for Slack, keep existing logic
-  - [ ] 9.4 Update `handle_scheduled_account_assignment_deletion` and `handle_scheduled_group_assignment_deletion` to use `TeamsNotifier` notification methods when `chat_platform == "teams"`
+- [x] 9. Update `src/revoker.py` — platform-aware event handling
+  - [x] 9.1 Replace the module-level `slack_client = slack_sdk.WebClient(...)` with a call to `get_notifier(cfg)` so the revoker uses Teams when `chat_platform == "teams"`
+  - [x] 9.2 Update `handle_discard_buttons_event` to branch on `cfg.chat_platform`: for Teams, call `TeamsNotifier.update_message` using `event.teams_conversation_id` / `event.teams_activity_id`; for Slack, keep existing logic
+  - [x] 9.3 Update `handle_approvers_renotification_event` to branch on `cfg.chat_platform`: for Teams, call `TeamsNotifier.send_thread_reply`; for Slack, keep existing logic
+  - [x] 9.4 Update `handle_scheduled_account_assignment_deletion` and `handle_scheduled_group_assignment_deletion` to use `TeamsNotifier` notification methods when `chat_platform == "teams"`
 
-- [~] 10. Add Teams bot and handler to `src/main.py`
+- [-] 10. Add Teams bot and handler to `src/main.py`
   - [ ] 10.1 Add `SSOElevatorBot(ActivityHandler)` class with `on_message_activity` routing `/request-access` and `/request-group` commands
   - [ ] 10.2 Add `on_invoke_activity` dispatching `task/fetch`, `task/submit`, and `adaptiveCard/action` invoke types
   - [ ] 10.3 Implement `_handle_task_fetch` — returns `TaskModuleResponse` with account or group access form card

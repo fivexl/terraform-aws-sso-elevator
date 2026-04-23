@@ -1,3 +1,5 @@
+import asyncio
+import json
 import uuid
 from datetime import timedelta
 from typing import Callable
@@ -17,6 +19,8 @@ import request_store
 import schedule
 import slack_helpers
 import sso
+import teams_cards
+import teams_users
 from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from errors import SSOUserNotFound, handle_errors
 
@@ -37,7 +41,586 @@ app = App(
 )
 
 
+class SSOElevatorBot:
+    """Teams bot that handles access request commands and card interactions."""
+
+    async def on_message_activity(self, turn_context) -> None:  # noqa: ANN001
+        """Handle /request-access and /request-group commands."""
+        from botbuilder.schema import Activity  # type: ignore[import]
+
+        text = (turn_context.activity.text or "").strip()
+
+        if "/request-access" in text:
+            if not cfg.statements:
+                await turn_context.send_activity(
+                    Activity(type="message", text="Statements are not configured, please check the configuration.")
+                )
+                return
+            await self._open_task_module(turn_context, "account")
+
+        elif "/request-group" in text:
+            if not cfg.group_statements:
+                await turn_context.send_activity(
+                    Activity(type="message", text="Group statements are not configured, please check the configuration.")
+                )
+                return
+            await self._open_task_module(turn_context, "group")
+
+    async def _open_task_module(self, turn_context, kind: str) -> None:  # noqa: ANN001
+        """Check SSO user exists then return a task module response."""
+        from botbuilder.schema import Activity  # type: ignore[import]
+
+        try:
+            user = await teams_users.get_user_from_activity(turn_context)
+            sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+            sso.get_user_principal_id_by_email(
+                identity_store_client=identity_store_client,
+                identity_store_id=sso_instance.identity_store_id,
+                email=user.email,
+                cfg=cfg,
+            )
+        except SSOUserNotFound:
+            from_prop = turn_context.activity.from_property
+            mention_text = f"<at>{from_prop.name}</at>"
+            await turn_context.send_activity(
+                Activity(
+                    type="message",
+                    text=f"{mention_text} Your request failed because SSO Elevator could not find your user in AWS SSO.",
+                )
+            )
+            return
+        except Exception as e:
+            logger.exception(f"Error checking SSO user in on_message_activity: {e}")
+            await turn_context.send_activity(Activity(type="message", text="An unexpected error occurred. Check the logs for details."))
+            return
+
+        # Store the kind in the activity value so task/fetch knows what to show
+        # We respond with a task module invoke response
+        from botbuilder.schema import InvokeResponse  # type: ignore[import]
+
+        task_module_response = {
+            "task": {
+                "type": "continue",
+                "value": {
+                    "title": "Request AWS Account Access" if kind == "account" else "Request AWS Group Access",
+                    "height": "large",
+                    "width": "medium",
+                    "card": {
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": await self._build_form_card(kind),
+                    },
+                    "completionBotId": cfg.teams_microsoft_app_id,
+                    "fallbackUrl": "",
+                },
+            }
+        }
+        await turn_context.send_activity(
+            Activity(
+                type="invokeResponse",
+                value=InvokeResponse(status=200, body=task_module_response),
+            )
+        )
+
+    async def on_invoke_activity(self, turn_context) -> None:  # noqa: ANN001
+        """Handle task/fetch, task/submit, and adaptiveCard/action invokes."""
+        from botbuilder.schema import Activity, InvokeResponse  # type: ignore[import]
+
+        name = turn_context.activity.name
+
+        try:
+            if name == "task/fetch":
+                result = await self._handle_task_fetch(turn_context)
+                await turn_context.send_activity(Activity(type="invokeResponse", value=InvokeResponse(status=200, body=result)))
+            elif name == "task/submit":
+                result = await self._handle_task_submit(turn_context)
+                await turn_context.send_activity(Activity(type="invokeResponse", value=InvokeResponse(status=200, body=result)))
+            elif name == "adaptiveCard/action":
+                await self._handle_card_action(turn_context)
+                await turn_context.send_activity(Activity(type="invokeResponse", value=InvokeResponse(status=200, body={})))
+            else:
+                await turn_context.send_activity(Activity(type="invokeResponse", value=InvokeResponse(status=501, body={})))
+        except Exception as e:
+            logger.exception(f"Error in on_invoke_activity (name={name}): {e}")
+            await turn_context.send_activity(Activity(type="invokeResponse", value=InvokeResponse(status=500, body={})))
+
+    async def _build_form_card(self, kind: str) -> dict:
+        """Build the account or group access form card."""
+        duration_options = (
+            [str(timedelta(hours=h)) for h in range(1, cfg.max_permissions_duration_time + 1)]
+            if not cfg.permission_duration_list_override
+            else cfg.permission_duration_list_override
+        )
+
+        if kind == "account":
+            accounts = organizations.get_accounts_from_config_with_cache(org_client=org_client, s3_client=s3_client, cfg=cfg)
+            permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
+            return teams_cards.build_account_access_form(accounts, permission_sets, duration_options)
+        else:
+            sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+            groups = sso.get_groups_from_config(sso_instance.identity_store_id, identity_store_client, cfg)
+            return teams_cards.build_group_access_form(groups, duration_options)
+
+    async def _handle_task_fetch(self, turn_context) -> dict:  # noqa: ANN001
+        """Return TaskModuleResponse with account or group access form card."""
+        value = turn_context.activity.value or {}
+        kind = value.get("kind", "account")
+        card = await self._build_form_card(kind)
+        return {
+            "task": {
+                "type": "continue",
+                "value": {
+                    "title": "Request AWS Account Access" if kind == "account" else "Request AWS Group Access",
+                    "height": "large",
+                    "width": "medium",
+                    "card": {
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": card,
+                    },
+                },
+            }
+        }
+
+    async def _handle_task_submit(self, turn_context) -> dict:  # noqa: ANN001, PLR0912, PLR0915
+        """Parse form data, make access decision, store request, post approval card."""
+
+        value = turn_context.activity.value or {}
+        data = value.get("data", value)
+
+        try:
+            user = await teams_users.get_user_from_activity(turn_context)
+        except Exception as e:
+            logger.exception(f"Failed to get user in _handle_task_submit: {e}")
+            return {"task": {"type": "message", "value": "Failed to identify user. Please try again."}}
+
+        # Determine kind from submitted data
+        is_group = "group_id" in data
+        kind = "group" if is_group else "account"
+
+        # Parse duration
+        _DURATION_PARTS = 3  # noqa: N806
+        duration_str = data.get("duration", "1:00:00")
+        try:
+            parts = duration_str.split(":")
+            if len(parts) == _DURATION_PARTS:
+                permission_duration = timedelta(hours=int(parts[0]), minutes=int(parts[1]), seconds=int(parts[2]))
+            else:
+                permission_duration = timedelta(hours=1)
+        except Exception:
+            permission_duration = timedelta(hours=1)
+
+        reason = data.get("reason", "")
+        elevator_id = str(uuid.uuid4())
+        slack_user = user.to_slack_user()
+
+        if kind == "account":
+            account_id = data.get("account_id", "")
+            permission_set_name = data.get("permission_set", "")
+
+            decision = access_control.make_decision_on_access_request(
+                cfg.statements,
+                requester_email=user.email,
+                account_id=account_id,
+                permission_set_name=permission_set_name,
+            )
+
+            request_store.put_access_request(
+                ElevatorRequestRecord(
+                    elevator_request_id=elevator_id,
+                    kind=ElevatorRequestKind.account,
+                    status=ElevatorRequestStatus.awaiting_approval,
+                    requester_slack_id=user.id,
+                    reason=reason,
+                    permission_duration_seconds=int(permission_duration.total_seconds()),
+                    account_id=account_id,
+                    permission_set_name=permission_set_name,
+                )
+            )
+
+            try:
+                account = organizations.describe_account(org_client, account_id)
+            except Exception:
+                account = entities.aws.Account(id=account_id, name=account_id)
+
+            show_buttons = bool(decision.approvers)
+            color_style = teams_cards.get_color_style(cfg.waiting_result_emoji)
+            request_data = {
+                "account_id": account_id,
+                "permission_set": permission_set_name,
+                "duration": duration_str,
+                "reason": reason,
+                "requester_id": user.id,
+            }
+            card = teams_cards.build_approval_card(
+                requester_name=user.display_name,
+                account=account,
+                group=None,
+                role_name=permission_set_name,
+                reason=reason,
+                permission_duration=duration_str,
+                show_buttons=show_buttons,
+                color_style=color_style,
+                request_data=request_data,
+                elevator_request_id=elevator_id,
+            )
+        else:
+            group_id = data.get("group_id", "")
+
+            decision = access_control.make_decision_on_access_request(
+                cfg.group_statements,
+                requester_email=user.email,
+                group_id=group_id,
+            )
+
+            request_store.put_access_request(
+                ElevatorRequestRecord(
+                    elevator_request_id=elevator_id,
+                    kind=ElevatorRequestKind.group,
+                    status=ElevatorRequestStatus.awaiting_approval,
+                    requester_slack_id=user.id,
+                    reason=reason,
+                    permission_duration_seconds=int(permission_duration.total_seconds()),
+                    group_id=group_id,
+                )
+            )
+
+            try:
+                sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+                sso_group = sso.describe_group(sso_instance.identity_store_id, group_id, identity_store_client)
+            except Exception:
+                sso_group = entities.aws.SSOGroup(id=group_id, identity_store_id="", name=group_id)
+
+            show_buttons = bool(decision.approvers)
+            color_style = teams_cards.get_color_style(cfg.waiting_result_emoji)
+            request_data = {
+                "group_id": group_id,
+                "duration": duration_str,
+                "reason": reason,
+                "requester_id": user.id,
+            }
+            card = teams_cards.build_approval_card(
+                requester_name=user.display_name,
+                account=None,
+                group=sso_group,
+                role_name=None,
+                reason=reason,
+                permission_duration=duration_str,
+                show_buttons=show_buttons,
+                color_style=color_style,
+                request_data=request_data,
+                elevator_request_id=elevator_id,
+            )
+
+        # Post approval card to channel
+        try:
+            from revoker import TeamsNotifier  # type: ignore[import]
+
+            notifier = TeamsNotifier(cfg)
+            activity_id = await notifier.send_message(text="New access request", card=card)
+            if activity_id:
+                request_store.update_teams_presentation(elevator_id, cfg.teams_approval_conversation_id, activity_id)
+
+            if show_buttons:
+                schedule.schedule_discard_buttons_event(
+                    schedule_client=schedule_client,
+                    time_stamp="",
+                    channel_id="",
+                    elevator_request_id=elevator_id,
+                )
+                schedule.schedule_approver_notification_event(
+                    schedule_client=schedule_client,
+                    message_ts="",
+                    channel_id="",
+                    time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
+                    elevator_request_id=elevator_id,
+                )
+        except Exception as e:
+            logger.exception(f"Failed to post approval card to Teams channel: {e}")
+
+        # Auto-execute if no approval needed
+        if decision.grant:
+            try:
+                if kind == "account":
+                    access_control.execute_decision(
+                        decision=decision,
+                        permission_set_name=permission_set_name,
+                        account_id=account_id,
+                        permission_duration=permission_duration,
+                        approver=slack_user,
+                        requester=slack_user,
+                        reason=reason,
+                        elevator_request_id=elevator_id,
+                    )
+                else:
+                    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+                    access_control.execute_decision_on_group_request(
+                        decision=decision,
+                        group=sso_group,
+                        permission_duration=permission_duration,
+                        approver=slack_user,
+                        requester=slack_user,
+                        reason=reason,
+                        identity_store_id=sso_instance.identity_store_id,
+                        elevator_request_id=elevator_id,
+                    )
+                request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
+            except Exception as e:
+                logger.exception(f"Failed to execute auto-approved decision: {e}")
+
+        return {"task": {"type": "message", "value": "Your request has been submitted."}}
+
+    async def _handle_card_action(self, turn_context) -> None:  # noqa: ANN001, PLR0912, PLR0915
+        """Handle Approve/Discard button clicks on approval cards."""
+        from botbuilder.schema import Activity  # type: ignore[import]
+
+        value = turn_context.activity.value or {}
+        action_data = value.get("action", {})
+        if isinstance(action_data, dict):
+            elevator_request_id = action_data.get("elevator_request_id") or value.get("elevator_request_id")
+            action = action_data.get("action") or value.get("action")
+        else:
+            elevator_request_id = value.get("elevator_request_id")
+            action = value.get("action")
+
+        if not elevator_request_id:
+            logger.warning("Card action missing elevator_request_id", extra={"value": value})
+            return
+
+        rec = request_store.get_access_request(elevator_request_id)
+        if rec is None:
+            logger.warning("Access request not found", extra={"elevator_request_id": elevator_request_id})
+            return
+
+        # Try to begin in-flight approval
+        if not request_store.try_begin_in_flight_approval(
+            requester_slack_id=rec.requester_slack_id,
+            account_id=rec.account_id,
+            permission_set_name=rec.permission_set_name,
+            group_id=rec.group_id,
+        ):
+            await turn_context.send_activity(
+                Activity(type="message", text="This request is already being processed, please wait for the result.")
+            )
+            return
+
+        try:
+            approver = await teams_users.get_user_from_activity(turn_context)
+        except Exception as e:
+            logger.exception(f"Failed to get approver in _handle_card_action: {e}")
+            request_store.end_in_flight_approval(
+                requester_slack_id=rec.requester_slack_id,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                group_id=rec.group_id,
+            )
+            return
+
+        approver_slack = approver.to_slack_user()
+
+        # Determine requester slack user (use stored id as placeholder)
+        requester_slack = entities.slack.User(
+            id=rec.requester_slack_id,
+            email="",
+            real_name=rec.requester_slack_id,
+        )
+
+        permission_duration = timedelta(seconds=rec.permission_duration_seconds)
+        approver_action = entities.ApproverAction.Approve if action == "approve" else entities.ApproverAction.Discard
+
+        if approver_action == entities.ApproverAction.Discard:
+            request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.discarded)
+            request_store.end_in_flight_approval(
+                requester_slack_id=rec.requester_slack_id,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                group_id=rec.group_id,
+            )
+            # Update card to show discarded
+            await self._update_approval_card(
+                turn_context=turn_context,
+                elevator_request_id=elevator_request_id,
+                decision_action="discarded",
+                approver_name=approver.display_name,
+                color_style=teams_cards.get_color_style(cfg.bad_result_emoji),
+            )
+            return
+
+        # Make approval decision
+        if rec.kind == ElevatorRequestKind.account:
+            decision = access_control.make_decision_on_approve_request(
+                action=approver_action,
+                statements=cfg.statements,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                approver_email=approver.email,
+                requester_email=requester_slack.email,
+            )
+        else:
+            decision = access_control.make_decision_on_approve_request(
+                action=approver_action,
+                statements=cfg.group_statements,
+                group_id=rec.group_id,
+                approver_email=approver.email,
+                requester_email=requester_slack.email,
+            )
+
+        if not decision.permit:
+            request_store.end_in_flight_approval(
+                requester_slack_id=rec.requester_slack_id,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                group_id=rec.group_id,
+            )
+            await turn_context.send_activity(Activity(type="message", text=f"{approver.display_name} you cannot approve this request."))
+            return
+
+        # Update card to show approved
+        await self._update_approval_card(
+            turn_context=turn_context,
+            elevator_request_id=elevator_request_id,
+            decision_action="approved",
+            approver_name=approver.display_name,
+            color_style=teams_cards.get_color_style(cfg.good_result_emoji),
+        )
+
+        # Execute the decision
+        try:
+            if rec.kind == ElevatorRequestKind.account:
+                access_control.execute_decision(
+                    decision=decision,
+                    permission_set_name=rec.permission_set_name,
+                    account_id=rec.account_id,
+                    permission_duration=permission_duration,
+                    approver=approver_slack,
+                    requester=requester_slack,
+                    reason=rec.reason,
+                    elevator_request_id=elevator_request_id,
+                )
+            else:
+                sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+                sso_group = sso.describe_group(sso_instance.identity_store_id, rec.group_id, identity_store_client)
+                access_control.execute_decision_on_group_request(
+                    decision=decision,
+                    group=sso_group,
+                    permission_duration=permission_duration,
+                    approver=approver_slack,
+                    requester=requester_slack,
+                    reason=rec.reason,
+                    identity_store_id=sso_instance.identity_store_id,
+                    elevator_request_id=elevator_request_id,
+                )
+            request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
+        except Exception as e:
+            logger.exception(f"Failed to execute decision in _handle_card_action: {e}")
+        finally:
+            request_store.end_in_flight_approval(
+                requester_slack_id=rec.requester_slack_id,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                group_id=rec.group_id,
+            )
+
+    async def _update_approval_card(
+        self,
+        turn_context,  # noqa: ANN001
+        elevator_request_id: str,
+        decision_action: str,
+        approver_name: str,
+        color_style: str,
+    ) -> None:
+        """Update the approval card to reflect the decision."""
+        from botbuilder.schema import Activity, Attachment  # type: ignore[import]
+
+        raw = request_store._get_plain(elevator_request_id)  # noqa: SLF001
+        if raw and raw.get("teams_activity_id"):
+            # We don't have the original card stored, build a minimal updated card
+            pass
+
+        # Build a simple updated card showing the decision
+        updated_card = {
+            "type": "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.5",
+            "body": [
+                {
+                    "type": "Container",
+                    "style": color_style,
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "AWS Access Request",
+                            "size": "large",
+                            "weight": "bolder",
+                        }
+                    ],
+                },
+                {
+                    "type": "TextBlock",
+                    "text": f"Request {decision_action} by {approver_name}",
+                    "wrap": True,
+                    "weight": "bolder",
+                },
+            ],
+        }
+
+        try:
+            activity = Activity(
+                type="message",
+                id=turn_context.activity.reply_to_id or turn_context.activity.id,
+                attachments=[
+                    Attachment(
+                        content_type="application/vnd.microsoft.card.adaptive",
+                        content=updated_card,
+                    )
+                ],
+            )
+            await turn_context.update_activity(activity)
+        except Exception as e:
+            logger.exception(f"Failed to update approval card: {e}")
+
+
+async def handle_teams_event(event: dict, context) -> dict:  # noqa: ANN001, ARG001
+    """Convert API Gateway event body to Bot Framework activity and process it."""
+    from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings  # type: ignore[import]
+    from botbuilder.schema import Activity  # type: ignore[import]
+
+    settings = BotFrameworkAdapterSettings(
+        app_id=cfg.teams_microsoft_app_id,
+        app_password=cfg.teams_microsoft_app_password,
+    )
+    adapter = BotFrameworkAdapter(settings)
+
+    body = event.get("body", "")
+    if isinstance(body, str):
+        body = json.loads(body) if body else {}
+
+    headers = event.get("headers", {}) or {}
+
+    activity = Activity.deserialize(body)
+
+    bot = SSOElevatorBot()
+
+    async def bot_callback(turn_context) -> None:  # noqa: ANN001
+        activity_type = turn_context.activity.type
+
+        if activity_type == "message":
+            await bot.on_message_activity(turn_context)
+        elif activity_type == "invoke":
+            await bot.on_invoke_activity(turn_context)
+
+    auth_header = headers.get("Authorization") or headers.get("authorization") or ""
+
+    try:
+        await adapter.process_activity(activity, auth_header, bot_callback)
+    except Exception as e:
+        logger.exception(f"Error processing Teams activity: {e}")
+        return {"statusCode": 500, "body": ""}
+
+    return {"statusCode": 200, "body": ""}
+
+
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
+    if cfg.chat_platform == "teams":
+        return asyncio.run(handle_teams_event(event, context))
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
 
