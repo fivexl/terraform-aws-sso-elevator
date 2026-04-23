@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
 import boto3
@@ -17,7 +18,9 @@ import request_store
 import schedule
 import slack_helpers
 import sso
+import teams_cards
 from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
+from entities.teams import TeamsUser
 from errors import handle_errors
 
 logger = config.get_logger(service="main")
@@ -298,3 +301,190 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         text=text,
         thread_ts=payload.thread_ts,
     )
+
+
+async def handle_teams_group_task_submit(  # noqa: PLR0915
+    turn_context,  # noqa: ANN001, ARG001
+    data: dict,
+    user: TeamsUser,
+) -> dict:
+    """Parse group task/submit, run access control, post approval card, auto-execute if grant."""
+    from revoker import TeamsNotifier  # type: ignore[import]
+
+    permission_duration = teams_cards.parse_duration_choice(str(data.get("duration", "1:00:00")))
+    reason = str(data.get("reason", ""))
+    group_id = str(data.get("group_id", ""))
+    elevator_id = str(uuid.uuid4())
+    slack_user = user.to_slack_user()
+
+    decision = access_control.make_decision_on_access_request(
+        cfg.group_statements,
+        requester_email=user.email,
+        group_id=group_id,
+    )
+
+    request_store.put_access_request(
+        ElevatorRequestRecord(
+            elevator_request_id=elevator_id,
+            kind=ElevatorRequestKind.group,
+            status=ElevatorRequestStatus.awaiting_approval,
+            requester_slack_id=user.id,
+            reason=reason,
+            permission_duration_seconds=int(permission_duration.total_seconds()),
+            group_id=group_id,
+        )
+    )
+
+    try:
+        sso_group = sso.describe_group(identity_store_id, group_id, identity_store_client)
+    except Exception:
+        sso_group = entities.aws.SSOGroup(id=group_id, identity_store_id="", name=group_id)
+
+    show_buttons = bool(decision.approvers)
+    color_style = teams_cards.get_color_style(cfg.waiting_result_emoji)
+    duration_str = str(data.get("duration", "1:00:00"))
+    request_data = {
+        "group_id": group_id,
+        "duration": duration_str,
+        "reason": reason,
+        "requester_id": user.id,
+    }
+    card = teams_cards.build_approval_card(
+        requester_name=user.display_name,
+        account=None,
+        group=sso_group,
+        role_name=None,
+        reason=reason,
+        permission_duration=duration_str,
+        show_buttons=show_buttons,
+        color_style=color_style,
+        request_data=request_data,
+        elevator_request_id=elevator_id,
+    )
+
+    try:
+        notifier = TeamsNotifier(cfg)
+        activity_id = await notifier.send_message(text="New access request", card=card)
+        if activity_id:
+            request_store.update_teams_presentation(elevator_id, cfg.teams_approval_conversation_id, activity_id)
+
+        if show_buttons:
+            schedule.schedule_discard_buttons_event(
+                schedule_client=schedule_client,  # type: ignore[union-attr]
+                time_stamp="",
+                channel_id="",
+                elevator_request_id=elevator_id,
+            )
+            schedule.schedule_approver_notification_event(
+                schedule_client=schedule_client,  # type: ignore[union-attr]
+                message_ts="",
+                channel_id="",
+                time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
+                elevator_request_id=elevator_id,
+            )
+    except Exception as e:
+        logger.exception(f"Failed to post approval card to Teams channel: {e}")
+
+    if decision.grant:
+        try:
+            access_control.execute_decision_on_group_request(
+                decision=decision,
+                group=sso_group,
+                permission_duration=permission_duration,
+                approver=slack_user,
+                requester=slack_user,
+                reason=reason,
+                identity_store_id=identity_store_id,
+                elevator_request_id=elevator_id,
+            )
+            request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
+        except Exception as e:
+            logger.exception(f"Failed to execute auto-approved group decision: {e}")
+
+    return {"task": {"type": "message", "value": "Your request has been submitted."}}
+
+
+async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
+    turn_context,  # noqa: ANN001
+    rec: ElevatorRequestRecord,
+    approver: TeamsUser,
+    elevator_request_id: str,
+    action: str,
+    update_approval_card: Callable[..., Awaitable[None]],
+) -> None:
+    """Handle Approve/Discard on a Teams group approval card (Slack: handle_group_button_click)."""
+    from botbuilder.schema import Activity  # type: ignore[import]
+
+    requester_slack = entities.slack.User(
+        id=rec.requester_slack_id,
+        email="",
+        real_name=rec.requester_slack_id,
+    )
+    permission_duration = timedelta(seconds=rec.permission_duration_seconds)
+    approver_action = entities.ApproverAction.Approve if action == "approve" else entities.ApproverAction.Discard
+
+    if approver_action == entities.ApproverAction.Discard:
+        request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.discarded)
+        request_store.end_in_flight_approval(
+            requester_slack_id=rec.requester_slack_id,
+            account_id=None,
+            permission_set_name=None,
+            group_id=rec.group_id,
+        )
+        await update_approval_card(
+            turn_context=turn_context,
+            elevator_request_id=elevator_request_id,
+            decision_action="discarded",
+            approver_name=approver.display_name,
+            color_style=teams_cards.get_color_style(cfg.bad_result_emoji),
+        )
+        return
+
+    decision = access_control.make_decision_on_approve_request(
+        action=approver_action,
+        statements=cfg.group_statements,  # type: ignore[arg-type]
+        group_id=rec.group_id,
+        approver_email=approver.email,
+        requester_email=requester_slack.email,
+    )
+
+    if not decision.permit:
+        request_store.end_in_flight_approval(
+            requester_slack_id=rec.requester_slack_id,
+            account_id=None,
+            permission_set_name=None,
+            group_id=rec.group_id,
+        )
+        await turn_context.send_activity(Activity(type="message", text=f"{approver.display_name} you cannot approve this request."))
+        return
+
+    await update_approval_card(
+        turn_context=turn_context,
+        elevator_request_id=elevator_request_id,
+        decision_action="approved",
+        approver_name=approver.display_name,
+        color_style=teams_cards.get_color_style(cfg.good_result_emoji),
+    )
+
+    try:
+        sso_group = sso.describe_group(identity_store_id, rec.group_id, identity_store_client)
+        access_control.execute_decision_on_group_request(
+            decision=decision,
+            group=sso_group,
+            permission_duration=permission_duration,
+            approver=approver.to_slack_user(),
+            requester=requester_slack,
+            reason=rec.reason,
+            identity_store_id=identity_store_id,
+            elevator_request_id=elevator_request_id,
+        )
+        request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
+    except Exception as e:
+        logger.exception(f"Failed to execute group decision in handle_teams_group_card_action: {e}")
+    finally:
+        request_store.end_in_flight_approval(
+            requester_slack_id=rec.requester_slack_id,
+            account_id=None,
+            permission_set_name=None,
+            group_id=rec.group_id,
+        )

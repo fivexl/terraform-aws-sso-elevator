@@ -196,17 +196,8 @@ class SSOElevatorBot:
         is_group = "group_id" in data
         kind = "group" if is_group else "account"
 
-        # Parse duration
-        _DURATION_PARTS = 3  # noqa: N806
-        duration_str = data.get("duration", "1:00:00")
-        try:
-            parts = duration_str.split(":")
-            if len(parts) == _DURATION_PARTS:
-                permission_duration = timedelta(hours=int(parts[0]), minutes=int(parts[1]), seconds=int(parts[2]))
-            else:
-                permission_duration = timedelta(hours=1)
-        except Exception:
-            permission_duration = timedelta(hours=1)
+        duration_str = str(data.get("duration", "1:00:00"))
+        permission_duration = teams_cards.parse_duration_choice(duration_str)
 
         reason = data.get("reason", "")
         elevator_id = str(uuid.uuid4())
@@ -262,84 +253,35 @@ class SSOElevatorBot:
                 request_data=request_data,
                 elevator_request_id=elevator_id,
             )
-        else:
-            group_id = data.get("group_id", "")
 
-            decision = access_control.make_decision_on_access_request(
-                cfg.group_statements,
-                requester_email=user.email,
-                group_id=group_id,
-            )
-
-            request_store.put_access_request(
-                ElevatorRequestRecord(
-                    elevator_request_id=elevator_id,
-                    kind=ElevatorRequestKind.group,
-                    status=ElevatorRequestStatus.awaiting_approval,
-                    requester_slack_id=user.id,
-                    reason=reason,
-                    permission_duration_seconds=int(permission_duration.total_seconds()),
-                    group_id=group_id,
-                )
-            )
-
+            # Post approval card to channel
             try:
-                sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-                sso_group = sso.describe_group(sso_instance.identity_store_id, group_id, identity_store_client)
-            except Exception:
-                sso_group = entities.aws.SSOGroup(id=group_id, identity_store_id="", name=group_id)
+                from revoker import TeamsNotifier  # type: ignore[import]
 
-            show_buttons = bool(decision.approvers)
-            color_style = teams_cards.get_color_style(cfg.waiting_result_emoji)
-            request_data = {
-                "group_id": group_id,
-                "duration": duration_str,
-                "reason": reason,
-                "requester_id": user.id,
-            }
-            card = teams_cards.build_approval_card(
-                requester_name=user.display_name,
-                account=None,
-                group=sso_group,
-                role_name=None,
-                reason=reason,
-                permission_duration=duration_str,
-                show_buttons=show_buttons,
-                color_style=color_style,
-                request_data=request_data,
-                elevator_request_id=elevator_id,
-            )
+                notifier = TeamsNotifier(cfg)
+                activity_id = await notifier.send_message(text="New access request", card=card)
+                if activity_id:
+                    request_store.update_teams_presentation(elevator_id, cfg.teams_approval_conversation_id, activity_id)
 
-        # Post approval card to channel
-        try:
-            from revoker import TeamsNotifier  # type: ignore[import]
+                if show_buttons:
+                    schedule.schedule_discard_buttons_event(
+                        schedule_client=schedule_client,
+                        time_stamp="",
+                        channel_id="",
+                        elevator_request_id=elevator_id,
+                    )
+                    schedule.schedule_approver_notification_event(
+                        schedule_client=schedule_client,
+                        message_ts="",
+                        channel_id="",
+                        time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
+                        elevator_request_id=elevator_id,
+                    )
+            except Exception as e:
+                logger.exception(f"Failed to post approval card to Teams channel: {e}")
 
-            notifier = TeamsNotifier(cfg)
-            activity_id = await notifier.send_message(text="New access request", card=card)
-            if activity_id:
-                request_store.update_teams_presentation(elevator_id, cfg.teams_approval_conversation_id, activity_id)
-
-            if show_buttons:
-                schedule.schedule_discard_buttons_event(
-                    schedule_client=schedule_client,
-                    time_stamp="",
-                    channel_id="",
-                    elevator_request_id=elevator_id,
-                )
-                schedule.schedule_approver_notification_event(
-                    schedule_client=schedule_client,
-                    message_ts="",
-                    channel_id="",
-                    time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
-                    elevator_request_id=elevator_id,
-                )
-        except Exception as e:
-            logger.exception(f"Failed to post approval card to Teams channel: {e}")
-
-        # Auto-execute if no approval needed
-        if decision.grant:
-            try:
-                if kind == "account":
+            if decision.grant:
+                try:
                     access_control.execute_decision(
                         decision=decision,
                         permission_set_name=permission_set_name,
@@ -350,25 +292,15 @@ class SSOElevatorBot:
                         reason=reason,
                         elevator_request_id=elevator_id,
                     )
-                else:
-                    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-                    access_control.execute_decision_on_group_request(
-                        decision=decision,
-                        group=sso_group,
-                        permission_duration=permission_duration,
-                        approver=slack_user,
-                        requester=slack_user,
-                        reason=reason,
-                        identity_store_id=sso_instance.identity_store_id,
-                        elevator_request_id=elevator_id,
-                    )
-                request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
-            except Exception as e:
-                logger.exception(f"Failed to execute auto-approved decision: {e}")
+                    request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
+                except Exception as e:
+                    logger.exception(f"Failed to execute auto-approved decision: {e}")
 
-        return {"task": {"type": "message", "value": "Your request has been submitted."}}
+            return {"task": {"type": "message", "value": "Your request has been submitted."}}
 
-    async def _handle_card_action(self, turn_context) -> None:  # noqa: ANN001, PLR0912, PLR0915
+        return await group.handle_teams_group_task_submit(turn_context, data, user)
+
+    async def _handle_card_action(self, turn_context) -> None:  # noqa: ANN001, PLR0911, PLR0912, PLR0915
         """Handle Approve/Discard button clicks on approval cards."""
         from botbuilder.schema import Activity  # type: ignore[import]
 
@@ -414,6 +346,17 @@ class SSOElevatorBot:
             )
             return
 
+        if rec.kind == ElevatorRequestKind.group:
+            await group.handle_teams_group_card_action(
+                turn_context,
+                rec,
+                approver,
+                elevator_request_id,
+                str(action or ""),
+                self._update_approval_card,
+            )
+            return
+
         approver_slack = approver.to_slack_user()
 
         # Determine requester slack user (use stored id as placeholder)
@@ -444,24 +387,15 @@ class SSOElevatorBot:
             )
             return
 
-        # Make approval decision
-        if rec.kind == ElevatorRequestKind.account:
-            decision = access_control.make_decision_on_approve_request(
-                action=approver_action,
-                statements=cfg.statements,
-                account_id=rec.account_id,
-                permission_set_name=rec.permission_set_name,
-                approver_email=approver.email,
-                requester_email=requester_slack.email,
-            )
-        else:
-            decision = access_control.make_decision_on_approve_request(
-                action=approver_action,
-                statements=cfg.group_statements,
-                group_id=rec.group_id,
-                approver_email=approver.email,
-                requester_email=requester_slack.email,
-            )
+        # Make approval decision (account requests only; group is handled in group.py)
+        decision = access_control.make_decision_on_approve_request(
+            action=approver_action,
+            statements=cfg.statements,
+            account_id=rec.account_id,
+            permission_set_name=rec.permission_set_name,
+            approver_email=approver.email,
+            requester_email=requester_slack.email,
+        )
 
         if not decision.permit:
             request_store.end_in_flight_approval(
@@ -484,30 +418,16 @@ class SSOElevatorBot:
 
         # Execute the decision
         try:
-            if rec.kind == ElevatorRequestKind.account:
-                access_control.execute_decision(
-                    decision=decision,
-                    permission_set_name=rec.permission_set_name,
-                    account_id=rec.account_id,
-                    permission_duration=permission_duration,
-                    approver=approver_slack,
-                    requester=requester_slack,
-                    reason=rec.reason,
-                    elevator_request_id=elevator_request_id,
-                )
-            else:
-                sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-                sso_group = sso.describe_group(sso_instance.identity_store_id, rec.group_id, identity_store_client)
-                access_control.execute_decision_on_group_request(
-                    decision=decision,
-                    group=sso_group,
-                    permission_duration=permission_duration,
-                    approver=approver_slack,
-                    requester=requester_slack,
-                    reason=rec.reason,
-                    identity_store_id=sso_instance.identity_store_id,
-                    elevator_request_id=elevator_request_id,
-                )
+            access_control.execute_decision(
+                decision=decision,
+                permission_set_name=rec.permission_set_name,
+                account_id=rec.account_id,
+                permission_duration=permission_duration,
+                approver=approver_slack,
+                requester=requester_slack,
+                reason=rec.reason,
+                elevator_request_id=elevator_request_id,
+            )
             request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
         except Exception as e:
             logger.exception(f"Failed to execute decision in _handle_card_action: {e}")

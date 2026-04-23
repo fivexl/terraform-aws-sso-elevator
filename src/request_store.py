@@ -254,3 +254,50 @@ def end_in_flight_approval(
         _memory.pop(iid, None)
         return
     _ddb().delete_item(TableName=_table_name(), Key={"id": {"S": iid}})
+
+
+def update_teams_presentation(elevator_request_id: str, conversation_id: str, activity_id: str) -> None:
+    """Store Teams activity_id and conversation_id for card updates."""
+    if _use_memory_store():
+        if elevator_request_id in _memory:
+            _memory[elevator_request_id]["teams_conversation_id"] = conversation_id
+            _memory[elevator_request_id]["teams_activity_id"] = activity_id
+        return
+    _ddb().update_item(
+        TableName=_table_name(),
+        Key={"id": {"S": elevator_request_id}},
+        UpdateExpression="SET teams_conversation_id = :c, teams_activity_id = :a",
+        ExpressionAttributeValues={":c": {"S": conversation_id}, ":a": {"S": activity_id}},
+    )
+
+
+def _conv_ref_id(user_aad_id: str) -> str:
+    return f"convref:{user_aad_id}"
+
+
+def save_conversation_reference(user_aad_id: str, reference: dict) -> None:
+    """Store ConversationReference for proactive messaging."""
+    import json as _json
+
+    item: dict[str, Any] = {
+        "id": _conv_ref_id(user_aad_id),
+        "entity": "CONV_REF",
+        "reference": _json.dumps(reference),
+    }
+    _put_plain(item)
+
+
+def get_conversation_reference(user_aad_id: str) -> dict | None:
+    """Retrieve stored ConversationReference."""
+    import json as _json
+
+    raw = _get_plain(_conv_ref_id(user_aad_id))
+    if not raw or raw.get("entity") != "CONV_REF":
+        return None
+    ref_str = raw.get("reference")
+    if not ref_str:
+        return None
+    try:
+        return _json.loads(str(ref_str))
+    except Exception:
+        return None

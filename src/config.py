@@ -219,6 +219,22 @@ class Config(BaseSettings):
             "s3_bucket_prefix_for_partitions": s3_bucket_prefix_for_partitions,
         }
 
+    @model_validator(mode="after")
+    def validate_platform_config(self) -> "Config":  # noqa: ANN101
+        if self.chat_platform == "teams":
+            missing = []
+            if not self.teams_microsoft_app_id:
+                missing.append("teams_microsoft_app_id")
+            if not self.teams_microsoft_app_password:
+                missing.append("teams_microsoft_app_password")
+            if not self.teams_azure_tenant_id:
+                missing.append("teams_azure_tenant_id")
+            if not self.teams_approval_conversation_id:
+                missing.append("teams_approval_conversation_id")
+            if missing:
+                raise ValueError(f"Teams platform requires: {', '.join(missing)}")
+        return self
+
 
 _config: Optional[Config] = None
 

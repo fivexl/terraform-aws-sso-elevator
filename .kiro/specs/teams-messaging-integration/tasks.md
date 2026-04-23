@@ -53,50 +53,50 @@
   - [x] 9.3 Update `handle_approvers_renotification_event` to branch on `cfg.chat_platform`: for Teams, call `TeamsNotifier.send_thread_reply`; for Slack, keep existing logic
   - [x] 9.4 Update `handle_scheduled_account_assignment_deletion` and `handle_scheduled_group_assignment_deletion` to use `TeamsNotifier` notification methods when `chat_platform == "teams"`
 
-- [-] 10. Add Teams bot and handler to `src/main.py`
-  - [ ] 10.1 Add `SSOElevatorBot(ActivityHandler)` class with `on_message_activity` routing `/request-access` and `/request-group` commands
-  - [ ] 10.2 Add `on_invoke_activity` dispatching `task/fetch`, `task/submit`, and `adaptiveCard/action` invoke types
-  - [ ] 10.3 Implement `_handle_task_fetch` — returns `TaskModuleResponse` with account or group access form card
-  - [ ] 10.4 Implement `_handle_task_submit` — parses form data, calls `access_control.make_decision_on_access_request`, stores request via `request_store.put_access_request`, posts approval card to channel, schedules EventBridge events
-  - [ ] 10.5 Implement `_handle_card_action` — reads `elevator_request_id` from `Action.Submit.data`, calls `request_store.try_begin_in_flight_approval`, calls `access_control.make_decision_on_approve_request`, updates card via `update_activity`, calls `access_control.execute_decision`
-  - [ ] 10.6 Implement `async handle_teams_event(event, context) -> dict` — converts API Gateway event body to Bot Framework activity and processes it through `SSOElevatorBot`
-  - [ ] 10.7 Update `lambda_handler` to route: `if cfg.chat_platform == "teams": return asyncio.run(handle_teams_event(event, context))` else existing Slack Bolt path
+- [x] 10. Add Teams bot and handler to `src/main.py`
+  - [x] 10.1 Add `SSOElevatorBot(ActivityHandler)` class with `on_message_activity` routing `/request-access` and `/request-group` commands
+  - [x] 10.2 Add `on_invoke_activity` dispatching `task/fetch`, `task/submit`, and `adaptiveCard/action` invoke types
+  - [x] 10.3 Implement `_handle_task_fetch` — returns `TaskModuleResponse` with account or group access form card
+  - [x] 10.4 Implement `_handle_task_submit` — parses form data, calls `access_control.make_decision_on_access_request`, stores request via `request_store.put_access_request`, posts approval card to channel, schedules EventBridge events
+  - [x] 10.5 Implement `_handle_card_action` — reads `elevator_request_id` from `Action.Submit.data`, calls `request_store.try_begin_in_flight_approval`, calls `access_control.make_decision_on_approve_request`, updates card via `update_activity`, calls `access_control.execute_decision`
+  - [x] 10.6 Implement `async handle_teams_event(event, context) -> dict` — converts API Gateway event body to Bot Framework activity and processes it through `SSOElevatorBot`
+  - [x] 10.7 Update `lambda_handler` to route: `if cfg.chat_platform == "teams": return asyncio.run(handle_teams_event(event, context))` else existing Slack Bolt path
 
-- [~] 11. Add Teams group access handler to `src/group.py`
-  - [ ] 11.1 Implement `async handle_teams_group_task_submit(turn_context, data, cfg, ...) -> TaskModuleResponse` — parses group form submission, calls `access_control.make_decision_on_access_request` with `group_statements`, stores request, posts approval card, schedules EventBridge events
-  - [ ] 11.2 Implement `async handle_teams_group_card_action(turn_context, data, cfg, ...) -> InvokeResponse` — handles Approve/Discard button clicks for group requests, mirrors `handle_group_button_click` logic
+- [x] 11. Add Teams group access handler to `src/group.py`
+  - [x] 11.1 Implement `async handle_teams_group_task_submit(turn_context, data, cfg, ...) -> TaskModuleResponse` — parses group form submission, calls `access_control.make_decision_on_access_request` with `group_statements`, stores request, posts approval card, schedules EventBridge events
+  - [x] 11.2 Implement `async handle_teams_group_card_action(turn_context, data, cfg, ...) -> InvokeResponse` — handles Approve/Discard button clicks for group requests, mirrors `handle_group_button_click` logic
 
-- [~] 12. Add new Python dependencies to `src/requirements.txt`
-  - [ ] 12.1 Add `botbuilder-core>=4.14.0`
-  - [ ] 12.2 Add `botbuilder-schema>=4.14.0`
-  - [ ] 12.3 Add `botbuilder-integration-aiohttp>=4.14.0`
-  - [ ] 12.4 Add `msgraph-sdk>=1.0.0`
-  - [ ] 12.5 Add `azure-identity>=1.15.0`
+- [x] 12. Add new Python dependencies to `src/requirements.txt`
+  - [x] 12.1 Add `botbuilder-core>=4.14.0`
+  - [x] 12.2 Add `botbuilder-schema>=4.14.0`
+  - [x] 12.3 Add `botbuilder-integration-aiohttp>=4.14.0`
+  - [x] 12.4 Add `msgraph-sdk>=1.0.0`
+  - [x] 12.5 Add `azure-identity>=1.15.0`
 
-- [~] 13. Write property-based tests for `teams_cards.py` and `entities/teams.py`
-  - [ ] 13.1 Write Property 1 test: form card completeness — for any non-empty accounts/permission-sets/groups list, `build_account_access_form` and `build_group_access_form` produce cards with the correct `Input.ChoiceSet` counts
+- [x] 13. Write property-based tests for `teams_cards.py` and `entities/teams.py`
+  - [x] 13.1 Write Property 1 test: form card completeness — for any non-empty accounts/permission-sets/groups list, `build_account_access_form` and `build_group_access_form` produce cards with the correct `Input.ChoiceSet` counts
     **Validates: Requirements 2.1, 2.2**
-  - [ ] 13.2 Write Property 2 test: form submission parsing round-trip — for any valid account ID, permission set, duration, reason, and requester ID embedded in a task/submit payload, parsing produces a request object with matching field values
+  - [x] 13.2 Write Property 2 test: form submission parsing round-trip — for any valid account ID, permission set, duration, reason, and requester ID embedded in a task/submit payload, parsing produces a request object with matching field values
     **Validates: Requirements 2.4**
-  - [ ] 13.3 Write Property 3 test: approval card completeness — for any requester name, account/group, role, reason, and duration, `build_approval_card` produces a card whose FactSet contains every required field with the correct value
+  - [x] 13.3 Write Property 3 test: approval card completeness — for any requester name, account/group, role, reason, and duration, `build_approval_card` produces a card whose FactSet contains every required field with the correct value
     **Validates: Requirements 3.1, 3.2**
-  - [ ] 13.4 Write Property 4 test: buttons match approval requirement — when `show_buttons=True` the card has exactly two `Action.Submit` buttons (Approve positive, Discard destructive) with `elevator_request_id` in data; when `show_buttons=False` no ActionSet is present
+  - [x] 13.4 Write Property 4 test: buttons match approval requirement — when `show_buttons=True` the card has exactly two `Action.Submit` buttons (Approve positive, Discard destructive) with `elevator_request_id` in data; when `show_buttons=False` no ActionSet is present
     **Validates: Requirements 3.3, 3.4**
-  - [ ] 13.5 Write Property 5 test: card color style application — for any valid color style string (`good`, `warning`, `attention`, `default`), building or updating a card sets the header Container `style` to that exact value
+  - [x] 13.5 Write Property 5 test: card color style application — for any valid color style string (`good`, `warning`, `attention`, `default`), building or updating a card sets the header Container `style` to that exact value
     **Validates: Requirements 3.5, 4.4**
-  - [ ] 13.6 Write Property 6 test: mention formatting — for any non-empty display name and user ID, `build_mention` produces text containing `<at>{display_name}</at>` and a Mention entity with `mentioned.id` equal to the user ID
+  - [x] 13.6 Write Property 6 test: mention formatting — for any non-empty display name and user ID, `build_mention` produces text containing `<at>{display_name}</at>` and a Mention entity with `mentioned.id` equal to the user ID
     **Validates: Requirements 3.6, 12.1**
-  - [ ] 13.7 Write Property 7 test: card state transition preserves content — for any approval card with an ActionSet and FactSet, applying `update_card_after_decision` or `update_card_on_expiry` produces a card where the FactSet is unchanged, no ActionSet is present, and a new TextBlock with decision/expiry info is appended
+  - [x] 13.7 Write Property 7 test: card state transition preserves content — for any approval card with an ActionSet and FactSet, applying `update_card_after_decision` or `update_card_on_expiry` produces a card where the FactSet is unchanged, no ActionSet is present, and a new TextBlock with decision/expiry info is appended
     **Validates: Requirements 4.3, 10.2**
-  - [ ] 13.8 Write Property 8 test: TeamsUser to Slack User compatibility — for any valid `TeamsUser`, `to_slack_user()` produces a `slack.User` where `id`, `email`, and `real_name` match the TeamsUser fields
+  - [x] 13.8 Write Property 8 test: TeamsUser to Slack User compatibility — for any valid `TeamsUser`, `to_slack_user()` produces a `slack.User` where `id`, `email`, and `real_name` match the TeamsUser fields
     **Validates: Requirements 5.4**
-  - [ ] 13.9 Write Property 9 test: audit log completeness — for any Teams request with non-empty requester and approver data, the resulting `AuditEntry` has non-empty `requester_email`, `approver_email`, and non-"NA" `requester_slack_id` / `approver_slack_id` fields
+  - [x] 13.9 Write Property 9 test: audit log completeness — for any Teams request with non-empty requester and approver data, the resulting `AuditEntry` has non-empty `requester_email`, `approver_email`, and non-"NA" `requester_slack_id` / `approver_slack_id` fields
     **Validates: Requirements 13.1, 13.2**
 
-- [~] 14. Write unit tests for Teams integration
-  - [ ] 14.1 Test `get_color_style` maps all four Slack emoji config values to the correct Adaptive Card container styles
-  - [ ] 14.2 Test `config.py` validation: `chat_platform=teams` with missing required params raises `ValueError` listing the missing fields; with all params present no error is raised
-  - [ ] 14.3 Test `request_store` Teams extensions: `update_teams_presentation`, `save_conversation_reference`, and `get_conversation_reference` round-trip correctly using the in-memory store
-  - [ ] 14.4 Test `DiscardButtonsEvent` and `ApproverNotificationEvent` accept and round-trip the new optional `teams_conversation_id` and `teams_activity_id` fields without breaking existing Slack-only payloads
-  - [ ] 14.5 Test `TeamsUser.to_slack_user()` produces a `slack.User` with the correct field values
-  - [ ] 14.6 Test `build_mention` returns the correct `<at>` text and Mention entity dict structure
+- [x] 14. Write unit tests for Teams integration
+  - [x] 14.1 Test `get_color_style` maps all four Slack emoji config values to the correct Adaptive Card container styles
+  - [x] 14.2 Test `config.py` validation: `chat_platform=teams` with missing required params raises `ValueError` listing the missing fields; with all params present no error is raised
+  - [x] 14.3 Test `request_store` Teams extensions: `update_teams_presentation`, `save_conversation_reference`, and `get_conversation_reference` round-trip correctly using the in-memory store
+  - [x] 14.4 Test `DiscardButtonsEvent` and `ApproverNotificationEvent` accept and round-trip the new optional `teams_conversation_id` and `teams_activity_id` fields without breaking existing Slack-only payloads
+  - [x] 14.5 Test `TeamsUser.to_slack_user()` produces a `slack.User` with the correct field values
+  - [x] 14.6 Test `build_mention` returns the correct `<at>` text and Mention entity dict structure
