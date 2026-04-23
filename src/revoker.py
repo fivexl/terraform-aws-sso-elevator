@@ -39,7 +39,135 @@ sso_client = boto3.client("sso-admin")  # type: ignore # noqa: PGH003
 identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH003
 scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
-slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
+
+
+class TeamsNotifier:
+    """Send/update Teams messages from the revoker Lambda (no turn context)."""
+
+    def __init__(self, cfg: config.Config) -> None:
+        self.app_id = cfg.teams_microsoft_app_id
+        self.app_password = cfg.teams_microsoft_app_password
+        self.tenant_id = cfg.teams_azure_tenant_id
+        self.conversation_id = cfg.teams_approval_conversation_id
+
+    def _get_adapter(self):  # noqa: ANN202
+        from botbuilder.core import BotFrameworkAdapterSettings, BotFrameworkAdapter  # type: ignore[import]
+
+        settings = BotFrameworkAdapterSettings(self.app_id, self.app_password)
+        return BotFrameworkAdapter(settings)
+
+    async def send_message(self, text: str, card: dict | None = None) -> str:
+        """Send a message to the approval channel. Returns activity_id."""
+        from botbuilder.schema import Activity, ActivityTypes, Attachment  # type: ignore[import]
+        from botbuilder.core import TurnContext  # type: ignore[import]
+        from botbuilder.schema import ConversationReference  # type: ignore[import]
+
+        adapter = self._get_adapter()
+        conversation_reference = {
+            "channelId": "msteams",
+            "conversation": {"id": self.conversation_id},
+            "serviceUrl": f"https://smba.trafficmanager.net/{self.tenant_id}/",
+        }
+
+        activity_id_holder: list[str] = []
+
+        async def callback(turn_context: TurnContext) -> None:
+            activity = Activity(type=ActivityTypes.message, text=text)
+            if card:
+                activity.attachments = [
+                    Attachment(
+                        content_type="application/vnd.microsoft.card.adaptive",
+                        content=card,
+                    )
+                ]
+            response = await turn_context.send_activity(activity)
+            if response and response.id:
+                activity_id_holder.append(response.id)
+
+        ref = ConversationReference(**conversation_reference)
+        await adapter.continue_conversation(ref, callback, self.app_id)
+        return activity_id_holder[0] if activity_id_holder else ""
+
+    async def update_message(self, activity_id: str, card: dict) -> None:
+        """Update an existing message (card) by activity_id."""
+        from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference  # type: ignore[import]
+        from botbuilder.core import TurnContext  # type: ignore[import]
+
+        adapter = self._get_adapter()
+        conversation_reference = {
+            "channelId": "msteams",
+            "conversation": {"id": self.conversation_id},
+            "serviceUrl": f"https://smba.trafficmanager.net/{self.tenant_id}/",
+        }
+
+        async def callback(turn_context: TurnContext) -> None:
+            activity = Activity(
+                type=ActivityTypes.message,
+                id=activity_id,
+                attachments=[
+                    Attachment(
+                        content_type="application/vnd.microsoft.card.adaptive",
+                        content=card,
+                    )
+                ],
+            )
+            await turn_context.update_activity(activity)
+
+        ref = ConversationReference(**conversation_reference)
+        await adapter.continue_conversation(ref, callback, self.app_id)
+
+    async def send_thread_reply(self, parent_activity_id: str, text: str) -> None:
+        """Send a reply in a conversation thread."""
+        from botbuilder.schema import Activity, ActivityTypes, ConversationReference  # type: ignore[import]
+        from botbuilder.core import TurnContext  # type: ignore[import]
+
+        adapter = self._get_adapter()
+        conversation_reference = {
+            "channelId": "msteams",
+            "conversation": {"id": self.conversation_id},
+            "serviceUrl": f"https://smba.trafficmanager.net/{self.tenant_id}/",
+        }
+
+        async def callback(turn_context: TurnContext) -> None:
+            activity = Activity(
+                type=ActivityTypes.message,
+                text=text,
+                reply_to_id=parent_activity_id,
+            )
+            await turn_context.send_activity(activity)
+
+        ref = ConversationReference(**conversation_reference)
+        await adapter.continue_conversation(ref, callback, self.app_id)
+
+    async def send_proactive_dm(self, conversation_reference: dict, text: str) -> None:
+        """Send a proactive DM using a stored ConversationReference."""
+        from botbuilder.schema import Activity, ActivityTypes, ConversationReference  # type: ignore[import]
+        from botbuilder.core import TurnContext  # type: ignore[import]
+
+        adapter = self._get_adapter()
+
+        async def callback(turn_context: TurnContext) -> None:
+            activity = Activity(type=ActivityTypes.message, text=text)
+            await turn_context.send_activity(activity)
+
+        ref = ConversationReference(**conversation_reference)
+        try:
+            await adapter.continue_conversation(ref, callback, self.app_id)
+        except Exception as e:
+            if "403" in str(e) or "Forbidden" in str(e):
+                logger.exception(f"Proactive DM blocked (403 Forbidden): {e}")
+            else:
+                raise
+
+
+def get_notifier(cfg: config.Config) -> slack_sdk.WebClient | TeamsNotifier:
+    """Return Slack WebClient or TeamsNotifier based on config."""
+    if cfg.chat_platform == "teams":
+        return TeamsNotifier(cfg)
+    return slack_sdk.WebClient(token=cfg.slack_bot_token)
+
+
+slack_client = get_notifier(cfg)
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
@@ -524,14 +652,62 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
 
 
 def handle_discard_buttons_event(
-    event: DiscardButtonsEvent, slack_client: slack_sdk.WebClient, scheduler_client: EventBridgeSchedulerClient
+    event: DiscardButtonsEvent,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
+    scheduler_client: EventBridgeSchedulerClient,
 ) -> None:
+    schedule.delete_schedule(scheduler_client, event.schedule_name)
+
+    if cfg.chat_platform == "teams":
+        import asyncio
+        import teams_cards
+
+        if not event.teams_conversation_id or not event.teams_activity_id:
+            logger.warning("Teams event missing conversation_id or activity_id", extra={"event": event})
+            if event.elevator_request_id:
+                request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
+            return
+
+        assert isinstance(slack_client, TeamsNotifier)
+
+        async def _update_teams_card() -> None:
+            # We need the original card to update it — fetch from request_store if available
+            # For simplicity, build a minimal expiry card update
+            expired_card = {
+                "type": "AdaptiveCard",
+                "version": "1.5",
+                "body": [
+                    {
+                        "type": "Container",
+                        "style": teams_cards.get_color_style(cfg.discarded_result_emoji),
+                        "items": [{"type": "TextBlock", "text": "AWS Access Request", "size": "large", "weight": "bolder"}],
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": f"Request expired after {cfg.request_expiration_hours} hour(s).",
+                        "wrap": True,
+                        "weight": "bolder",
+                    },
+                ],
+            }
+            try:
+                await slack_client.update_message(event.teams_activity_id, expired_card)  # type: ignore[arg-type]
+            except Exception as e:
+                logger.exception(f"Failed to update Teams card on expiry: {e}")
+
+        asyncio.run(_update_teams_card())
+        if event.elevator_request_id:
+            request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
+        logger.info("Teams card updated on expiry", extra={"event": event})
+        return
+
+    # Slack path
+    assert isinstance(slack_client, slack_sdk.WebClient)
     message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,
         message_ts=event.time_stamp,
         slack_client=slack_client,
     )
-    schedule.delete_schedule(scheduler_client, event.schedule_name)
     if message is None:
         logger.warning("Message was not found", extra={"event": event})
         return
@@ -568,14 +744,54 @@ def handle_discard_buttons_event(
 
 
 def handle_approvers_renotification_event(
-    event: ApproverNotificationEvent, slack_client: slack_sdk.WebClient, scheduler_client: EventBridgeSchedulerClient
+    event: ApproverNotificationEvent,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
+    scheduler_client: EventBridgeSchedulerClient,
 ) -> None:
+    schedule.delete_schedule(scheduler_client, event.schedule_name)
+
+    if cfg.chat_platform == "teams":
+        import asyncio
+
+        if not event.teams_conversation_id or not event.teams_activity_id:
+            logger.warning("Teams renotification event missing conversation/activity id", extra={"event": event})
+            return
+
+        assert isinstance(slack_client, TeamsNotifier)
+        time_to_wait = timedelta(seconds=event.time_to_wait_in_seconds)
+        if cfg.approver_renotification_backoff_multiplier != 0:
+            time_to_wait = time_to_wait * cfg.approver_renotification_backoff_multiplier
+
+        async def _send_teams_reminder() -> None:
+            try:
+                await slack_client.send_thread_reply(
+                    event.teams_activity_id,  # type: ignore[arg-type]
+                    "The request is still awaiting approval. The next reminder will be "
+                    f"sent in {time_to_wait.seconds // 60} minutes, "
+                    "unless the request is approved or discarded beforehand.",
+                )
+            except Exception as e:
+                logger.exception(f"Failed to send Teams thread reply for renotification: {e}")
+
+        asyncio.run(_send_teams_reminder())
+        logger.info("Teams renotification sent.")
+
+        schedule.schedule_approver_notification_event(
+            schedule_client=scheduler_client,
+            channel_id=event.channel_id,
+            message_ts=event.time_stamp,
+            time_to_wait=time_to_wait,
+            elevator_request_id=event.elevator_request_id,
+        )
+        return
+
+    # Slack path
+    assert isinstance(slack_client, slack_sdk.WebClient)
     message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,
         message_ts=event.time_stamp,
         slack_client=slack_client,
     )
-    schedule.delete_schedule(scheduler_client, event.schedule_name)
     if message is None:
         logger.warning("Message not found", extra={"event": event})
         return
