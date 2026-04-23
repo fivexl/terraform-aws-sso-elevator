@@ -18,6 +18,9 @@ import s3
 import schedule
 import slack_helpers
 import sso
+import teams_runtime
+from teams_deps import TeamsDependencies
+from teams_notifier import TeamsNotifier
 from entities.elevator_request import ElevatorRequestStatus
 from events import (
     ApproverNotificationEvent,
@@ -40,130 +43,28 @@ identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH
 scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
 
-
-class TeamsNotifier:
-    """Send/update Teams messages from the revoker Lambda (no turn context)."""
-
-    def __init__(self, cfg: config.Config) -> None:
-        self.app_id = cfg.teams_microsoft_app_id
-        self.app_password = cfg.teams_microsoft_app_password
-        self.tenant_id = cfg.teams_azure_tenant_id
-        self.conversation_id = cfg.teams_approval_conversation_id
-
-    def _get_adapter(self):  # noqa: ANN202
-        from botbuilder.core import BotFrameworkAdapterSettings, BotFrameworkAdapter  # type: ignore[import]
-
-        settings = BotFrameworkAdapterSettings(self.app_id, self.app_password)
-        return BotFrameworkAdapter(settings)
-
-    async def send_message(self, text: str, card: dict | None = None) -> str:
-        """Send a message to the approval channel. Returns activity_id."""
-        from botbuilder.schema import Activity, ActivityTypes, Attachment  # type: ignore[import]
-        from botbuilder.core import TurnContext  # type: ignore[import]
-        from botbuilder.schema import ConversationReference  # type: ignore[import]
-
-        adapter = self._get_adapter()
-        conversation_reference = {
-            "channelId": "msteams",
-            "conversation": {"id": self.conversation_id},
-            "serviceUrl": f"https://smba.trafficmanager.net/{self.tenant_id}/",
-        }
-
-        activity_id_holder: list[str] = []
-
-        async def callback(turn_context: TurnContext) -> None:
-            activity = Activity(type=ActivityTypes.message, text=text)
-            if card:
-                activity.attachments = [
-                    Attachment(
-                        content_type="application/vnd.microsoft.card.adaptive",
-                        content=card,
-                    )
-                ]
-            response = await turn_context.send_activity(activity)
-            if response and response.id:
-                activity_id_holder.append(response.id)
-
-        ref = ConversationReference(**conversation_reference)
-        await adapter.continue_conversation(ref, callback, self.app_id)
-        return activity_id_holder[0] if activity_id_holder else ""
-
-    async def update_message(self, activity_id: str, card: dict) -> None:
-        """Update an existing message (card) by activity_id."""
-        from botbuilder.schema import Activity, ActivityTypes, Attachment, ConversationReference  # type: ignore[import]
-        from botbuilder.core import TurnContext  # type: ignore[import]
-
-        adapter = self._get_adapter()
-        conversation_reference = {
-            "channelId": "msteams",
-            "conversation": {"id": self.conversation_id},
-            "serviceUrl": f"https://smba.trafficmanager.net/{self.tenant_id}/",
-        }
-
-        async def callback(turn_context: TurnContext) -> None:
-            activity = Activity(
-                type=ActivityTypes.message,
-                id=activity_id,
-                attachments=[
-                    Attachment(
-                        content_type="application/vnd.microsoft.card.adaptive",
-                        content=card,
-                    )
-                ],
-            )
-            await turn_context.update_activity(activity)
-
-        ref = ConversationReference(**conversation_reference)
-        await adapter.continue_conversation(ref, callback, self.app_id)
-
-    async def send_thread_reply(self, parent_activity_id: str, text: str) -> None:
-        """Send a reply in a conversation thread."""
-        from botbuilder.schema import Activity, ActivityTypes, ConversationReference  # type: ignore[import]
-        from botbuilder.core import TurnContext  # type: ignore[import]
-
-        adapter = self._get_adapter()
-        conversation_reference = {
-            "channelId": "msteams",
-            "conversation": {"id": self.conversation_id},
-            "serviceUrl": f"https://smba.trafficmanager.net/{self.tenant_id}/",
-        }
-
-        async def callback(turn_context: TurnContext) -> None:
-            activity = Activity(
-                type=ActivityTypes.message,
-                text=text,
-                reply_to_id=parent_activity_id,
-            )
-            await turn_context.send_activity(activity)
-
-        ref = ConversationReference(**conversation_reference)
-        await adapter.continue_conversation(ref, callback, self.app_id)
-
-    async def send_proactive_dm(self, conversation_reference: dict, text: str) -> None:
-        """Send a proactive DM using a stored ConversationReference."""
-        from botbuilder.schema import Activity, ActivityTypes, ConversationReference  # type: ignore[import]
-        from botbuilder.core import TurnContext  # type: ignore[import]
-
-        adapter = self._get_adapter()
-
-        async def callback(turn_context: TurnContext) -> None:
-            activity = Activity(type=ActivityTypes.message, text=text)
-            await turn_context.send_activity(activity)
-
-        ref = ConversationReference(**conversation_reference)
-        try:
-            await adapter.continue_conversation(ref, callback, self.app_id)
-        except Exception as e:
-            if "403" in str(e) or "Forbidden" in str(e):
-                logger.exception(f"Proactive DM blocked (403 Forbidden): {e}")
-            else:
-                raise
+s3_client = boto3.client("s3")  # type: ignore # noqa: PGH003
+if cfg.chat_platform == "teams":
+    teams_runtime.configure_teams_dependencies(
+        TeamsDependencies(
+            cfg=cfg,
+            org_client=org_client,  # type: ignore[has-type]
+            s3_client=s3_client,
+            sso_client=sso_client,  # type: ignore[has-type]
+            identity_store_client=identitystore_client,  # type: ignore[has-type]
+            schedule_client=scheduler_client,  # type: ignore[has-type]
+        )
+    )
 
 
 def get_notifier(cfg: config.Config) -> slack_sdk.WebClient | TeamsNotifier:
     """Return Slack WebClient or TeamsNotifier based on config."""
     if cfg.chat_platform == "teams":
-        return TeamsNotifier(cfg)
+        from teams_runtime import (  # noqa: PLC0415
+            get_teams_app,
+        )
+
+        return TeamsNotifier(cfg, get_teams_app)
     return slack_sdk.WebClient(token=cfg.slack_bot_token)
 
 

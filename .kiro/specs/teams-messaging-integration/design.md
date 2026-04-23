@@ -16,7 +16,7 @@ Teams code lives in the same files as Slack code (`main.py`, `group.py`, `revoke
 
 4. **Proactive messaging via DynamoDB**: Teams requires stored `ConversationReference` objects for proactive DMs. We store these in the existing DynamoDB table (same as `request_store`) with a `CONV_REF` entity type. Teams-specific card state (`teams_conversation_id`, `teams_activity_id`) is stored via a separate `update_teams_presentation` call — the `ElevatorRequestRecord` model itself is not changed.
 
-5. **Revoker platform routing**: The revoker Lambda checks `chat_platform` config and instantiates either a Slack `WebClient` or a Teams `BotFrameworkAdapter` for notifications. EventBridge scheduling logic is unchanged.
+5. **Revoker platform routing**: The revoker Lambda checks `chat_platform` config and instantiates either a Slack `WebClient` or a Teams `TeamsNotifier` backed by the Microsoft Teams SDK for Python (`get_teams_app()` from `teams_runtime`). EventBridge scheduling logic is unchanged.
 
 ## Architecture
 
@@ -65,7 +65,7 @@ graph LR
     TLH --> RS
 
     SLH -->|Slack Web API| SP
-    TLH -->|Bot Framework REST API| ABS
+    TLH -->|Teams SDK / Bot Connector| ABS
     TLH -->|Microsoft Graph API| GRAPH[Entra ID]
 
     SCH -->|EventBridge| REV[Lambda: revoker.py]
@@ -85,12 +85,12 @@ def lambda_handler(event, context):
     return slack_handler.handle(event, context)
 ```
 
-Slack handlers are synchronous (Slack Bolt pattern). Teams handlers are `async def` (Bot Framework requirement) and are run via `asyncio.run()` at the Lambda boundary. Both call the same synchronous business logic functions — `access_control`, `sso`, `request_store` etc. — without any changes to those modules.
+Slack handlers are synchronous (Slack Bolt pattern). Teams handlers are `async def` (Teams SDK / asyncio) and are run via `asyncio.run()` at the Lambda boundary. Both call the same synchronous business logic functions — `access_control`, `sso`, `request_store` etc. — without any changes to those modules.
 
 | Lambda | Slack | Teams |
 |--------|-------|-------|
 | **Requester handler** | `main.py` Slack Bolt handlers | `main.py` async Teams handlers |
-| **Revoker** | `revoker.py` with `slack_sdk.WebClient` | `revoker.py` with `TeamsNotifier` (selected by `chat_platform`) |
+| **Revoker** | `revoker.py` with `slack_sdk.WebClient` | `revoker.py` with `TeamsNotifier` + `teams_runtime` (selected by `chat_platform`) |
 
 ## Components and Interfaces
 
@@ -149,21 +149,21 @@ def get_color_style(emoji_config: str) -> str:
 
 #### `src/teams_users.py` — Teams User Resolution
 
-Handles user identity resolution via Microsoft Graph API and TeamsInfo.
+Handles user identity resolution via Microsoft Graph API and, when available, the Teams SDK conversation members API on the incoming context.
 
 ```python
-async def get_user_from_activity(turn_context: TurnContext) -> entities.teams.TeamsUser:
-    """Extract user info from incoming activity via TeamsInfo."""
+async def get_user_from_activity(turn_context: object) -> entities.teams.TeamsUser:
+    """Extract user info from incoming activity (ActivityContext with .api or compatible)."""
 
 async def get_user_by_email(graph_client, email: str) -> entities.teams.TeamsUser:
     """Look up a Teams user by email via Microsoft Graph API. Handles 429 retry."""
 
 async def check_user_in_channel(
-    turn_context: TurnContext,
+    turn_context: object,
     channel_id: str,
     user_aad_id: str,
 ) -> bool:
-    """Check if user is a member of the approval channel via TeamsInfo."""
+    """Check if user is a member of the approval channel via members API when present."""
 
 def build_mention(user_id: str, display_name: str) -> tuple[str, dict]:
     """Build mention text and Mention entity object for a Teams user."""
@@ -201,28 +201,19 @@ class TeamsUser(BaseModel):
 
 #### `src/main.py` and `src/group.py` — Teams handlers added inline
 
-Teams-specific handler functions are added to `main.py` and `group.py` alongside the existing Slack functions. They are `async def` because Bot Framework SDK is async. The single `lambda_handler` routes between Slack and Teams:
+Teams-specific handler functions live in `teams_handlers.py` (Microsoft Teams SDK `App` with `@app.on_message`, `@app.on_dialog_open`, `@app.on_dialog_submit`, `@app.on_card_action`). `group.py` still contains `handle_teams_group_task_submit` and `handle_teams_group_card_action` for group flows. The single `lambda_handler` routes between Slack and Teams:
 
 ```python
-# main.py
+# main.py (conceptual)
 
 # --- existing Slack Bolt app (unchanged) ---
 app = App(process_before_response=True)
 
-# --- new Teams bot ---
-class SSOElevatorBot(ActivityHandler):
-    async def on_message_activity(self, turn_context: TurnContext) -> None:
-        """Handle /request-access and /request-group commands."""
-
-    async def on_invoke_activity(self, turn_context: TurnContext) -> InvokeResponse:
-        """Handle task/fetch, task/submit, and adaptiveCard/action invokes."""
-
-    async def _handle_task_fetch(self, turn_context: TurnContext) -> TaskModuleResponse: ...
-    async def _handle_task_submit(self, turn_context: TurnContext) -> TaskModuleResponse: ...
-    async def _handle_card_action(self, turn_context: TurnContext) -> InvokeResponse: ...
+# Teams: handle_teams_event -> teams_runtime.process_teams_lambda_event -> App.server.handle_request
+# teams_runtime.get_teams_app() builds App, register_teams_app_handlers(app, deps), await app.initialize()
 
 async def handle_teams_event(event: dict, context) -> dict:
-    """Convert API Gateway event to Bot Framework activity and process it."""
+    """Map API Gateway event through Teams SDK handle_request (JWT + routes)."""
 
 # --- single entry point for both platforms ---
 def lambda_handler(event, context):
@@ -538,13 +529,13 @@ New entity types in the existing `request_store` table:
 | **403 Forbidden** (proactive DM blocked) | Log with `logger.exception()`, continue main flow. User won't receive DM but approval flow proceeds. |
 | **404 User Not Found** | Log warning, return `None`. Caller handles missing user (e.g., skip mention, use email as fallback). |
 
-### Bot Framework Errors
+### Teams SDK / connector errors
 
 | Error | Handling |
 |-------|----------|
-| **JWT validation failure** | SDK returns 401 automatically. No custom handling needed. |
-| **update_activity failure** | Log with `logger.exception()`, continue operation. Card may show stale state but request processing completes. |
-| **Timeout (>5s for SSO operations)** | Return immediate `InvokeResponse(200)` with "Processing..." status. Complete work asynchronously, then call `update_activity` with final result. |
+| **JWT validation failure** | SDK / `handle_request` returns 401. No custom handling needed. |
+| **update / send failure** | Log with `logger.exception()`, continue operation. Card may show stale state but request processing completes. |
+| **Timeout (>5s for SSO operations)** | Return immediate success response for invokes where required. Complete work asynchronously, then update the card. |
 
 ### Proactive Messaging Errors
 
@@ -558,16 +549,16 @@ New entity types in the existing `request_store` table:
 All Teams handler functions use the same error handling pattern as the existing `@handle_errors` decorator in Slack, adapted for async:
 
 ```python
-async def handle_errors_teams(turn_context: TurnContext, func, cfg):
+async def handle_errors_teams(ctx, func, cfg):
     try:
         return await func()
     except SSOUserNotFound:
-        await turn_context.send_activity(
+        await ctx.send(
             f"<at>{user_name}</at> Your request failed because SSO Elevator could not find your user in AWS SSO."
         )
     except Exception as e:
         logger.exception(f"Error in Teams handler: {e}")
-        await turn_context.send_activity("An unexpected error occurred. Check the logs for details.")
+        await ctx.send("An unexpected error occurred. Check the logs for details.")
 ```
 
 ## Testing Strategy
@@ -611,14 +602,14 @@ Example-based tests for specific scenarios and edge cases:
 ### Integration Tests
 
 - **Lambda handler end-to-end**: Mock API Gateway event → `lambda_handler` → verify response structure
-- **Revoker platform routing**: `chat_platform=teams` → verify Bot Framework adapter used instead of Slack WebClient
+- **Revoker platform routing**: `chat_platform=teams` → verify `TeamsNotifier` / `get_teams_app` used instead of Slack `WebClient`
 - **EventBridge event compatibility**: Verify events with `TeamsUser.to_slack_user()` serialize/deserialize correctly
 
 ### Mocking Strategy (per workspace rules)
 
 All external dependencies are mocked:
 - **AWS services**: boto3 clients (SSO, Organizations, S3, EventBridge, DynamoDB)
-- **Bot Framework SDK**: `TurnContext`, `TeamsInfo`, `BotFrameworkAdapter`
+- **Teams SDK**: `ActivityContext`, `App`, `process_teams_lambda_event` (mocked in tests)
 - **Microsoft Graph API**: Graph client responses
 - **Slack SDK**: Not needed for Teams tests (separate handler)
 
@@ -627,9 +618,8 @@ All external dependencies are mocked:
 New Python packages required (minimum versions; exact versions are pinned when added to `src/requirements.txt`):
 
 ```
-botbuilder-core>=4.14.0        # Bot Framework core SDK
-botbuilder-schema>=4.14.0      # Activity/Entity types
-botbuilder-integration-aiohttp>=4.14.0  # HTTP adapter
+microsoft-teams-apps           # Microsoft Teams SDK for Python (App, routing)
+microsoft-teams-api            # Types and REST helpers
 msgraph-sdk>=1.0.0             # Microsoft Graph client
 azure-identity>=1.15.0         # Authentication (for Graph API)
 ```

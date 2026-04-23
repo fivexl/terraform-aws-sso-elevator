@@ -1,4 +1,4 @@
-"""Teams user resolution via Microsoft Graph API and Bot Framework TeamsInfo.
+"""Teams user resolution via Microsoft Graph API and conversation members API.
 
 Handles user identity resolution for the Teams integration.
 """
@@ -7,50 +7,56 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING, cast
 
 import entities.teams
+
+if TYPE_CHECKING:
+    import config as app_config
+    from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_sso_admin import SSOAdminClient
 
 logger = logging.getLogger(__name__)
 
 # Maximum retries for Graph API 429 responses
 _MAX_GRAPH_RETRIES = 3
+# HTTP 429 Too Many Requests (Graph rate limit)
+_HTTP_STATUS_TOO_MANY_REQUESTS = 429
 
 
-async def get_user_from_activity(turn_context) -> entities.teams.TeamsUser:
-    """Extract user info from incoming activity via TeamsInfo.
-
-    Args:
-        turn_context: Bot Framework TurnContext with the incoming activity.
-
-    Returns:
-        TeamsUser populated from the activity's from_property.
-    """
-    from botbuilder.core.teams import TeamsInfo  # type: ignore[import]
-
+async def get_user_from_activity(turn_context: object) -> entities.teams.TeamsUser:
+    """Extract user info from an incoming activity (ActivityContext or legacy TurnContext)."""
     activity = turn_context.activity
-    from_prop = activity.from_property
+    from_prop = getattr(activity, "from_property", None) or getattr(activity, "from_", None)
+    if from_prop is None:
+        raise ValueError("Activity has no sender (from)")
 
-    # Try to get full member info via TeamsInfo for email
-    try:
-        member = await TeamsInfo.get_member(turn_context, from_prop.id)
-        email = getattr(member, "email", "") or ""
-        display_name = getattr(member, "name", "") or from_prop.name or ""
-        aad_object_id = getattr(member, "aad_object_id", "") or getattr(from_prop, "aad_object_id", "") or ""
-    except Exception as e:
-        logger.exception(f"Failed to get member info via TeamsInfo, falling back to activity data: {e}")
+    conv = getattr(activity, "conversation", None)
+    if conv and getattr(conv, "id", None) and hasattr(turn_context, "api"):
+        try:
+            member = await turn_context.api.conversations.members(cast("str", conv.id)).get_by_id(str(from_prop.id))
+            email = str(getattr(member, "email", None) or "")
+            display_name = str(getattr(member, "name", None) or from_prop.name or "")
+            aad_object_id = str(getattr(member, "aad_object_id", None) or getattr(from_prop, "aad_object_id", None) or "")
+        except Exception as e:
+            logger.exception("Failed to get member from conversation API, using activity: %s", e)
+            email = ""
+            display_name = from_prop.name or ""
+            aad_object_id = str(getattr(from_prop, "aad_object_id", None) or "")
+    else:
         email = ""
         display_name = from_prop.name or ""
-        aad_object_id = getattr(from_prop, "aad_object_id", "") or ""
+        aad_object_id = str(getattr(from_prop, "aad_object_id", None) or "")
 
     return entities.teams.TeamsUser(
-        id=from_prop.id,
+        id=str(from_prop.id),
         aad_object_id=aad_object_id,
         email=email,
         display_name=display_name,
     )
 
 
-async def get_user_by_email(graph_client, email: str) -> entities.teams.TeamsUser:
+async def get_user_by_email(graph_client: object, email: str) -> entities.teams.TeamsUser:
     """Look up a Teams user by email via Microsoft Graph API.
 
     Handles 429 rate limiting with up to _MAX_GRAPH_RETRIES retries,
@@ -66,14 +72,11 @@ async def get_user_by_email(graph_client, email: str) -> entities.teams.TeamsUse
     Raises:
         Exception: If user not found or retries exhausted.
     """
-    import httpx  # type: ignore[import]
 
     last_error: Exception | None = None
     for attempt in range(_MAX_GRAPH_RETRIES):
         try:
-            result = await graph_client.users.get(
-                request_configuration=_build_user_filter_config(email)
-            )
+            result = await graph_client.users.get(request_configuration=_build_user_filter_config(email))
             users = result.value if result and result.value else []
             if not users:
                 raise ValueError(f"No Teams user found with email: {email}")
@@ -98,17 +101,16 @@ async def get_user_by_email(graph_client, email: str) -> entities.teams.TeamsUse
     raise last_error or RuntimeError(f"Failed to get user by email: {email}")
 
 
-def _build_user_filter_config(email: str):
+def _build_user_filter_config(email: str) -> object | None:
     """Build Graph API request configuration with email filter."""
     try:
         from msgraph.generated.users.users_request_builder import UsersRequestBuilder  # type: ignore[import]
+        from kiota_abstractions.base_request_configuration import RequestConfiguration  # type: ignore[import]
 
         query_params = UsersRequestBuilder.UsersRequestBuilderGetQueryParameters(
             filter=f"mail eq '{email}' or userPrincipalName eq '{email}'",
             select=["id", "mail", "userPrincipalName", "displayName"],
         )
-        from msgraph.generated.models.o_data_errors.o_data_error import ODataError  # type: ignore[import]
-        from kiota_abstractions.base_request_configuration import RequestConfiguration  # type: ignore[import]
 
         return RequestConfiguration(query_parameters=query_params)
     except ImportError:
@@ -122,7 +124,7 @@ def _extract_retry_after(error: Exception) -> float | None:
         inner = getattr(error, attr, None)
         if inner is not None:
             status = getattr(inner, "status_code", None) or getattr(inner, "status", None)
-            if status == 429:
+            if status == _HTTP_STATUS_TOO_MANY_REQUESTS:
                 headers = getattr(inner, "headers", {}) or {}
                 retry_after = headers.get("Retry-After") or headers.get("retry-after")
                 if retry_after:
@@ -137,28 +139,20 @@ def _extract_retry_after(error: Exception) -> float | None:
     return None
 
 
-async def check_user_in_channel(turn_context, channel_id: str, user_aad_id: str) -> bool:
-    """Check if user is a member of the approval channel via TeamsInfo.
-
-    Args:
-        turn_context: Bot Framework TurnContext.
-        channel_id: Teams channel ID to check membership in.
-        user_aad_id: AAD object ID of the user to check.
-
-    Returns:
-        True if user is in the channel, False otherwise (including on error).
-    """
-    try:
-        from botbuilder.core.teams import TeamsInfo  # type: ignore[import]
-
-        members = await TeamsInfo.get_team_members(turn_context)
-        for member in members:
-            if getattr(member, "aad_object_id", None) == user_aad_id:
-                return True
-        return False
-    except Exception as e:
-        logger.exception(f"Failed to check channel membership, treating user as non-member: {e}")
-        return False
+async def check_user_in_channel(turn_context: object, channel_id: str, user_aad_id: str) -> bool:
+    """Check if user is a member of the given channel (Teams SDK or legacy context)."""
+    if hasattr(turn_context, "api"):
+        try:
+            members = await turn_context.api.conversations.members(channel_id).get()
+            for member in members:
+                if getattr(member, "aad_object_id", None) == user_aad_id:
+                    return True
+            return False
+        except Exception as e:
+            logger.exception("Failed to check channel membership: %s", e)
+            return False
+    logger.debug("No Teams API on context; skipping channel membership check")
+    return False
 
 
 def build_mention(user_id: str, display_name: str) -> tuple[str, dict]:
@@ -186,11 +180,11 @@ def build_mention(user_id: str, display_name: str) -> tuple[str, dict]:
 
 
 async def resolve_principal_to_teams_user(
-    graph_client,
+    graph_client: object,
     sso_user_id: str,
-    sso_client,
-    identity_store_client,
-    cfg,
+    sso_client: "SSOAdminClient",
+    identity_store_client: "IdentityStoreClient",
+    cfg: "app_config.Config",
 ) -> entities.teams.TeamsUser | None:
     """Resolve SSO principal ID to a Teams user via email and Microsoft Graph API.
 

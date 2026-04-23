@@ -4,15 +4,15 @@
 
 SSO Elevator is an application for managing temporary access to AWS SSO (Identity Center) via a messaging platform. Currently, the application works exclusively through Slack: users request access to AWS accounts and groups, approvers approve or discard requests, and the system automatically revokes permissions when they expire.
 
-The goal of this feature is to adapt the existing SSO Elevator workflow for Microsoft Teams while preserving identical behavior. Business logic (access_control, SSO operations, revocation scheduling) remains unchanged — only the transport and UI layer changes: Block Kit → Adaptive Cards, Slack Bolt → Bot Framework, Slack Web API → Bot Framework REST API + Microsoft Graph.
+The goal of this feature is to adapt the existing SSO Elevator workflow for Microsoft Teams while preserving identical behavior. Business logic (access_control, SSO operations, revocation scheduling) remains unchanged — only the transport and UI layer changes: Block Kit → Adaptive Cards, Slack Bolt → Microsoft Teams SDK for Python, Slack Web API → Teams / Bot Connector APIs + Microsoft Graph.
 
 ## Glossary
 
 - **SSO_Elevator**: Application for managing temporary access to AWS SSO via a messaging platform
-- **Teams_Bot**: Bot Framework component (ActivityHandler) that processes incoming messages and invoke requests from Microsoft Teams; implemented as a standalone `teams_handler.py` module (parallel driver, not an abstraction over Slack)
+- **Teams_Bot**: Microsoft Teams SDK for Python `App` and registered handlers that process incoming messages, dialog (task), and card action activities from Microsoft Teams; logic in `teams_handlers.py` and related `teams_*.py` modules (parallel driver, not an abstraction over Slack)
 - **Adaptive_Card**: Microsoft Teams UI card format (equivalent of Block Kit in Slack)
 - **Task_Module**: Pop-up dialog window in Teams for data input (equivalent of Slack Modal)
-- **Bot_Framework_SDK**: Python SDK (`botbuilder-core`) for building Microsoft Teams bots
+- **Teams_Python_SDK**: Microsoft Teams SDK for Python packages (`microsoft-teams-apps`, `microsoft-teams-api` from the [teams.py](https://github.com/microsoft/teams.py) monorepo)
 - **Microsoft_Graph_API**: Microsoft REST API for retrieving user information from Entra ID (Azure AD)
 - **Revoker**: Lambda function that processes scheduled permission revocation events and notifications; selects Slack or Teams transport at runtime based on `chat_platform`
 - **Parallel_Driver**: Architectural pattern used in this integration — `teams_handler.py` mirrors `main.py`/`group.py` for Teams, calling the same business logic functions. No shared abstraction layer over Slack and Teams exists; the existing Slack code is untouched.

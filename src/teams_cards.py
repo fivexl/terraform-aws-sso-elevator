@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import copy
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
-import entities.aws
+if TYPE_CHECKING:
+    import entities.aws
 
 _DURATION_PARTS = 3
 
@@ -23,6 +25,7 @@ def parse_duration_choice(duration_str: str) -> timedelta:
     except (ValueError, TypeError, OverflowError):
         pass
     return timedelta(hours=1)
+
 
 # Mapping from Slack emoji config values to Adaptive Card Container styles
 _EMOJI_TO_STYLE: dict[str, str] = {
@@ -152,7 +155,7 @@ def build_group_access_form(
     }
 
 
-def build_approval_card(
+def build_approval_card(  # noqa: PLR0913
     requester_name: str,
     account: entities.aws.Account | None,
     group: entities.aws.SSOGroup | None,

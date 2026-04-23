@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 import boto3
 from mypy_boto3_identitystore import IdentityStoreClient
@@ -22,6 +23,9 @@ import teams_cards
 from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from entities.teams import TeamsUser
 from errors import handle_errors
+
+if TYPE_CHECKING:
+    from teams_notifier import TeamsNotifier
 
 logger = config.get_logger(service="main")
 cfg = config.get_config()
@@ -307,9 +311,19 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
     turn_context,  # noqa: ANN001, ARG001
     data: dict,
     user: TeamsUser,
+    notifier_factory: Callable[[], "TeamsNotifier"] | None = None,
 ) -> dict:
     """Parse group task/submit, run access control, post approval card, auto-execute if grant."""
-    from revoker import TeamsNotifier  # type: ignore[import]
+    if notifier_factory is None:
+        from revoker import TeamsNotifier  # type: ignore[import]
+        from teams_runtime import get_teams_app  # type: ignore[import]
+
+        def _default_teams_notifier() -> "TeamsNotifier":
+            return TeamsNotifier(config.get_config(), get_teams_app)
+
+        nf: Callable[[], "TeamsNotifier"] = _default_teams_notifier
+    else:
+        nf = notifier_factory
 
     permission_duration = teams_cards.parse_duration_choice(str(data.get("duration", "1:00:00")))
     reason = str(data.get("reason", ""))
@@ -363,7 +377,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
     )
 
     try:
-        notifier = TeamsNotifier(cfg)
+        notifier = nf()
         activity_id = await notifier.send_message(text="New access request", card=card)
         if activity_id:
             request_store.update_teams_presentation(elevator_id, cfg.teams_approval_conversation_id, activity_id)
@@ -413,7 +427,7 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
     update_approval_card: Callable[..., Awaitable[None]],
 ) -> None:
     """Handle Approve/Discard on a Teams group approval card (Slack: handle_group_button_click)."""
-    from botbuilder.schema import Activity  # type: ignore[import]
+    import teams_activity_helpers  # noqa: PLC0415
 
     requester_slack = entities.slack.User(
         id=rec.requester_slack_id,
@@ -455,7 +469,7 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             permission_set_name=None,
             group_id=rec.group_id,
         )
-        await turn_context.send_activity(Activity(type="message", text=f"{approver.display_name} you cannot approve this request."))
+        await teams_activity_helpers.teams_send_text_message(turn_context, f"{approver.display_name} you cannot approve this request.")
         return
 
     await update_approval_card(

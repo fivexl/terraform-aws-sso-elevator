@@ -13,15 +13,15 @@ User → Slack Client → Slack Platform (HTTP POST) → Lambda (Slack Bolt) →
                                                   ← Slack Web API (chat.postMessage, views.open, etc.)
 ```
 
-### Teams (target)
+### Teams (implemented)
 
 ```
-User → Teams Client → Azure Bot Service (HTTP POST) → Lambda or Azure Function (Bot Framework SDK) → AWS SSO / EventBridge
-                                                     ← Bot Framework REST API (send activity, update activity, etc.)
-                                                     ← Microsoft Graph API (user lookup)
+User → Teams Client → Azure Bot Service (HTTP POST) → Lambda (Microsoft Teams SDK for Python) → AWS SSO / EventBridge
+                                                     ← Teams / Bot Connector REST (via SDK: send/update activities)
+                                                     ← Microsoft Graph API (user lookup by email; optional conversation members)
 ```
 
-Key difference: Slack uses **one HTTPS endpoint + Bolt SDK**. Teams uses **Azure Bot registration + Bot Framework SDK** (Python: `botbuilder-core`). Both can run on AWS Lambda.
+Key difference: Slack uses **one HTTPS endpoint + Bolt SDK**. Teams uses **Azure Bot registration + Microsoft Teams SDK for Python** (`microsoft-teams-apps`, `microsoft-teams-api` — see [teams.py](https://github.com/microsoft/teams.py)). The Lambda entry maps API Gateway events to `App.server.handle_request` in `src/teams_runtime.py`. Both can run on AWS Lambda.
 
 ---
 
@@ -40,15 +40,7 @@ Key difference: Slack uses **one HTTPS endpoint + Bolt SDK**. Teams uses **Azure
 - No direct equivalent of Slack's "lightning bolt" global shortcut; closest is a **bot command** or a **static tab** with a form
 - Alternative: **Adaptive Card** pinned in a channel tab with a "Request Access" button
 
-**Implementation:**
-```python
-# Bot Framework equivalent of shortcut handler
-async def on_message_activity(self, turn_context: TurnContext):
-    text = turn_context.activity.text.strip()
-    if text == "/request-access":
-        # Open task module (equivalent of views.open)
-        await self._show_access_request_form(turn_context)
-```
+**Implementation (SSO Elevator):** command handling is registered on the Teams `App` in `src/teams_handlers.py` (`@app.on_message`, `@app.on_dialog_open`, `@app.on_dialog_submit`, `@app.on_card_action`). The Lambda path is `handle_teams_event` → `process_teams_lambda_event` in `src/teams_runtime.py`.
 
 ---
 
@@ -96,9 +88,9 @@ Teams (equivalent):
 
 | Slack | Code | Teams equivalent |
 |-------|------|------------------|
-| `client.chat_postMessage(channel, text, blocks)` | Used 15+ times across `main.py`, `group.py`, `revoker.py` | `turn_context.send_activity(Activity(type="message", attachments=[card]))` |
-| `client.chat_postMessage(thread_ts=ts)` | Thread replies | `turn_context.send_activity(Activity(conversation=ConversationReference(id=reply_chain_id)))` |
-| `client.chat_update(channel, ts, blocks, text)` | Update message (color coding, remove buttons) | `turn_context.update_activity(activity_id, new_activity)` |
+| `client.chat_postMessage(channel, text, blocks)` | Used 15+ times across `main.py`, `group.py`, `revoker.py` | `ActivityContext` / `TeamsNotifier` + `MessageActivityInput` (or helpers in `teams_activity_helpers.py`) |
+| `client.chat_postMessage(thread_ts=ts)` | Thread replies | `reply_to_id` on activity / `TeamsNotifier.send_thread_reply` |
+| `client.chat_update(channel, ts, blocks, text)` | Update message (color coding, remove buttons) | `TeamsNotifier.update_message` or `ctx.api.conversations.activities(...).update` |
 
 **Message structure mapping:**
 
@@ -191,7 +183,7 @@ await turn_context.update_activity(Activity(
 
 | Slack | Code | Teams equivalent |
 |-------|------|------------------|
-| `client.users_info(user=id)` → email, real_name | `slack_helpers.py:get_user` | `turn_context.activity.from_property.aad_object_id` → Graph `/users/{id}` |
+| `client.users_info(user=id)` → email, real_name | `slack_helpers.py:get_user` | `activity` sender + `ctx.api.conversations.members(...).get_by_id` when available, else Graph by email in `src/teams_users.py` |
 | `client.users_lookupByEmail(email=email)` | `slack_helpers.py:get_user_by_email` | Graph `GET /users?$filter=mail eq '{email}'` or `GET /users/{email}` |
 | `entities.slack.User(id, email, real_name)` | `entities/slack.py` | `entities.teams.User(id, aad_object_id, email, display_name)` |
 
@@ -201,30 +193,7 @@ await turn_context.update_activity(Activity(
 - Slack: one API call. Graph: may need **two** calls (get AAD ID from Teams context, then get email from Graph).
 - Teams provides `aad_object_id` directly in the activity — this can be used to query Graph without email lookup.
 
-**Implementation:**
-```python
-# Teams equivalent of get_user
-async def get_user(turn_context: TurnContext) -> TeamsUser:
-    member = await TeamsInfo.get_member(turn_context, turn_context.activity.from_property.id)
-    return TeamsUser(
-        id=member.id,
-        aad_object_id=member.aad_object_id,
-        email=member.email,
-        display_name=member.name,
-    )
-
-# Teams equivalent of get_user_by_email (via Graph)
-async def get_user_by_email(graph_client, email: str) -> TeamsUser:
-    result = await graph_client.users.get(
-        request_configuration=UsersRequestBuilder.UsersRequestBuilderGetRequestConfiguration(
-            query_parameters=UsersRequestBuilder.UsersRequestBuilderGetQueryParameters(
-                filter=f"mail eq '{email}'"
-            )
-        )
-    )
-    user = result.value[0]
-    return TeamsUser(id=user.id, aad_object_id=user.id, email=user.mail, display_name=user.display_name)
-```
+**Implementation:** see `get_user_from_activity` and `get_user_by_email` in `src/teams_users.py` (conversation members API when the SDK exposes it; Graph for email lookup and revoker resolution).
 
 ---
 
@@ -259,27 +228,11 @@ activity = Activity(
 
 **Key differences:**
 - Slack: DM is just `chat.postMessage(channel=user_id)`. Simple.
-- Teams: **proactive messaging** requires storing a `ConversationReference` and using `adapter.continue_conversation()`. More complex.
+- Teams: **proactive messaging** uses a `ConversationReference`–compatible structure and the SDK `activity_sender` (see `src/teams_notifier.py`); not the legacy `BotFrameworkAdapter.continue_conversation` call path.
 - Teams: org policies may **block** proactive 1:1 messages from bots. Need to handle `403 Forbidden`.
 - Teams: bot must be **installed** for the user (personal scope) to send proactive messages.
 
-**Implementation:**
-```python
-# Store conversation reference when user first interacts
-conversation_references = {}  # Or DynamoDB
-
-async def save_conversation_reference(turn_context: TurnContext):
-    ref = TurnContext.get_conversation_reference(turn_context.activity)
-    conversation_references[turn_context.activity.from_property.aad_object_id] = ref
-
-# Send proactive DM
-async def send_dm(adapter, app_id, user_aad_id, text):
-    ref = conversation_references.get(user_aad_id)
-    if ref:
-        async def callback(turn_context: TurnContext):
-            await turn_context.send_activity(text)
-        await adapter.continue_conversation(ref, callback, app_id)
-```
+**Implementation:** `TeamsNotifier.send_proactive_dm` in `src/teams_notifier.py` (initialized with shared `get_teams_app()` from `teams_runtime`).
 
 ---
 
@@ -306,7 +259,7 @@ await turn_context.send_activity(Activity(
 
 | Slack | Code | Teams equivalent |
 |-------|------|------------------|
-| `client.chat_update(channel, ts, blocks, text)` | Color coding updates, button removal | `adapter.update_activity(turn_context, updated_activity)` |
+| `client.chat_update(channel, ts, blocks, text)` | Color coding updates, button removal | `TeamsNotifier.update_message` or conversations activities API |
 | Identify message by `channel + ts` | Throughout codebase | Identify by `activity.id` + `conversation.id` |
 
 **Used for:**
@@ -324,11 +277,11 @@ await turn_context.send_activity(Activity(
 | `schedule_discard_buttons_event` | `schedule.py` → EventBridge → revoker Lambda | **Same** EventBridge mechanism, revoker calls Teams Bot API instead of Slack API |
 | `schedule_approver_notification_event` | `schedule.py` → EventBridge → revoker Lambda | **Same** — post thread reply via Bot Framework |
 | `handle_discard_buttons_event` | `revoker.py` — `chat.update` to remove buttons | `update_activity` with card without buttons |
-| `handle_approvers_renotification_event` | `revoker.py` — `chat.postMessage` in thread | `send_activity` as reply |
+| `handle_approvers_renotification_event` | `revoker.py` — `chat.postMessage` in thread | `TeamsNotifier.send_thread_reply` |
 
-**No change needed** in EventBridge Scheduler logic. Only the **notification delivery** changes: instead of `slack_client.chat_postMessage`, use Bot Framework `send_activity` / `update_activity`.
+**No change needed** in EventBridge Scheduler logic. Only the **notification delivery** changes: instead of `slack_client.chat_postMessage`, use `TeamsNotifier` (Teams SDK on top of the same app credentials as `main`).
 
-The revoker Lambda needs a **Teams bot adapter** initialized with bot credentials instead of (or in addition to) the Slack WebClient.
+The revoker Lambda uses `configure_teams_dependencies` + `get_teams_app` so it shares the same initialized Teams `App` pattern as the requester handler.
 
 ---
 
@@ -337,7 +290,7 @@ The revoker Lambda needs a **Teams bot adapter** initialized with bot credential
 | Slack | Teams |
 |-------|-------|
 | `X-Slack-Signature` + HMAC-SHA256 | JWT token validation (Azure Bot Service) |
-| Slack Bolt handles automatically | Bot Framework SDK handles automatically |
+| Slack Bolt handles automatically | Teams `App` / `handle_request` validates Bot Framework service auth |
 | One secret (`SLACK_SIGNING_SECRET`) | App ID + App Password (or Managed Identity) |
 
 Teams authentication:
@@ -444,13 +397,13 @@ Teams authentication:
 ### Phase 1: Abstraction layer
 1. Extract `entities.slack.User` → generic `entities.User(id, email, display_name, platform)`
 2. Create `MessagingClient` interface with methods: `send_message`, `update_message`, `send_dm`, `get_user`, `get_user_by_email`, `check_user_in_channel`, `open_form`, `update_form`
-3. Implement `SlackMessagingClient` (wraps current `WebClient` calls) and `TeamsMessagingClient` (wraps Bot Framework)
+3. Implement `SlackMessagingClient` (wraps current `WebClient` calls) and `TeamsMessagingClient` (wraps Teams SDK / `TeamsNotifier` where a shared abstraction is used)
 
-### Phase 2: Teams bot
-1. Create `src/teams_bot.py` with Bot Framework `ActivityHandler`
-2. Implement command handlers (`/request-access`, `/request-group`)
-3. Implement `on_invoke_activity` for task modules and card actions
-4. Create Adaptive Card templates (equivalent of Block Kit views)
+### Phase 2: Teams app (as implemented)
+1. `src/teams_runtime.py` — `App` construction, `process_teams_lambda_event` for API Gateway
+2. `src/teams_handlers.py` — command handlers (`/request-access`, `/request-group`), dialog and card action routes
+3. `src/teams_notifier.py` — channel posts, updates, thread replies, proactive DMs
+4. `src/teams_cards.py` — Adaptive Card JSON
 
 ### Phase 3: Configuration
 1. Add `messaging_platform: "slack" | "teams"` config parameter
@@ -471,10 +424,9 @@ Teams authentication:
 - `slack-sdk` — Slack Web API client
 
 ### New (Teams)
-- `botbuilder-core` — Bot Framework core
-- `botbuilder-integration-aiohttp` — HTTP adapter (or custom Lambda adapter)
-- `azure-identity` — Authentication (optional, for Managed Identity)
-- `msgraph-sdk` — Microsoft Graph client (for user lookup by email)
+- `microsoft-teams-apps` / `microsoft-teams-api` — Microsoft Teams SDK for Python ([teams.py](https://github.com/microsoft/teams.py))
+- `msgraph-sdk` — Microsoft Graph client (user lookup by email; `teams_users.py`)
+- `azure-identity` — used via Graph / Kiota where applicable
 
 ---
 
@@ -490,8 +442,8 @@ Teams authentication:
 | DMs | Simple | Proactive messaging | High |
 | Threading | thread_ts | Reply chains | Low |
 | Message updates | chat.update | update_activity | Low |
-| Auth | HMAC | JWT / Bot Framework | Low (SDK handles) |
+| Auth | HMAC | JWT (Bot connector; Teams SDK handles) | Low |
 | Scheduling | EventBridge (unchanged) | EventBridge (unchanged) | None |
 | Business logic | Unchanged | Unchanged | None |
 
-**Business logic** and **AWS integrations** need **not** be duplicated. The split is: **Slack driver** / **Teams driver** → shared **domain layer** (access_control, sso, schedule, s3). UI and transport move (Block Kit → Adaptive Card, Bolt → Bot Framework) and do **not** match line for line, but every Slack capability has a Teams equivalent or acceptable alternative.
+**Business logic** and **AWS integrations** need **not** be duplicated. The split is: **Slack driver** / **Teams driver** → shared **domain layer** (access_control, sso, schedule, s3). UI and transport move (Block Kit → Adaptive Card, Bolt → Microsoft Teams SDK for Python) and do **not** match line for line, but every Slack capability has a Teams equivalent or acceptable alternative.

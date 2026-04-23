@@ -66,9 +66,7 @@ def test_property_form_card_choice_set_counts(
     acc_card = teams_cards.build_account_access_form(accounts, psets, dur_opts)
     assert _count_type_in_body(acc_card.get("body"), "Input.ChoiceSet") == 3
 
-    groups = [
-        aws.SSOGroup(id=f"group-id-{i}", name=f"G{i}", identity_store_id="is", description=None) for i in range(n_groups)
-    ]
+    groups = [aws.SSOGroup(id=f"group-id-{i}", name=f"G{i}", identity_store_id="is", description=None) for i in range(n_groups)]
     gcard = teams_cards.build_group_access_form(groups, dur_opts)
     assert _count_type_in_body(gcard.get("body"), "Input.ChoiceSet") == 2
 
@@ -96,9 +94,7 @@ def test_property_duration_parse_roundtrip(h: int, m: int, s: int) -> None:
     duration=st.sampled_from(["1:00:00", "2:30:00"]),
     style=_STYLE_CHOICES,
 )
-def test_property_approval_card_account_facts(
-    requester: str, acc_id: str, role: str, reason: str, duration: str, style: str
-) -> None:
+def test_property_approval_card_account_facts(requester: str, acc_id: str, role: str, reason: str, duration: str, style: str) -> None:
     """Property 3: account approval card FactSet contains required titles and values."""
     acc_digits = (acc_id * 2)[:12] if acc_id else "0" * 12
     account = aws.Account(id=acc_digits, name="acctname")
@@ -235,9 +231,7 @@ def test_property_mention_and_teamsuser_slack(user_id: str, display_name: str) -
     rid=st.text(alphabet="0123456789abcdef", min_size=8, max_size=20),
     aid=st.text(alphabet="0123456789abcdef", min_size=8, max_size=20),
 )
-def test_property_audit_teams_user_fields(
-    e_req: str, e_app: str, rid: str, aid: str
-) -> None:
+def test_property_audit_teams_user_fields(e_req: str, e_app: str, rid: str, aid: str) -> None:
     """Property 9: AuditEntry from Teams-compatible slack users has non-empty id/email fields."""
     t_req = TeamsUser(id=rid, aad_object_id="a", email=e_req, display_name="R")
     t_app = TeamsUser(id=aid, aad_object_id="b", email=e_app, display_name="A")
