@@ -18,7 +18,6 @@ import s3
 import schedule
 import slack_helpers
 import sso
-import teams_runtime
 from teams_deps import TeamsDependencies
 from teams_notifier import TeamsNotifier
 from entities.elevator_request import ElevatorRequestStatus
@@ -44,34 +43,34 @@ scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
 
 s3_client = boto3.client("s3")  # type: ignore # noqa: PGH003
-if cfg.chat_platform == "teams":
-    teams_runtime.configure_teams_dependencies(
-        TeamsDependencies(
-            cfg=cfg,
-            org_client=org_client,  # type: ignore[has-type]
-            s3_client=s3_client,
-            sso_client=sso_client,  # type: ignore[has-type]
-            identity_store_client=identitystore_client,  # type: ignore[has-type]
-            schedule_client=scheduler_client,  # type: ignore[has-type]
-        )
-    )
+
+# Slack WebClient or TeamsNotifier — built on first ``lambda_handler`` (Teams stack loads only in Teams mode).
+_notifier: list[slack_sdk.WebClient | TeamsNotifier | None] = [None]
 
 
-def get_notifier(cfg: config.Config) -> slack_sdk.WebClient | TeamsNotifier:
-    """Return Slack WebClient or TeamsNotifier based on config."""
-    if cfg.chat_platform == "teams":
-        from teams_runtime import (  # noqa: PLC0415
-            get_teams_app,
-        )
+def _get_notifier() -> slack_sdk.WebClient | TeamsNotifier:
+    if _notifier[0] is None:
+        if cfg.chat_platform == "teams":
+            import teams_runtime
 
-        return TeamsNotifier(cfg, get_teams_app)
-    return slack_sdk.WebClient(token=cfg.slack_bot_token)
-
-
-slack_client = get_notifier(cfg)
+            teams_runtime.configure_teams_dependencies(
+                TeamsDependencies(
+                    cfg=cfg,
+                    org_client=org_client,  # type: ignore[has-type]
+                    s3_client=s3_client,
+                    sso_client=sso_client,  # type: ignore[has-type]
+                    identity_store_client=identitystore_client,  # type: ignore[has-type]
+                    schedule_client=scheduler_client,  # type: ignore[has-type]
+                )
+            )
+            _notifier[0] = TeamsNotifier(cfg, teams_runtime.get_teams_app)  # type: ignore[assignment]
+        else:
+            _notifier[0] = slack_sdk.WebClient(token=cfg.slack_bot_token)  # type: ignore[assignment]
+    return _notifier[0]  # type: ignore[return-value]
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
+    slack_client = _get_notifier()
     try:
         parsed_event = Event.model_validate(event).root
     except ValidationError as e:

@@ -23,9 +23,7 @@ log = logging.getLogger(__name__)
 TeamsGetApp = Callable[[], Awaitable[Any]]
 
 
-def _ref_for_conversation(
-    app_id: str, tenant_id: str, conversation_id: str, service_url: str | None = None
-) -> ConversationReference:
+def _ref_for_conversation(app_id: str, tenant_id: str, conversation_id: str, service_url: str | None = None) -> ConversationReference:
     su = (service_url or f"https://smba.trafficmanager.net/{tenant_id}/").rstrip("/")
     return ConversationReference(
         service_url=su + "/",
@@ -109,4 +107,3 @@ async def _send_in_conversation(
     if res and getattr(res, "id", None):
         return str(res.id)
     return ""
-

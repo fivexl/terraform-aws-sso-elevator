@@ -11,7 +11,6 @@ import boto3
 import config
 from microsoft_teams.apps import App
 
-import teams_handlers
 from teams_deps import TeamsDependencies
 
 logger = logging.getLogger(__name__)
@@ -52,6 +51,8 @@ async def get_teams_app() -> App:
     c = deps.cfg
     if not c.teams_microsoft_app_id or not c.teams_microsoft_app_password:
         raise ValueError("teams_microsoft_app_id and teams_microsoft_app_password are required for Teams mode")
+
+    import teams_handlers
 
     app = App(
         client_id=c.teams_microsoft_app_id,

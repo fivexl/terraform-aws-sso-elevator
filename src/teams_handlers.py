@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import timedelta
 from typing import Any, cast
@@ -98,23 +99,31 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         )
         return TaskModuleResponse(task=TaskModuleContinueResponse(type="continue", value=cti))
 
+    def _message_command_kind(raw: str) -> str | None:
+        """Map message text to account vs group. /slash, hyphen titles (manifest), or space (from menu)."""
+        text = (raw or "").strip()
+        text = re.sub(r"^<at>[^<]*</at>\s*", "", text, count=1)
+        low = text.lower()
+        if "/request-access" in low or low in ("request access", "request-access"):
+            return "account"
+        if "/request-group" in low or low in ("request group", "request-group"):
+            return "group"
+        return None
+
     @app.on_message
     async def on_message(ctx: ActivityContext[MessageActivity]) -> Any:
         text = (ctx.activity.text or "").strip()
-        if "/request-access" not in text and "/request-group" not in text:
+        kind0 = _message_command_kind(text)
+        if kind0 is None:
             return None
-        if "/request-access" in text:
-            if not c.statements:
-                await ctx.send("Statements are not configured, please check the configuration.")
-                return None
-        elif "/request-group" in text and not c.group_statements:
+        if kind0 == "account" and not c.statements:
+            await ctx.send("Statements are not configured, please check the configuration.")
+            return None
+        if kind0 == "group" and not c.group_statements:
             await ctx.send("Group statements are not configured, please check the configuration.")
             return None
 
-        if "/request-access" in text:
-            kind: str = "account"
-        else:
-            kind = "group"
+        kind = kind0
 
         try:
             user = await teams_users.get_user_from_activity(ctx)
@@ -408,9 +417,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 permission_set_name=rec.permission_set_name,
                 group_id=rec.group_id,
             )
-            await teams_activity_helpers.teams_send_text_message(
-                ctx, f"{approver.display_name} you cannot approve this request."
-            )
+            await teams_activity_helpers.teams_send_text_message(ctx, f"{approver.display_name} you cannot approve this request.")
             return
 
         await _update_approval_card(

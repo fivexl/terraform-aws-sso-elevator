@@ -14,7 +14,4 @@ async def teams_send_text_message(ctx: ActivityContext[Any], text: str) -> None:
 
 
 def teams_message_with_adaptive_card(text: str, card: dict) -> MessageActivityInput:
-    return (
-        MessageActivityInput(text=text)
-        .add_attachments(Attachment(content_type="application/vnd.microsoft.card.adaptive", content=card))
-    )
+    return MessageActivityInput(text=text).add_attachments(Attachment(content_type="application/vnd.microsoft.card.adaptive", content=card))
