@@ -13,10 +13,14 @@ from slack_sdk.web.slack_response import SlackResponse
 import config
 import entities
 import organizations
+import request_store
 import s3
 import schedule
-import slack_helpers
 import sso
+from requester.slack import slack_helpers
+from requester.teams.teams_deps import TeamsDependencies
+from requester.teams.teams_notifier import TeamsNotifier
+from entities.elevator_request import ElevatorRequestStatus
 from events import (
     ApproverNotificationEvent,
     CheckOnInconsistency,
@@ -37,10 +41,36 @@ sso_client = boto3.client("sso-admin")  # type: ignore # noqa: PGH003
 identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH003
 scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
-slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
+
+s3_client = boto3.client("s3")  # type: ignore # noqa: PGH003
+
+# Slack WebClient or TeamsNotifier — built on first ``lambda_handler`` (Teams stack loads only in Teams mode).
+_notifier: list[slack_sdk.WebClient | TeamsNotifier | None] = [None]
+
+
+def _get_notifier() -> slack_sdk.WebClient | TeamsNotifier:
+    if _notifier[0] is None:
+        if cfg.chat_platform == "teams":
+            from requester.teams import teams_runtime
+
+            teams_runtime.configure_teams_dependencies(
+                TeamsDependencies(
+                    cfg=cfg,
+                    org_client=org_client,  # type: ignore[has-type]
+                    s3_client=s3_client,
+                    sso_client=sso_client,  # type: ignore[has-type]
+                    identity_store_client=identitystore_client,  # type: ignore[has-type]
+                    schedule_client=scheduler_client,  # type: ignore[has-type]
+                )
+            )
+            _notifier[0] = TeamsNotifier(cfg, teams_runtime.get_teams_app)  # type: ignore[assignment]
+        else:
+            _notifier[0] = slack_sdk.WebClient(token=cfg.slack_bot_token)  # type: ignore[assignment]
+    return _notifier[0]  # type: ignore[return-value]
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
+    slack_client = _get_notifier()
     try:
         parsed_event = Event.model_validate(event).root
     except ValidationError as e:
@@ -226,7 +256,7 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
     org_client: OrganizationsClient,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
     identitystore_client: IdentityStoreClient,
 ) -> SlackResponse | None:
     logger.info("Handling scheduled account assignment deletion", extra={"revoke_event": revoke_event})
@@ -262,15 +292,30 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
 
     if cfg.post_update_to_slack:
         account = organizations.describe_account(org_client, user_account_assignment.account_id)
-        slack_notify_user_on_revoke(
-            cfg=cfg,
-            account_assignment=user_account_assignment,
-            permission_set=permission_set,
-            account=account,
-            sso_client=sso_client,
-            identitystore_client=identitystore_client,
-            slack_client=slack_client,
-        )
+        if cfg.chat_platform == "teams":
+            import asyncio
+
+            assert isinstance(slack_client, TeamsNotifier)
+            text = f"Revoked role {permission_set.name} for user {revoke_event.requester.real_name} in account {account.name}"
+
+            async def _send_teams_revoke_notification() -> None:
+                try:
+                    await slack_client.send_message(text)
+                except Exception as e:
+                    logger.exception(f"Failed to send Teams revocation notification: {e}")
+
+            asyncio.run(_send_teams_revoke_notification())
+        else:
+            assert isinstance(slack_client, slack_sdk.WebClient)
+            slack_notify_user_on_revoke(
+                cfg=cfg,
+                account_assignment=user_account_assignment,
+                permission_set=permission_set,
+                account=account,
+                sso_client=sso_client,
+                identitystore_client=identitystore_client,
+                slack_client=slack_client,
+            )
 
 
 def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
@@ -278,7 +323,7 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     sso_client: SSOAdminClient,
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
     identitystore_client: IdentityStoreClient,
 ) -> SlackResponse | None:
     logger.info("Handling scheduled group access revokation", extra={"revoke_event": group_revoke_event})
@@ -301,13 +346,28 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
     if cfg.post_update_to_slack:
-        slack_notify_user_on_group_access_revoke(
-            cfg=cfg,
-            group_assignment=group_assignment,
-            sso_client=sso_client,
-            identitystore_client=identitystore_client,
-            slack_client=slack_client,
-        )
+        if cfg.chat_platform == "teams":
+            import asyncio
+
+            assert isinstance(slack_client, TeamsNotifier)
+            text = f"User {group_revoke_event.requester.real_name} has been removed from the group {group_assignment.group_name}."
+
+            async def _send_teams_group_revoke_notification() -> None:
+                try:
+                    await slack_client.send_message(text)
+                except Exception as e:
+                    logger.exception(f"Failed to send Teams group revocation notification: {e}")
+
+            asyncio.run(_send_teams_group_revoke_notification())
+        else:
+            assert isinstance(slack_client, slack_sdk.WebClient)
+            slack_notify_user_on_group_access_revoke(
+                cfg=cfg,
+                group_assignment=group_assignment,
+                sso_client=sso_client,
+                identitystore_client=identitystore_client,
+                slack_client=slack_client,
+            )
 
 
 def handle_check_on_inconsistency(  # noqa: PLR0913
@@ -522,14 +582,62 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
 
 
 def handle_discard_buttons_event(
-    event: DiscardButtonsEvent, slack_client: slack_sdk.WebClient, scheduler_client: EventBridgeSchedulerClient
+    event: DiscardButtonsEvent,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
+    scheduler_client: EventBridgeSchedulerClient,
 ) -> None:
+    schedule.delete_schedule(scheduler_client, event.schedule_name)
+
+    if cfg.chat_platform == "teams":
+        import asyncio
+        from requester.teams import teams_cards
+
+        if not event.teams_conversation_id or not event.teams_activity_id:
+            logger.warning("Teams event missing conversation_id or activity_id", extra={"event": event})
+            if event.elevator_request_id:
+                request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
+            return
+
+        assert isinstance(slack_client, TeamsNotifier)
+
+        async def _update_teams_card() -> None:
+            # We need the original card to update it — fetch from request_store if available
+            # For simplicity, build a minimal expiry card update
+            expired_card = {
+                "type": "AdaptiveCard",
+                "version": "1.5",
+                "body": [
+                    {
+                        "type": "Container",
+                        "style": teams_cards.get_color_style(cfg.discarded_result_emoji),
+                        "items": [{"type": "TextBlock", "text": "AWS Access Request", "size": "large", "weight": "bolder"}],
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": f"Request expired after {cfg.request_expiration_hours} hour(s).",
+                        "wrap": True,
+                        "weight": "bolder",
+                    },
+                ],
+            }
+            try:
+                await slack_client.update_message(event.teams_activity_id, expired_card)  # type: ignore[arg-type]
+            except Exception as e:
+                logger.exception(f"Failed to update Teams card on expiry: {e}")
+
+        asyncio.run(_update_teams_card())
+        if event.elevator_request_id:
+            request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
+        logger.info("Teams card updated on expiry", extra={"event": event})
+        return
+
+    # Slack path
+    assert isinstance(slack_client, slack_sdk.WebClient)
     message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,
         message_ts=event.time_stamp,
         slack_client=slack_client,
     )
-    schedule.delete_schedule(scheduler_client, event.schedule_name)
     if message is None:
         logger.warning("Message was not found", extra={"event": event})
         return
@@ -558,20 +666,62 @@ def handle_discard_buttons_event(
                 text=text,
             )
             logger.info("Buttons were removed", extra={"event": event})
+            if event.elevator_request_id:
+                request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
             return
 
     logger.info("Buttons were not found", extra={"event": event})
 
 
 def handle_approvers_renotification_event(
-    event: ApproverNotificationEvent, slack_client: slack_sdk.WebClient, scheduler_client: EventBridgeSchedulerClient
+    event: ApproverNotificationEvent,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
+    scheduler_client: EventBridgeSchedulerClient,
 ) -> None:
+    schedule.delete_schedule(scheduler_client, event.schedule_name)
+
+    if cfg.chat_platform == "teams":
+        import asyncio
+
+        if not event.teams_conversation_id or not event.teams_activity_id:
+            logger.warning("Teams renotification event missing conversation/activity id", extra={"event": event})
+            return
+
+        assert isinstance(slack_client, TeamsNotifier)
+        time_to_wait = timedelta(seconds=event.time_to_wait_in_seconds)
+        if cfg.approver_renotification_backoff_multiplier != 0:
+            time_to_wait = time_to_wait * cfg.approver_renotification_backoff_multiplier
+
+        async def _send_teams_reminder() -> None:
+            try:
+                await slack_client.send_thread_reply(
+                    event.teams_activity_id,  # type: ignore[arg-type]
+                    "The request is still awaiting approval. The next reminder will be "
+                    f"sent in {time_to_wait.seconds // 60} minutes, "
+                    "unless the request is approved or discarded beforehand.",
+                )
+            except Exception as e:
+                logger.exception(f"Failed to send Teams thread reply for renotification: {e}")
+
+        asyncio.run(_send_teams_reminder())
+        logger.info("Teams renotification sent.")
+
+        schedule.schedule_approver_notification_event(
+            schedule_client=scheduler_client,
+            channel_id=event.channel_id,
+            message_ts=event.time_stamp,
+            time_to_wait=time_to_wait,
+            elevator_request_id=event.elevator_request_id,
+        )
+        return
+
+    # Slack path
+    assert isinstance(slack_client, slack_sdk.WebClient)
     message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,
         message_ts=event.time_stamp,
         slack_client=slack_client,
     )
-    schedule.delete_schedule(scheduler_client, event.schedule_name)
     if message is None:
         logger.warning("Message not found", extra={"event": event})
         return
@@ -592,7 +742,11 @@ def handle_approvers_renotification_event(
             logger.debug("Slack response:", extra={"slack_response": slack_response})
 
             schedule.schedule_approver_notification_event(
-                schedule_client=scheduler_client, channel_id=event.channel_id, message_ts=message["ts"], time_to_wait=time_to_wait
+                schedule_client=scheduler_client,
+                channel_id=event.channel_id,
+                message_ts=message["ts"],
+                time_to_wait=time_to_wait,
+                elevator_request_id=event.elevator_request_id,
             )
             return
 

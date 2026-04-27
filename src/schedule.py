@@ -211,6 +211,7 @@ def schedule_discard_buttons_event(
     schedule_client: EventBridgeSchedulerClient,
     time_stamp: str,
     channel_id: str,
+    elevator_request_id: str | None = None,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef | None:
     if cfg.request_expiration_hours == 0:
         logger.info("Request expiration is disabled, not scheduling discard buttons event")
@@ -244,6 +245,7 @@ def schedule_discard_buttons_event(
                     schedule_name=schedule_name,
                     time_stamp=time_stamp,
                     channel_id=channel_id,
+                    elevator_request_id=elevator_request_id,
                 ).dict()
             ),
         ),
@@ -255,6 +257,7 @@ def schedule_approver_notification_event(
     message_ts: str,
     channel_id: str,
     time_to_wait: timedelta,
+    elevator_request_id: str | None = None,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef | None:
     # If the initial wait time is 0, we don't schedule the event
     if cfg.approver_renotification_initial_wait_time == 0:
@@ -289,6 +292,7 @@ def schedule_approver_notification_event(
                     time_stamp=message_ts,
                     channel_id=channel_id,
                     time_to_wait_in_seconds=time_to_wait.total_seconds(),
+                    elevator_request_id=elevator_request_id,
                 ).dict()
             ),
         ),

@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
@@ -109,14 +109,21 @@ def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str
 class Config(BaseSettings):
     model_config = SettingsConfigDict(frozen=True)
 
+    chat_platform: Literal["slack", "teams"] = "slack"
+
     schedule_policy_arn: str
     revoker_function_arn: str
     revoker_function_name: str
     schedule_group_name: str
 
     post_update_to_slack: bool = False
-    slack_channel_id: str
-    slack_bot_token: str
+    slack_channel_id: str = ""
+    slack_bot_token: str = ""
+
+    teams_microsoft_app_id: str = ""
+    teams_microsoft_app_password: str = ""
+    teams_azure_tenant_id: str = ""
+    teams_approval_conversation_id: str = ""
 
     approver_renotification_initial_wait_time: int
     approver_renotification_backoff_multiplier: int
@@ -148,6 +155,9 @@ class Config(BaseSettings):
     config_bucket_name: str = "sso-elevator-config"
     config_s3_key: str = ""
     cache_enabled: bool = True
+
+    #: DynamoDB table for request state. Use `memory` for unit tests (in-process store).
+    elevator_requests_table_name: str = "memory"
 
     good_result_emoji: str = ":large_green_circle:"
 
@@ -208,6 +218,22 @@ class Config(BaseSettings):
             "groups": groups,
             "s3_bucket_prefix_for_partitions": s3_bucket_prefix_for_partitions,
         }
+
+    @model_validator(mode="after")
+    def validate_platform_config(self) -> "Config":  # noqa: ANN101
+        if self.chat_platform == "teams":
+            missing = []
+            if not self.teams_microsoft_app_id:
+                missing.append("teams_microsoft_app_id")
+            if not self.teams_microsoft_app_password:
+                missing.append("teams_microsoft_app_password")
+            if not self.teams_azure_tenant_id:
+                missing.append("teams_azure_tenant_id")
+            if not self.teams_approval_conversation_id:
+                missing.append("teams_approval_conversation_id")
+            if missing:
+                raise ValueError(f"Teams platform requires: {', '.join(missing)}")
+        return self
 
 
 _config: Optional[Config] = None

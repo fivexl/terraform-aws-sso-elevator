@@ -3,7 +3,7 @@ module "access_requester_slack_handler" {
   version = "8.1.2"
 
   function_name = var.requester_lambda_name
-  description   = "Receive requests from slack and grants temporary access"
+  description   = "Receive access requests from Slack or Microsoft Teams and grant temporary access"
 
   publish       = true
   timeout       = var.lambda_timeout
@@ -46,10 +46,18 @@ module "access_requester_slack_handler" {
   environment_variables = {
     LOG_LEVEL = var.log_level
 
+    CHAT_PLATFORM = var.chat_platform
+
     SLACK_SIGNING_SECRET = var.slack_signing_secret
     SLACK_BOT_TOKEN      = var.slack_bot_token
     SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = var.schedule_group_name
+
+    TEAMS_MICROSOFT_APP_ID         = var.teams_microsoft_app_id
+    TEAMS_MICROSOFT_APP_PASSWORD   = var.teams_microsoft_app_password
+    TEAMS_AZURE_TENANT_ID          = var.teams_azure_tenant_id
+    TEAMS_APPROVAL_CONVERSATION_ID = var.teams_approval_conversation_id
+
+    SCHEDULE_GROUP_NAME = var.schedule_group_name
 
 
     SSO_INSTANCE_ARN                            = local.sso_instance_arn
@@ -70,6 +78,7 @@ module "access_requester_slack_handler" {
     CONFIG_BUCKET_NAME                          = local.config_bucket_name
     CONFIG_S3_KEY                               = "config/approval-config.json"
     CACHE_ENABLED                               = var.cache_enabled
+    ELEVATOR_REQUESTS_TABLE_NAME                = aws_dynamodb_table.elevator_requests.name
   }
 
   allowed_triggers = var.create_api_gateway ? {
@@ -83,7 +92,7 @@ module "access_requester_slack_handler" {
 
   cors = var.create_lambda_url ? {
     allow_credentials = true
-    allow_origins     = ["https://slack.com"]
+    allow_origins     = local.requester_cors_allow_origins
     allow_methods     = ["POST"]
     max_age           = 86400
   } : null
@@ -236,6 +245,17 @@ data "aws_iam_policy_document" "slack_handler" {
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
   }
+  statement {
+    sid    = "ElevatorRequestsDynamoDB"
+    effect = "Allow"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+    ]
+    resources = [aws_dynamodb_table.elevator_requests.arn]
+  }
 }
 
 module "http_api" {
@@ -243,12 +263,12 @@ module "http_api" {
   source        = "terraform-aws-modules/apigateway-v2/aws"
   version       = "5.0.0"
   name          = var.api_gateway_name
-  description   = "API Gateway for SSO Elevator's access-requester Lambda, to communicate with Slack"
+  description   = "API Gateway for SSO Elevator's access-requester Lambda (Slack or Teams / Bot Framework)"
   protocol_type = "HTTP"
 
   cors_configuration = {
     allow_credentials = true
-    allow_origins     = ["https://slack.com"]
+    allow_origins     = local.requester_cors_allow_origins
     allow_methods     = ["POST"]
     max_age           = 86400
   }

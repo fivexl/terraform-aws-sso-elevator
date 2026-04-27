@@ -160,6 +160,7 @@ def execute_decision(  # noqa: PLR0913
     approver: entities.slack.User,
     requester: entities.slack.User,
     reason: str,
+    elevator_request_id: str | None = None,
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -196,6 +197,7 @@ def execute_decision(  # noqa: PLR0913
             approver_slack_id=approver.id,
             approver_email=approver.email,
             request_id=account_assignment_status.request_id,
+            elevator_request_id=elevator_request_id or "NA",
             operation_type="grant",
             permission_duration=permission_duration,
             sso_user_principal_id=sso_user_principal_id,
@@ -227,6 +229,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     requester: entities.slack.User,
     reason: str,
     identity_store_id: str,
+    elevator_request_id: str | None = None,
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -264,6 +267,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             requester_email=requester.email,
             approver_slack_id=approver.id,
             approver_email=approver.email,
+            elevator_request_id=elevator_request_id or "NA",
             operation_type="grant",
             permission_duration=permission_duration,
             audit_entry_type="group",
