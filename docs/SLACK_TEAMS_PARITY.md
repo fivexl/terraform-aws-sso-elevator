@@ -183,7 +183,7 @@ await turn_context.update_activity(Activity(
 
 | Slack | Code | Teams equivalent |
 |-------|------|------------------|
-| `client.users_info(user=id)` → email, real_name | `slack_helpers.py:get_user` | `activity` sender + `ctx.api.conversations.members(...).get_by_id` when available, else Graph by email in `src/teams_users.py` |
+| `client.users_info(user=id)` → email, real_name | `slack_helpers.py:get_user` | `activity` sender + `ctx.api.conversations.members(...).get(id)` when available, else Graph by email in `teams_users.py` |
 | `client.users_lookupByEmail(email=email)` | `slack_helpers.py:get_user_by_email` | Graph `GET /users?$filter=mail eq '{email}'` or `GET /users/{email}` |
 | `entities.slack.User(id, email, real_name)` | `entities/slack.py` | `entities.teams.User(id, aad_object_id, email, display_name)` |
 

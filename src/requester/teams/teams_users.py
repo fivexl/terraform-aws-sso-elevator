@@ -34,8 +34,9 @@ async def get_user_from_activity(turn_context: object) -> entities.teams.TeamsUs
     conv = getattr(activity, "conversation", None)
     if conv and getattr(conv, "id", None) and hasattr(turn_context, "api"):
         try:
-            member = await turn_context.api.conversations.members(cast("str", conv.id)).get_by_id(str(from_prop.id))
-            email = str(getattr(member, "email", None) or "")
+            member = await turn_context.api.conversations.members(cast("str", conv.id)).get(str(from_prop.id))
+            raw_addr = getattr(member, "email", None) or getattr(member, "user_principal_name", None)
+            email = str(raw_addr or "")
             display_name = str(getattr(member, "name", None) or from_prop.name or "")
             aad_object_id = str(getattr(member, "aad_object_id", None) or getattr(from_prop, "aad_object_id", None) or "")
         except Exception as e:
@@ -143,7 +144,7 @@ async def check_user_in_channel(turn_context: object, channel_id: str, user_aad_
     """Check if user is a member of the given channel (Teams SDK or legacy context)."""
     if hasattr(turn_context, "api"):
         try:
-            members = await turn_context.api.conversations.members(channel_id).get()
+            members = await turn_context.api.conversations.members(channel_id).get_all()
             for member in members:
                 if getattr(member, "aad_object_id", None) == user_aad_id:
                     return True

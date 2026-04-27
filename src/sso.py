@@ -380,6 +380,11 @@ def get_user_principal_id_by_email(
     list_of_users = list_users(identity_store_client, identity_store_id)
 
     try:
+        email = (email or "").strip()
+        if not email:
+            raise errors.SSOUserNotFound(
+                "Cannot look up SSO user: email is empty. Ensure the client provides a work or school account email/UPN."
+            )
         logger.debug("Attempting to find user by primary email", extra={"email": email})
         if user_id := _find_user_principal_id_by_email(email, list_of_users):
             return user_id, False
@@ -388,14 +393,18 @@ def get_user_principal_id_by_email(
             "User not found with primary email, trying secondary domains",
             extra={"primary_email": email, "secondary_fallback_email_domains": secondary_fallback_email_domains},
         )
-        first_part, _ = email.split("@", 1)
-        for domain in secondary_fallback_email_domains:
-            secondary_domain_email = first_part + domain
+        if secondary_fallback_email_domains and "@" in email:
+            first_part, _ = email.split("@", 1)
+            for domain in secondary_fallback_email_domains:
+                secondary_domain_email = first_part + domain
 
-            if user_id := _find_user_principal_id_by_email(secondary_domain_email, list_of_users):
-                logger.info("Found user using secondary domain", extra={"candidate_email": secondary_domain_email, "original_email": email})
-                logger.debug("User found", extra={"user_id": user_id})
-                return user_id, True
+                if user_id := _find_user_principal_id_by_email(secondary_domain_email, list_of_users):
+                    logger.info(
+                        "Found user using secondary domain",
+                        extra={"candidate_email": secondary_domain_email, "original_email": email},
+                    )
+                    logger.debug("User found", extra={"user_id": user_id})
+                    return user_id, True
 
         logger.warning(
             "User was not found in SSO",
