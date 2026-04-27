@@ -23,6 +23,14 @@ log = logging.getLogger(__name__)
 TeamsGetApp = Callable[[], Awaitable[Any]]
 
 
+def _config_conversation_id_for_bot(conversation_id: str) -> str:
+    """Base thread id for channel posts; strip ``;messageid=...`` if someone pasted a full activity id."""
+    s = (conversation_id or "").strip()
+    if ";" in s:
+        return s.split(";", 1)[0].strip()
+    return s
+
+
 def _ref_for_conversation(app_id: str, tenant_id: str, conversation_id: str, service_url: str | None = None) -> ConversationReference:
     su = (service_url or f"https://smba.trafficmanager.net/{tenant_id}/").rstrip("/")
     return ConversationReference(
@@ -57,13 +65,13 @@ class TeamsNotifier:
             app=app,
             app_id=cast(str, self._cfg.teams_microsoft_app_id),
             tenant_id=cast(str, self._cfg.teams_azure_tenant_id),
-            conversation_id=cast(str, self._cfg.teams_approval_conversation_id),
+            conversation_id=_config_conversation_id_for_bot(cast(str, self._cfg.teams_approval_conversation_id)),
             message=msg,
         )
 
     async def update_message(self, activity_id: str, card: dict) -> None:
         app = await self._get_app()
-        conv_id = cast(str, self._cfg.teams_approval_conversation_id)
+        conv_id = _config_conversation_id_for_bot(cast(str, self._cfg.teams_approval_conversation_id))
         up = MessageActivityInput(
             id=str(activity_id),
         ).add_attachments(Attachment(content_type="application/vnd.microsoft.card.adaptive", content=card))
@@ -71,7 +79,7 @@ class TeamsNotifier:
 
     async def send_thread_reply(self, parent_activity_id: str, text: str) -> None:
         app = await self._get_app()
-        conv_id = cast(str, self._cfg.teams_approval_conversation_id)
+        conv_id = _config_conversation_id_for_bot(cast(str, self._cfg.teams_approval_conversation_id))
         app_id = cast(str, self._cfg.teams_microsoft_app_id)
         tenant_id = cast(str, self._cfg.teams_azure_tenant_id)
         msg = MessageActivityInput(text=text)

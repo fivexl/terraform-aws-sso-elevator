@@ -44,6 +44,48 @@ def get_color_style(emoji_config: str) -> str:
     return _EMOJI_TO_STYLE.get(emoji_config, "default")
 
 
+def build_request_access_launcher_card(kind: str) -> dict:
+    """Card after the user types a command: one button opens the task module (Slack global-shortcut modal analogue).
+
+    Teams only opens dialogs in response to an ``invoke`` with ``task/fetch`` (e.g. from this card's
+    ``Action.Submit``), not from the HTTP body of a reply to a plain ``message`` activity.
+    """
+    if kind == "group":
+        title = "Request AWS group membership"
+        blurb = (
+            "Your user is recognized in IAM Identity Center. "
+            "Use the button below to open the form and select a group, duration, and reason."
+        )
+        button_title = "Open group access form"
+    else:
+        title = "Request AWS account access"
+        blurb = (
+            "Your user is recognized in IAM Identity Center. "
+            "Use the button below to open the form and select an account, permission set, duration, and reason."
+        )
+        button_title = "Open account access form"
+
+    return {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.5",
+        "body": [
+            {"type": "TextBlock", "text": title, "size": "large", "weight": "bolder", "wrap": True},
+            {"type": "TextBlock", "text": blurb, "wrap": True},
+        ],
+        "actions": [
+            {
+                "type": "Action.Submit",
+                "title": button_title,
+                "data": {
+                    "msteams": {"type": "task/fetch"},
+                    "kind": kind if kind in ("account", "group") else "account",
+                },
+            }
+        ],
+    }
+
+
 def build_account_access_form(
     accounts: list[entities.aws.Account],
     permission_sets: list[entities.aws.PermissionSet],

@@ -21,7 +21,7 @@ User → Teams Client → Azure Bot Service (HTTP POST) → Lambda (Microsoft Te
                                                      ← Microsoft Graph API (user lookup by email; optional conversation members)
 ```
 
-Key difference: Slack uses **one HTTPS endpoint + Bolt SDK**. Teams uses **Azure Bot registration + Microsoft Teams SDK for Python** (`microsoft-teams-apps`, `microsoft-teams-api` — see [teams.py](https://github.com/microsoft/teams.py)). The Lambda entry maps API Gateway events to `App.server.handle_request` in `src/teams_runtime.py`. Both can run on AWS Lambda.
+Key difference: Slack uses **one HTTPS endpoint + Bolt SDK**. Teams uses **Azure Bot registration + Microsoft Teams SDK for Python** (`microsoft-teams-apps`, `microsoft-teams-api` — see [teams.py](https://github.com/microsoft/teams.py)). The Lambda entry maps API Gateway events to `App.server.handle_request` in `src/requester/teams/teams_runtime.py`. Both can run on AWS Lambda.
 
 ---
 
@@ -31,16 +31,15 @@ Key difference: Slack uses **one HTTPS endpoint + Bolt SDK**. Teams uses **Azure
 
 | Slack | Code | Teams equivalent |
 |-------|------|------------------|
-| Global shortcut `request_for_access` | `app.shortcut("request_for_access")` in `main.py` | **Bot command** `/request-access` or **Messaging Extension** action command |
-| Global shortcut `request_for_group_membership` | `app.shortcut("request_for_group_membership")` in `main.py` | **Bot command** `/request-group` or **Messaging Extension** action command |
+| Global shortcut `request_for_access` | `app.shortcut("request_for_access")` in `main.py` | **Bot command** `/request-access` (or text `request access` / `request-access`) → **Adaptive Card** with a button that opens the form |
+| Global shortcut `request_for_group_membership` | `app.shortcut("request_for_group_membership")` in `main.py` | **Bot command** `/request-group` (or `request group` / `request-group`) → same pattern |
 
-**Teams details:**
-- Register commands in the Teams app manifest (`manifest.json`) under `composeExtensions` or `bots.commandLists`
-- Bot receives `composeExtension/fetchTask` (messaging extension) or a text message matching the command
-- No direct equivalent of Slack's "lightning bolt" global shortcut; closest is a **bot command** or a **static tab** with a form
-- Alternative: **Adaptive Card** pinned in a channel tab with a "Request Access" button
+**Teams details (parity with Slack “open modal”):**
+- There is no Teams API equivalent to Slack’s `views.open(trigger_id, …)` in direct response to a **plain `message`** activity: the client does **not** open a task module from the JSON body of that HTTP response.
+- The supported pattern is: reply to the message with an **Adaptive Card** whose `Action.Submit` includes `"msteams": { "type": "task/fetch" }` and your payload (e.g. `kind: account` | `group`). That triggers an **`invoke` / `task/fetch`** to the bot; the bot’s HTTP response to **that** invoke may return `task.type: continue` with the form card — this is when Teams shows the dialog ([Use dialogs with bots](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/task-modules/task-modules-bots)).
+- Optional alternatives where it fits your rollout: **messaging extension** (`composeExtension/fetchTask`), **static tab** with a form, or a **pinned card** in a channel tab with the same `task/fetch` button.
 
-**Implementation (SSO Elevator):** command handling is registered on the Teams `App` in `src/teams_handlers.py` (`@app.on_message`, `@app.on_dialog_open`, `@app.on_dialog_submit`, `@app.on_card_action`). The Lambda path is `handle_teams_event` → `process_teams_lambda_event` in `src/teams_runtime.py`.
+**Implementation (SSO Elevator):** `src/requester/teams/teams_handlers.py` — `@app.on_message` validates the user in IAM Identity Center, then posts `teams_cards.build_request_access_launcher_card` (button → `task/fetch`). `@app.on_dialog_open` (`task/fetch`) loads accounts/permission sets or groups and returns the task module via `TaskModuleResponse` / `TaskModuleContinueResponse`. Submit is `@app.on_dialog_submit`. Approvals use `@app.on_card_action`. Lambda entry: `src/requester/teams/teams_runtime.py` → `process_teams_lambda_event`.
 
 ---
 
@@ -48,7 +47,7 @@ Key difference: Slack uses **one HTTPS endpoint + Bolt SDK**. Teams uses **Azure
 
 | Slack | Code | Teams equivalent |
 |-------|------|------------------|
-| `client.views_open(trigger_id, view)` | `main.py:show_initial_form_for_request` | `task/fetch` → return Adaptive Card in Task Module |
+| `client.views_open(trigger_id, view)` | `main.py:show_initial_form_for_request` | **Two steps in Teams:** (1) `on_message` posts a launcher Adaptive Card; (2) user clicks **Open … form** → `task/fetch` → `on_dialog_open` returns the same form content inside `TaskModuleResponse` (continue with embedded Adaptive Card) |
 | `client.views_update(view_id, view)` | `main.py:load_select_options_for_account_access_request` | `task/submit` → return updated Adaptive Card, or **typeahead search** in `Input.ChoiceSet` |
 | `View(type="modal", callback_id, blocks=[...])` | `slack_helpers.py:RequestForAccessView.build()` | `TaskModuleResponse` with `AdaptiveCard` body |
 | View submit (`view_submission`) | `app.view(CALLBACK_ID)` | `task/submit` handler in bot |
@@ -65,7 +64,8 @@ Key difference: Slack uses **one HTTPS endpoint + Bolt SDK**. Teams uses **Azure
 | Loading placeholder (`":hourglass: Loading..."`) | `ProgressBar` or text placeholder, then **card replacement** |
 
 **Key differences:**
-- Slack: `trigger_id` required to open modal (valid 3 seconds). Teams: Task Module opened via `task/fetch` invoke or `Action.Submit` with `type: "task/fetch"` — no trigger_id concept
+- Slack: `trigger_id` required to open modal (valid 3 seconds). Teams: the dialog is opened only after a **`task/fetch` invoke** (typically from a card button with `msteams: { "type": "task/fetch" }`). A bot cannot rely on returning a task payload in the **first** HTTP response to a user’s chat message.
+- **SSO Elevator** therefore sends a **launcher card** from `on_message`, then builds the real form in `on_dialog_open` when `task/fetch` arrives — no `trigger_id` concept, but an extra user click compared to Slack’s one-shot shortcut.
 - Slack: `view_id` needed to update modal. Teams: return new card from `task/submit` handler — no view_id tracking needed
 - Slack: max 100 options in `StaticSelectElement`. Teams: `Input.ChoiceSet` with `style: "filtered"` supports **dynamic typeahead** via `Data.Query` (no hard limit)
 - The `user_view_map` pattern in `main.py` is **not needed** in Teams — task module state is managed by the framework

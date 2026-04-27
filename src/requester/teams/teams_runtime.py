@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-import logging
 
 import boto3
 import config
@@ -13,17 +13,20 @@ from requester.common.api_gateway import normalize_api_gateway_headers, parse_ap
 
 from .teams_deps import TeamsDependencies
 
-logger = logging.getLogger(__name__)
-
 _teams_app: App | None = None
+# ``asyncio.run()`` (used in ``main.lambda_handler``) creates and then closes an event loop per
+# invocation. The Teams SDK's httpx client is bound to that loop; reusing ``_teams_app`` across
+# invocations causes ``RuntimeError: Event loop is closed`` on proactive sends (e.g. approval card).
+_teams_app_loop_id: int | None = None
 _deps: TeamsDependencies | None = None
 
 
 def configure_teams_dependencies(deps: TeamsDependencies) -> None:
     """Call once per Lambda from main or revoker when chat platform is Teams."""
-    global _deps, _teams_app
+    global _deps, _teams_app, _teams_app_loop_id
     _deps = deps
     _teams_app = None
+    _teams_app_loop_id = None
 
 
 def _get_deps() -> TeamsDependencies:
@@ -43,9 +46,14 @@ def _get_deps() -> TeamsDependencies:
 
 async def get_teams_app() -> App:
     """Lazily build and initialize the Teams :class:`App` (credentials + routes)."""
-    global _teams_app
-    if _teams_app is not None:
+    global _teams_app, _teams_app_loop_id
+    loop = asyncio.get_running_loop()
+    loop_id = id(loop)
+    if _teams_app is not None and _teams_app_loop_id == loop_id:
         return _teams_app
+
+    _teams_app = None
+    _teams_app_loop_id = None
 
     deps = _get_deps()
     c = deps.cfg
@@ -63,6 +71,7 @@ async def get_teams_app() -> App:
     teams_handlers.register_teams_app_handlers(app, deps)
     await app.initialize()
     _teams_app = app
+    _teams_app_loop_id = loop_id
     return app
 
 

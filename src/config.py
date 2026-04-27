@@ -233,6 +233,11 @@ class Config(BaseSettings):
                 missing.append("teams_approval_conversation_id")
             if missing:
                 raise ValueError(f"Teams platform requires: {', '.join(missing)}")
+            if "replace_with" in self.teams_approval_conversation_id.lower():
+                logger.warning(
+                    "teams_approval_conversation_id looks like a documentation placeholder; "
+                    "set the Teams channel thread conversation id in teams_approval_conversation_id (Terraform / env)."
+                )
         return self
 
 

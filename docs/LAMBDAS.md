@@ -12,19 +12,29 @@ With `use_pre_created_image`, the artifact is **different** ECR tags (`requester
 
 ---
 
-## 1. Requester (Slack)
+## 1. Requester (Slack or Teams)
 
-**Purpose:** accept HTTP from Slack (Slack Bolt), handle shortcuts, modals, approval buttons, and grant / schedule access.
+**Purpose:** accept HTTP from the chat platform, drive request forms, approval cards, and grant / schedule access.
 
 **Inputs:** Function URL and/or API Gateway HTTP API → same handler (see `slack_handler_lambda.tf`).
 
-**Code:** `lambda_handler` delegates to `SlackRequestHandler`:
+### Slack (`chat_platform = "slack"`)
 
-- Shortcuts `request_for_access` and `request_for_group_membership` — forms, lists of accounts / permission sets or groups.
+`lambda_handler` delegates to `SlackRequestHandler`:
+
+- Shortcuts `request_for_access` and `request_for_group_membership` — modals with accounts / permission sets or groups.
 - View submission — access / group requests; logic in `access_control`, `group`, `schedule`, `sso`, `s3`.
 - Approve / Discard buttons — payload parsing, `access_control`, and `execute_decision`.
 
-Related modules: `access_control.py`, `group.py`, `slack_helpers.py`, `schedule.py`, `sso.py`, `organizations.py`, `s3.py`, `config.py`.
+### Teams (`chat_platform = "teams"`)
+
+`lambda_handler` runs `process_teams_lambda_event` → `microsoft_teams.apps.App` (`src/requester/teams/teams_runtime.py`).
+
+- **Message** matching `/request-access` or `/request-group` (and the text variants in `teams_handlers`) — bot replies with a **launcher Adaptive Card**; the user clicks **Open … form** so Teams sends **`task/fetch`** (see `build_request_access_launcher_card` in `teams_cards.py`). The form itself is returned from **`on_dialog_open`**, not from the first message response (Teams platform requirement).
+- **`task/submit`** — same domain logic as Slack view submission (`access_control`, `group`, `schedule`, …). The approval card is posted to the configured Teams conversation via an **asynchronous self-invoke** (`lambda:InvokeFunction`, same function) so the HTTP response to `task/submit` returns within Teams’ client timeout (~15s); the second invocation performs `TeamsNotifier.send_message` (Bot Framework outbound HTTPS). Ensure the Lambda has **egress to Microsoft** (e.g. NAT gateway in a private VPC; otherwise `httpx.ConnectError` / “Unable to reach app” in the client).
+- **Adaptive Card actions** — approve / discard; same AWS outcome as Slack.
+
+Related modules: `access_control.py`, `group.py`, `slack_helpers.py` (shared user shape), `requester/teams/*`, `schedule.py`, `sso.py`, `organizations.py`, `s3.py`, `config.py`.
 
 ---
 

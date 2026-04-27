@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 
 import request_store
 import s3
-from requester.teams import teams_cards, teams_users
+from requester.teams import teams_approval_deferred, teams_cards, teams_users
 from entities import aws
 from entities.teams import TeamsUser
 from events import ApproverNotificationEvent, DiscardButtonsEvent
@@ -260,6 +260,24 @@ def test_get_color_style_maps_emoji_emoji() -> None:
     for em, expected in EMOJI_STYLES.items():
         assert teams_cards.get_color_style(em) == expected
     assert teams_cards.get_color_style("unknown:emoji:") == "default"
+
+
+def test_account_approval_deferred_hmac_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEAMS_MICROSOFT_APP_PASSWORD", "test-secret-for-hmac")
+    sig = teams_approval_deferred.sign_account_approval_post("eid-1", "User@Example.Com")
+    assert teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", sig)
+    assert not teams_approval_deferred.verify_account_approval_post("eid-2", "user@example.com", sig)
+
+
+def test_request_access_launcher_card_triggers_task_fetch() -> None:
+    """Launcher card must use task/fetch so Teams opens the task module (message reply alone cannot)."""
+    for kind in ("account", "group"):
+        card = teams_cards.build_request_access_launcher_card(kind)
+        actions = card.get("actions") or []
+        assert len(actions) == 1
+        data = actions[0].get("data") or {}
+        assert data.get("kind") == kind
+        assert (data.get("msteams") or {}).get("type") == "task/fetch"
 
 
 def test_teams_config_validation(monkeypatch: pytest.MonkeyPatch) -> None:

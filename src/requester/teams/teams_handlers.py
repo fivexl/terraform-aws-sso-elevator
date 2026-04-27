@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from datetime import timedelta
@@ -13,13 +14,11 @@ import entities
 import group
 import organizations
 import request_store
-import schedule
 import sso
 from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from errors import SSOUserNotFound
 from microsoft_teams.api import (
     Attachment,
-    InvokeResponse,
     MessageActivity,
     MessageActivityInput,
     TaskFetchInvokeActivity,
@@ -33,7 +32,7 @@ from microsoft_teams.api.models.task_module.task_module_task_info import CardTas
 from microsoft_teams.apps import App
 from microsoft_teams.apps.routing.activity_context import ActivityContext
 
-from . import teams_activity_helpers, teams_cards, teams_users
+from . import teams_activity_helpers, teams_approval_deferred, teams_cards, teams_users
 from .teams_deps import TeamsDependencies
 from .teams_notifier import TeamsNotifier
 
@@ -142,20 +141,48 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             await ctx.send("An unexpected error occurred. Check the logs for details.")
             return None
 
-        form = await _build_form_card(kind)
-        title = "Request AWS Account Access" if kind == "account" else "Request AWS Group Access"
-        return cast(
-            Any,
-            InvokeResponse(status=200, body=_task_continue_from_card(title, form)),
+        launcher = teams_cards.build_request_access_launcher_card(kind)
+        await ctx.send(
+            teams_activity_helpers.teams_message_with_adaptive_card(
+                "SSO Elevator — use the button on the card to open the request form.",
+                launcher,
+            )
         )
+        return None
 
     @app.on_dialog_open
     async def on_task_fetch(
         ctx: ActivityContext[TaskFetchInvokeActivity],
     ) -> TaskModuleResponse:
         data = _extract_task_data(ctx)
-        kind = data.get("kind", "account")
-        card = await _build_form_card(str(kind))
+        kind_raw = data.get("kind", "account")
+        kind = str(kind_raw) if kind_raw in ("account", "group") else "account"
+        try:
+            user = await teams_users.get_user_from_activity(ctx)
+            sso_instance = sso.describe_sso_instance(sso_client, c.sso_instance_arn)
+            sso.get_user_principal_id_by_email(
+                identity_store_client=identity_store_client,
+                identity_store_id=sso_instance.identity_store_id,
+                email=user.email,
+                cfg=c,
+            )
+        except SSOUserNotFound:
+            return TaskModuleResponse(
+                task=TaskModuleMessageResponse(
+                    type="message",
+                    value="SSO Elevator could not find your user in AWS IAM Identity Center. Ask an admin to sync your directory account.",
+                )
+            )
+        except Exception as e:
+            log.exception("Error checking SSO user in on_task_fetch: %s", e)
+            return TaskModuleResponse(
+                task=TaskModuleMessageResponse(
+                    type="message",
+                    value="An unexpected error occurred. Check the logs for details.",
+                )
+            )
+
+        card = await _build_form_card(kind)
         title = "Request AWS Account Access" if kind == "account" else "Request AWS Group Access"
         return _task_continue_from_card(str(title), card)
 
@@ -223,54 +250,6 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             )
         )
 
-        try:
-            account = organizations.describe_account(org_client, account_id)
-        except Exception:
-            account = entities.aws.Account(id=account_id, name=account_id)
-
-        show_buttons = bool(decision.approvers)
-        color_style = teams_cards.get_color_style(c.waiting_result_emoji)
-        request_data = {
-            "account_id": account_id,
-            "permission_set": permission_set_name,
-            "duration": duration_str,
-            "reason": reason,
-            "requester_id": user.id,
-        }
-        card = teams_cards.build_approval_card(
-            requester_name=user.display_name,
-            account=account,
-            group=None,
-            role_name=permission_set_name,
-            reason=reason,
-            permission_duration=duration_str,
-            show_buttons=show_buttons,
-            color_style=color_style,
-            request_data=request_data,
-            elevator_request_id=elevator_id,
-        )
-        try:
-            notifier = _notifier()
-            act_id = await notifier.send_message(text="New access request", card=card)
-            if act_id:
-                request_store.update_teams_presentation(elevator_id, c.teams_approval_conversation_id, act_id)
-            if show_buttons:
-                schedule.schedule_discard_buttons_event(
-                    schedule_client=schedule_client,
-                    time_stamp="",
-                    channel_id="",
-                    elevator_request_id=elevator_id,
-                )
-                schedule.schedule_approver_notification_event(
-                    schedule_client=schedule_client,
-                    message_ts="",
-                    channel_id="",
-                    time_to_wait=timedelta(minutes=c.approver_renotification_initial_wait_time),
-                    elevator_request_id=elevator_id,
-                )
-        except Exception as e:
-            log.exception("Failed to post approval card to Teams channel: %s", e)
-
         if decision.grant:
             try:
                 access_control.execute_decision(
@@ -286,6 +265,36 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
             except Exception as e:
                 log.exception("Failed to execute auto-approved decision: %s", e)
+
+        # Posting to the approval channel is deferred (async self-invoke) so task/submit returns under Teams'
+        # client timeout (~15s). Local/tests without AWS_LAMBDA_FUNCTION_NAME run the post in-process.
+        deps = TeamsDependencies(
+            cfg=c,
+            org_client=org_client,
+            s3_client=s3_client,
+            sso_client=sso_client,
+            identity_store_client=identity_store_client,
+            schedule_client=schedule_client,
+        )
+        if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+            try:
+                teams_approval_deferred.invoke_account_approval_post_async(
+                    elevator_id,
+                    user.display_name,
+                    user.email,
+                )
+            except Exception as e:
+                log.exception("Failed to schedule Teams approval post: %s", e)
+        else:
+            try:
+                await teams_approval_deferred.post_account_approval_to_teams_channel(
+                    deps,
+                    elevator_id,
+                    user.display_name,
+                    user.email,
+                )
+            except Exception as e:
+                log.exception("Failed to post approval card to Teams channel: %s", e)
 
         return TaskModuleResponse(
             task=TaskModuleMessageResponse(

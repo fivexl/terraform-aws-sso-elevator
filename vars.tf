@@ -112,7 +112,7 @@ variable "teams_azure_tenant_id" {
 }
 
 variable "teams_approval_conversation_id" {
-  description = "Target Teams conversation (or channel) identifier for approval notifications — format depends on your bot implementation (e.g. channel conversation ID). Required when chat_platform is teams."
+  description = "Teams **conversation** ID for the channel (or group chat) where approval Adaptive Cards are posted. Must be the `conversation.id` for that chat as used by the Bot Framework (e.g. from an incoming `activity` after you @mention the bot in the channel, or from Bot Framework Emulator / logging). Do not use placeholder strings such as `REPLACE_WITH_...`."
   type        = string
   default     = ""
 }
