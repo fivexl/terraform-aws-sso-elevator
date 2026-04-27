@@ -179,7 +179,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
         try:
             payload = slack_helpers.ButtonClickedPayload.model_validate(body)
         except Exception as e:
-            logger.exception(e)
+            logger.exception(f"Not an account-approval click, trying group handler: {e}")
             return group.handle_group_button_click(body, client, context)
 
         logger.info("Button click payload", extra={"payload": payload})
