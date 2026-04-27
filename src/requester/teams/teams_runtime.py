@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
-from typing import Any
 
 import boto3
 import config
 from microsoft_teams.apps import App
 
-from teams_deps import TeamsDependencies
+from requester.common.api_gateway import normalize_api_gateway_headers, parse_api_gateway_event_json_body
+
+from .teams_deps import TeamsDependencies
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ async def get_teams_app() -> App:
     if not c.teams_microsoft_app_id or not c.teams_microsoft_app_password:
         raise ValueError("teams_microsoft_app_id and teams_microsoft_app_password are required for Teams mode")
 
-    import teams_handlers
+    from . import teams_handlers
 
     app = App(
         client_id=c.teams_microsoft_app_id,
@@ -66,37 +66,16 @@ async def get_teams_app() -> App:
     return app
 
 
-def _normalize_api_gateway_headers(headers: object) -> dict[str, str]:
-    if not isinstance(headers, Mapping):
-        return {}
-    out: dict[str, str] = {}
-    for k, v in headers.items():
-        if v is not None and isinstance(v, str):
-            out[k] = v
-        elif v is not None and isinstance(v, (list, tuple)) and v:
-            out[k] = v[0] if isinstance(v[0], str) else str(v[0])
-    return out
-
-
 async def process_teams_lambda_event(event: dict) -> dict:
     """Map API Gateway/Function URL event through :meth:`App.server.handle_request` (JWT + routes)."""
     app = await get_teams_app()
-    raw_body = event.get("body", "")
-    if isinstance(raw_body, str) and event.get("isBase64Encoded"):
-        import base64
+    body, err = parse_api_gateway_event_json_body(event)
+    if err is not None:
+        return err
+    if body is None:
+        return {"statusCode": 400, "headers": {"Content-Type": "text/plain"}, "body": "Invalid body"}
 
-        raw_body = base64.b64decode(raw_body).decode("utf-8", errors="replace")
-    if isinstance(raw_body, str):
-        try:
-            body: Any = json.loads(raw_body) if raw_body else {}
-        except json.JSONDecodeError:
-            return {"statusCode": 400, "headers": {"Content-Type": "text/plain"}, "body": "Invalid JSON body"}
-    else:
-        body = raw_body
-    if not isinstance(body, dict):
-        return {"statusCode": 400, "headers": {"Content-Type": "text/plain"}, "body": "Expected object JSON body"}
-
-    headers = _normalize_api_gateway_headers(event.get("headers", {}) or {})
+    headers = normalize_api_gateway_headers(event.get("headers", {}) or {})
     res = await app.server.handle_request({"body": body, "headers": headers})
     status = int(res.get("status", 200) or 200)
     b = res.get("body")

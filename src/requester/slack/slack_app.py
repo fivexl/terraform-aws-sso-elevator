@@ -17,11 +17,12 @@ import group
 import organizations
 import request_store
 import schedule
-import slack_helpers
 import sso
 from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from errors import SSOUserNotFound, handle_errors
-from requester_context import RequesterContext
+from requester.common.context import RequesterContext
+
+from . import slack_helpers
 
 logger = config.get_logger(service="slack_app")
 
@@ -150,7 +151,10 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             )
             return client.views_open(trigger_id=trigger_id, view=view)
 
-        view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
+        view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(
+            accounts=accounts,
+            permission_sets=permission_sets,
+        )
         return client.views_update(view_id=view_id, view=view)
 
     app = App(

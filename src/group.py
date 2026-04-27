@@ -17,15 +17,15 @@ import config
 import entities
 import request_store
 import schedule
-import slack_helpers
 import sso
-import teams_cards
 from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from entities.teams import TeamsUser
 from errors import handle_errors
+from requester.slack import slack_helpers
+from requester.teams import teams_activity_helpers, teams_cards
 
 if TYPE_CHECKING:
-    from teams_notifier import TeamsNotifier
+    from requester.teams.teams_notifier import TeamsNotifier
 
 logger = config.get_logger(service="main")
 cfg = config.get_config()
@@ -315,8 +315,8 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
 ) -> dict:
     """Parse group task/submit, run access control, post approval card, auto-execute if grant."""
     if notifier_factory is None:
-        from revoker import TeamsNotifier  # type: ignore[import]
-        from teams_runtime import get_teams_app  # type: ignore[import]
+        from requester.teams.teams_notifier import TeamsNotifier
+        from requester.teams.teams_runtime import get_teams_app
 
         def _default_teams_notifier() -> "TeamsNotifier":
             return TeamsNotifier(config.get_config(), get_teams_app)
@@ -427,8 +427,6 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
     update_approval_card: Callable[..., Awaitable[None]],
 ) -> None:
     """Handle Approve/Discard on a Teams group approval card (Slack: handle_group_button_click)."""
-    import teams_activity_helpers  # noqa: PLC0415
-
     requester_slack = entities.slack.User(
         id=rec.requester_slack_id,
         email="",

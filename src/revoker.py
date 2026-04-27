@@ -16,10 +16,10 @@ import organizations
 import request_store
 import s3
 import schedule
-import slack_helpers
 import sso
-from teams_deps import TeamsDependencies
-from teams_notifier import TeamsNotifier
+from requester.slack import slack_helpers
+from requester.teams.teams_deps import TeamsDependencies
+from requester.teams.teams_notifier import TeamsNotifier
 from entities.elevator_request import ElevatorRequestStatus
 from events import (
     ApproverNotificationEvent,
@@ -51,7 +51,7 @@ _notifier: list[slack_sdk.WebClient | TeamsNotifier | None] = [None]
 def _get_notifier() -> slack_sdk.WebClient | TeamsNotifier:
     if _notifier[0] is None:
         if cfg.chat_platform == "teams":
-            import teams_runtime
+            from requester.teams import teams_runtime
 
             teams_runtime.configure_teams_dependencies(
                 TeamsDependencies(
@@ -590,7 +590,7 @@ def handle_discard_buttons_event(
 
     if cfg.chat_platform == "teams":
         import asyncio
-        import teams_cards
+        from requester.teams import teams_cards
 
         if not event.teams_conversation_id or not event.teams_activity_id:
             logger.warning("Teams event missing conversation_id or activity_id", extra={"event": event})

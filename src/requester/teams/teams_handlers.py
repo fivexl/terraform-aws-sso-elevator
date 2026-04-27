@@ -15,8 +15,6 @@ import organizations
 import request_store
 import schedule
 import sso
-import teams_cards
-import teams_users
 from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from errors import SSOUserNotFound
 from microsoft_teams.api import (
@@ -35,9 +33,9 @@ from microsoft_teams.api.models.task_module.task_module_task_info import CardTas
 from microsoft_teams.apps import App
 from microsoft_teams.apps.routing.activity_context import ActivityContext
 
-import teams_activity_helpers
-from teams_deps import TeamsDependencies
-from teams_notifier import TeamsNotifier
+from . import teams_activity_helpers, teams_cards, teams_users
+from .teams_deps import TeamsDependencies
+from .teams_notifier import TeamsNotifier
 
 log = config.get_logger(service="teams_handlers")
 

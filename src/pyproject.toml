@@ -120,8 +120,10 @@ max-complexity = 10
 [tool.ruff.lint.per-file-ignores]
 # Ignore annotation requirements and magic values in test files
 "tests/*.py" = ["ANN", "PLR2004", "PLR0913"]
-# Teams SDK layer: TCH/statement-count/globals and flexible activity typing
-"teams_*.py" = ["TCH", "PLR0915", "PLW0603", "ANN401"]
+# Teams SDK + Slack Bolt app: TCH/statement-count/globals and flexible activity typing
+"requester/teams/*.py" = ["TCH", "PLR0915", "PLW0603", "ANN401"]
+"requester/slack/*.py" = ["TCH", "PLR0915", "PLW0603", "ANN401"]
+"requester/common/context.py" = ["PLW0603"]
 
 [tool.pyright]
 reportGeneralTypeIssues = true

@@ -9,8 +9,7 @@ from pydantic import TypeAdapter
 
 import request_store
 import s3
-import teams_cards
-import teams_users
+from requester.teams import teams_cards, teams_users
 from entities import aws
 from entities.teams import TeamsUser
 from events import ApproverNotificationEvent, DiscardButtonsEvent
