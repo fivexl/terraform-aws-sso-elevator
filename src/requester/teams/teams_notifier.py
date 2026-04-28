@@ -93,16 +93,21 @@ class TeamsNotifier:
         return _config_conversation_id_for_bot(cast(str, self._cfg.teams_approval_conversation_id))
 
     def _approval_thread_reply_to_id(self) -> str | None:
-        # Prefer the thread root extracted from ``;messageid=`` in the conversation id.
-        # The activity's ``reply_to_id`` points to the launcher card (a reply *inside* the thread),
-        # not the thread root. Bot Framework ``reply`` requires the root message id to land in the
-        # correct thread; using a non-root id causes the message to appear in the main channel feed.
-        if self._conversation_id_override:
-            _, root = _teams_channel_id_and_thread_root_activity_id(self._conversation_id_override)
-            if root:
-                return root
-        if self._reply_parent_activity_id:
-            return self._reply_parent_activity_id
+        # Proactive send must use the right parent for ``/activities/{parentId}`` (see
+        # ``parent_activity_id_for_bot_thread_reply``) or NEW messages can land in the main channel
+        # instead of the thread. ``reply_to_id`` on task may point at the launcher card, not the root.
+        t = (self._reply_parent_activity_id or "").strip() or None
+        if not self._conversation_id_override:
+            if t:
+                return t
+            return None
+        from .teams_threading import parent_activity_id_for_bot_thread_reply
+
+        p = (parent_activity_id_for_bot_thread_reply(self._conversation_id_override, t or "") or "").strip()
+        if p:
+            return p
+        if t:
+            return t
         return None
 
     async def send_message(self, text: str, card: dict | None = None) -> str:
@@ -131,12 +136,32 @@ class TeamsNotifier:
         )
 
     async def update_message(self, activity_id: str, card: dict) -> None:
+        """Update an existing activity. Uses the same regional base URL as sends when set (activity ``serviceUrl``)."""
         app = await self._get_app()
         conv_id = self._effective_approval_conversation_id()
+        tenant_id = cast(str, self._cfg.teams_azure_tenant_id)
         up = MessageActivityInput(
             id=str(activity_id),
         ).add_attachments(Attachment(content_type="application/vnd.microsoft.card.adaptive", content=card))
-        await app.api.conversations.activities(conv_id).update(str(activity_id), up)
+        su = (
+            (self._service_url_override or "").strip()
+            or cast(
+                str,
+                getattr(getattr(app, "api", None), "service_url", None) or f"https://smba.trafficmanager.net/{tenant_id}/",
+            )
+        ).rstrip("/")
+        as_http = getattr(getattr(app, "activity_sender", None), "_client", None)
+        if as_http is not None:
+            from microsoft_teams.api import ApiClient  # same package as App
+
+            api = ApiClient(
+                su,
+                as_http,
+                cloud=getattr(app, "cloud", None),
+            )
+            await api.conversations.activities(conv_id).update(str(activity_id), up)
+        else:
+            await app.api.conversations.activities(conv_id).update(str(activity_id), up)
 
     async def send_thread_reply(self, parent_activity_id: str, text: str) -> None:
         app = await self._get_app()

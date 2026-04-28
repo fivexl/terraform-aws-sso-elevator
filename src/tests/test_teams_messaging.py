@@ -278,6 +278,10 @@ def test_account_approval_deferred_hmac_roundtrip(monkeypatch: pytest.MonkeyPatc
     th_par = teams_approval_deferred.AccountApprovalTeamsThread(conv, su, parent)
     sig3 = teams_approval_deferred.sign_account_approval_post("eid-1", "User@Example.Com", th_par)
     assert teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", th_par, sig3)
+    th_lid = teams_approval_deferred.AccountApprovalTeamsThread(conv, su, parent, "launcher-act-1")
+    sig4 = teams_approval_deferred.sign_account_approval_post("eid-1", "User@Example.Com", th_lid)
+    assert teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", th_lid, sig4)
+    assert sig4 != sig3
     th_other = teams_approval_deferred.AccountApprovalTeamsThread(conv, su, "other")
     assert not teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", th_other, sig3)
 

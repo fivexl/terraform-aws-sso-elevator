@@ -13,6 +13,23 @@ from .teams_notifier import _teams_channel_id_and_thread_root_activity_id
 log = config.get_logger(service="teams_activity_helpers")
 
 
+def launcher_activity_id_for_task_submit(ctx: ActivityContext[Any]) -> str:
+    """Bot Framework id of the launcher message (``replyToId`` or thread root) for PATCH/replace in place.
+
+    Same target as :func:`update_teams_launcher_message_after_task_submit` uses to PATCH the card.
+    """
+    conv = getattr(ctx.activity, "conversation", None)
+    if conv is None:
+        return ""
+    raw_cid = str(getattr(conv, "id", "") or "").strip()
+    base_cid, root_id = _teams_channel_id_and_thread_root_activity_id(raw_cid)
+    reply_parent = str(getattr(ctx.activity, "reply_to_id", None) or "").strip()
+    act_id = reply_parent or (str(root_id) if root_id else "")
+    if not act_id or not base_cid:
+        return ""
+    return str(act_id)
+
+
 def _reply_to_id_for_threaded_channel_message(activity: Any) -> str | None:
     """Post in the same Teams channel thread as the parent message (Bot Framework id) or ``;messageid=``."""
     r2 = getattr(activity, "reply_to_id", None)

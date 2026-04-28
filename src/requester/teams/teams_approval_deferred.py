@@ -1,7 +1,8 @@
 """Defer posting the Teams approval card to a second Lambda invoke so task/submit returns before Teams' ~15s client timeout.
 
-Also allows the requester to complete when outbound Bot Framework HTTPS is slow or blocked (NAT); the user still
-gets an immediate "submitted" message; the card may follow on a separate invocation.
+When a launcher activity id is known, the approval adaptive card **replaces** the launcher message in place
+(``update``) instead of ``send`` as a new channel message. Otherwise the behavior falls back to a new
+message and the requester may still get the legacy launcher ``submitted`` stub from the handler.
 """
 
 from __future__ import annotations
@@ -35,11 +36,12 @@ ACCOUNT_APPROVAL_INTERNAL_ACTION = "teams_post_account_approval"
 
 @dataclass(frozen=True, slots=True)
 class AccountApprovalTeamsThread:
-    """Channel conversation id, regional service URL, and Bot Framework parent id for threaded sends."""
+    """Channel conversation id, regional service URL, parent id for threaded ``reply`` sends, optional launcher id."""
 
     conversation_id: str
     service_url: str = ""
     parent_activity_id: str = ""
+    launcher_activity_id: str = ""
 
 
 def _hmac_key() -> bytes:
@@ -58,7 +60,8 @@ def sign_account_approval_post(
     cid = (teams.conversation_id or "").strip()
     su = (teams.service_url or "").strip()
     pa = (teams.parent_activity_id or "").strip()
-    body = f"v4|account|{elevator_id}|{requester_email.lower()}|{cid}|{su}|{pa}"
+    lid = (teams.launcher_activity_id or "").strip()
+    body = f"v5|account|{elevator_id}|{requester_email.lower()}|{cid}|{su}|{pa}|{lid}"
     return hmac.new(_hmac_key(), body.encode(), hashlib.sha256).hexdigest()
 
 
@@ -88,6 +91,7 @@ def invoke_account_approval_post_async(
 
     tsu = (teams.service_url or "").strip()
     tpar = (teams.parent_activity_id or "").strip()
+    tlaunch = (teams.launcher_activity_id or "").strip()
     cid = (teams.conversation_id or "").strip()
     pay: dict[str, Any] = {
         "internal_action": ACCOUNT_APPROVAL_INTERNAL_ACTION,
@@ -97,6 +101,7 @@ def invoke_account_approval_post_async(
         "teams_conversation_id": cid,
         "teams_service_url": tsu,
         "teams_parent_activity_id": tpar,
+        "teams_launcher_activity_id": tlaunch,
         "hmac": sign_account_approval_post(elevator_id, requester_email, teams),
     }
     boto3.client("lambda").invoke(
@@ -166,6 +171,7 @@ async def post_account_approval_to_teams_channel(
     )
 
     tpar = (teams_parent_activity_id or "").strip() or None
+    launcher_id = (teams.launcher_activity_id or "").strip()
 
     def _notifier() -> TeamsNotifier:
         return TeamsNotifier(
@@ -178,7 +184,16 @@ async def post_account_approval_to_teams_channel(
 
     try:
         notifier = _notifier()
-        act_id = await notifier.send_message(text="New access request", card=card)
+        act_id = ""
+        if launcher_id:
+            try:
+                await notifier.update_message(launcher_id, card)
+                act_id = launcher_id
+            except Exception as e:
+                log.exception("In-place approval card update failed, posting new message: %s", e)
+                act_id = await notifier.send_message(text="New access request", card=card)
+        else:
+            act_id = await notifier.send_message(text="New access request", card=card)
         if act_id:
             request_store.update_teams_presentation(elevator_id, teams_conversation_id, act_id)
         if show_buttons:
@@ -208,10 +223,12 @@ async def run_post_account_approval_worker(event: dict[str, Any]) -> dict[str, A
     sig = str(event.get("hmac", ""))
     teams_service_url = str(event.get("teams_service_url", ""))
     teams_parent_activity_id = str(event.get("teams_parent_activity_id", ""))
+    teams_launcher_activity_id = str(event.get("teams_launcher_activity_id", ""))
     thread = AccountApprovalTeamsThread(
         conversation_id=teams_conversation_id,
         service_url=teams_service_url,
         parent_activity_id=teams_parent_activity_id,
+        launcher_activity_id=teams_launcher_activity_id,
     )
     if not eid or not email or not teams_conversation_id or not verify_account_approval_post(eid, email, thread, sig):
         log.warning("Invalid or unsigned teams_post_account_approval event")

@@ -236,11 +236,13 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         teams_service_url = str(su).strip() if su else ""
         rpar = getattr(_ctx.activity, "reply_to_id", None)
         teams_parent_activity_id = str(rpar).strip() if rpar else ""
+        launcher_activity_id = teams_activity_helpers.launcher_activity_id_for_task_submit(_ctx)
         log.info(
-            "Account access task submit: teams_conversation_id from activity: %r, service_url set: %s, reply_to_id (thread parent): %r",
+            "Account access task submit: conversation_id=%r service_url=%s reply_to_id=%r launcher_id=%r",
             teams_conversation_id,
             bool(teams_service_url),
             teams_parent_activity_id or None,
+            launcher_activity_id or None,
         )
 
         duration_str = str(data.get("duration", "1:00:00"))
@@ -307,6 +309,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                     conversation_id=teams_conversation_id,
                     service_url=teams_service_url,
                     parent_activity_id=teams_parent_activity_id,
+                    launcher_activity_id=launcher_activity_id,
                 )
                 teams_approval_deferred.invoke_account_approval_post_async(
                     elevator_id,
@@ -322,6 +325,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                     conversation_id=teams_conversation_id,
                     service_url=teams_service_url,
                     parent_activity_id=teams_parent_activity_id,
+                    launcher_activity_id=launcher_activity_id,
                 )
                 await teams_approval_deferred.post_account_approval_to_teams_channel(
                     deps,
@@ -333,6 +337,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             except Exception as e:
                 log.exception("Failed to post approval card to Teams channel: %s", e)
 
+        # Submitted state hides the form button; deferred in-place update then replaces with the approval card.
         await teams_activity_helpers.update_teams_launcher_message_after_task_submit(_ctx, "account")
 
         return TaskModuleResponse(
