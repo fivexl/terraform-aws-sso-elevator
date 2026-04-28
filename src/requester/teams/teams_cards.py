@@ -86,6 +86,25 @@ def build_request_access_launcher_card(kind: str) -> dict:
     }
 
 
+def build_request_access_launcher_submitted_card(kind: str) -> dict:
+    """After task/submit: same title as the launcher but without the open-form action (Slack: hide submit UX)."""
+    if kind == "group":
+        title = "Request AWS group membership"
+        sub = "Form submitted. This thread has the approval card and status updates."
+    else:
+        title = "Request AWS account access"
+        sub = "Form submitted. This thread has the approval card and status updates."
+    return {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.5",
+        "body": [
+            {"type": "TextBlock", "text": title, "size": "large", "weight": "bolder", "wrap": True},
+            {"type": "TextBlock", "text": sub, "wrap": True},
+        ],
+    }
+
+
 def build_account_access_form(
     accounts: list[entities.aws.Account],
     permission_sets: list[entities.aws.PermissionSet],

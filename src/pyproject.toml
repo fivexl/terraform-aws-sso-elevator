@@ -122,6 +122,8 @@ max-complexity = 10
 "tests/*.py" = ["ANN", "PLR2004", "PLR0913"]
 # Teams SDK + Slack Bolt app: TCH/statement-count/globals and flexible activity typing
 "requester/teams/*.py" = ["TCH", "PLR0915", "PLW0603", "ANN401"]
+# Monkeypatch wrappers match upstream SDK signatures loosely
+"requester/teams/teams_bot_framework_path_encoding.py" = ["ANN"]
 "requester/slack/*.py" = ["TCH", "PLR0915", "PLW0603", "ANN401"]
 "requester/common/context.py" = ["PLW0603"]
 

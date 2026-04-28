@@ -308,7 +308,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 
 
 async def handle_teams_group_task_submit(  # noqa: PLR0915
-    turn_context,  # noqa: ANN001, ARG001
+    turn_context,  # noqa: ANN001
     data: dict,
     user: TeamsUser,
     notifier_factory: Callable[[], "TeamsNotifier"] | None = None,
@@ -415,6 +415,8 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
         except Exception as e:
             logger.exception(f"Failed to execute auto-approved group decision: {e}")
 
+    await teams_activity_helpers.update_teams_launcher_message_after_task_submit(turn_context, "group")
+
     return {"task": {"type": "message", "value": "Your request has been submitted."}}
 
 
@@ -450,6 +452,10 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             approver_name=approver.display_name,
             color_style=teams_cards.get_color_style(cfg.bad_result_emoji),
         )
+        await teams_activity_helpers.teams_send_text_message(
+            turn_context,
+            f"Request was discarded by {approver.display_name}.",
+        )
         return
 
     decision = access_control.make_decision_on_approve_request(
@@ -467,7 +473,10 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             permission_set_name=None,
             group_id=rec.group_id,
         )
-        await teams_activity_helpers.teams_send_text_message(turn_context, f"{approver.display_name} you cannot approve this request.")
+        await teams_activity_helpers.teams_send_text_message(
+            turn_context,
+            f"{approver.display_name}, you cannot approve this request.",
+        )
         return
 
     await update_approval_card(
@@ -491,6 +500,10 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             elevator_request_id=elevator_request_id,
         )
         request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
+        await teams_activity_helpers.teams_send_text_message(
+            turn_context,
+            f"Permissions have been granted by {approver.display_name}.",
+        )
     except Exception as e:
         logger.exception(f"Failed to execute group decision in handle_teams_group_card_action: {e}")
     finally:

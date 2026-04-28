@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import os
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -32,6 +33,15 @@ log = config.get_logger(service="teams_approval_deferred")
 ACCOUNT_APPROVAL_INTERNAL_ACTION = "teams_post_account_approval"
 
 
+@dataclass(frozen=True, slots=True)
+class AccountApprovalTeamsThread:
+    """Channel conversation id, regional service URL, and Bot Framework parent id for threaded sends."""
+
+    conversation_id: str
+    service_url: str = ""
+    parent_activity_id: str = ""
+
+
 def _hmac_key() -> bytes:
     s = (os.environ.get("TEAMS_MICROSOFT_APP_PASSWORD") or "").encode()
     if not s:
@@ -40,14 +50,26 @@ def _hmac_key() -> bytes:
     return s
 
 
-def sign_account_approval_post(elevator_id: str, requester_email: str) -> str:
-    body = f"v1|account|{elevator_id}|{requester_email.lower()}"
+def sign_account_approval_post(
+    elevator_id: str,
+    requester_email: str,
+    teams: AccountApprovalTeamsThread,
+) -> str:
+    cid = (teams.conversation_id or "").strip()
+    su = (teams.service_url or "").strip()
+    pa = (teams.parent_activity_id or "").strip()
+    body = f"v4|account|{elevator_id}|{requester_email.lower()}|{cid}|{su}|{pa}"
     return hmac.new(_hmac_key(), body.encode(), hashlib.sha256).hexdigest()
 
 
-def verify_account_approval_post(elevator_id: str, requester_email: str, signature: str) -> bool:
+def verify_account_approval_post(
+    elevator_id: str,
+    requester_email: str,
+    teams: AccountApprovalTeamsThread,
+    signature: str,
+) -> bool:
     try:
-        expect = sign_account_approval_post(elevator_id, requester_email)
+        expect = sign_account_approval_post(elevator_id, requester_email, teams)
     except ValueError:
         return False
     return hmac.compare_digest(expect, signature)
@@ -57,18 +79,25 @@ def invoke_account_approval_post_async(
     elevator_id: str,
     requester_display_name: str,
     requester_email: str,
+    teams: AccountApprovalTeamsThread,
 ) -> None:
     fn = os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
     if not fn:
         return
     import boto3
 
+    tsu = (teams.service_url or "").strip()
+    tpar = (teams.parent_activity_id or "").strip()
+    cid = (teams.conversation_id or "").strip()
     pay: dict[str, Any] = {
         "internal_action": ACCOUNT_APPROVAL_INTERNAL_ACTION,
         "elevator_id": elevator_id,
         "requester_display_name": requester_display_name,
         "requester_email": requester_email,
-        "hmac": sign_account_approval_post(elevator_id, requester_email),
+        "teams_conversation_id": cid,
+        "teams_service_url": tsu,
+        "teams_parent_activity_id": tpar,
+        "hmac": sign_account_approval_post(elevator_id, requester_email, teams),
     }
     boto3.client("lambda").invoke(
         FunctionName=fn,
@@ -82,11 +111,20 @@ async def post_account_approval_to_teams_channel(
     elevator_id: str,
     requester_display_name: str,
     requester_email: str,
+    teams: AccountApprovalTeamsThread,
 ) -> None:
-    """Build approval card, post to teams_approval_conversation_id, update store, schedule follow-ups."""
+    """Build approval card, post to the request's Teams conversation, update store, schedule follow-ups."""
     c = deps.cfg
     org_client = deps.org_client
     schedule_client = deps.schedule_client
+
+    teams_conversation_id = (teams.conversation_id or "").strip()
+    teams_service_url = (teams.service_url or "").strip()
+    teams_parent_activity_id = (teams.parent_activity_id or "").strip()
+
+    if not teams_conversation_id:
+        log.warning("Deferred post: empty teams_conversation_id for %s", elevator_id)
+        return
 
     rec = request_store.get_access_request(elevator_id)
     if rec is None or rec.kind != ElevatorRequestKind.account:
@@ -127,14 +165,22 @@ async def post_account_approval_to_teams_channel(
         elevator_request_id=elevator_id,
     )
 
+    tpar = (teams_parent_activity_id or "").strip() or None
+
     def _notifier() -> TeamsNotifier:
-        return TeamsNotifier(c, get_teams_app)
+        return TeamsNotifier(
+            c,
+            get_teams_app,
+            conversation_id_override=teams_conversation_id,
+            service_url_override=(teams_service_url or "").strip() or None,
+            reply_parent_activity_id_override=tpar,
+        )
 
     try:
         notifier = _notifier()
         act_id = await notifier.send_message(text="New access request", card=card)
         if act_id:
-            request_store.update_teams_presentation(elevator_id, c.teams_approval_conversation_id, act_id)
+            request_store.update_teams_presentation(elevator_id, teams_conversation_id, act_id)
         if show_buttons:
             schedule.schedule_discard_buttons_event(
                 schedule_client=schedule_client,
@@ -158,8 +204,16 @@ async def run_post_account_approval_worker(event: dict[str, Any]) -> dict[str, A
     eid = str(event.get("elevator_id", ""))
     rname = str(event.get("requester_display_name", ""))
     email = str(event.get("requester_email", ""))
+    teams_conversation_id = str(event.get("teams_conversation_id", ""))
     sig = str(event.get("hmac", ""))
-    if not eid or not email or not verify_account_approval_post(eid, email, sig):
+    teams_service_url = str(event.get("teams_service_url", ""))
+    teams_parent_activity_id = str(event.get("teams_parent_activity_id", ""))
+    thread = AccountApprovalTeamsThread(
+        conversation_id=teams_conversation_id,
+        service_url=teams_service_url,
+        parent_activity_id=teams_parent_activity_id,
+    )
+    if not eid or not email or not teams_conversation_id or not verify_account_approval_post(eid, email, thread, sig):
         log.warning("Invalid or unsigned teams_post_account_approval event")
         return {"statusCode": 403, "body": "forbidden"}
 
@@ -174,5 +228,5 @@ async def run_post_account_approval_worker(event: dict[str, Any]) -> dict[str, A
     )
     configure_teams_dependencies(deps)
     await get_teams_app()
-    await post_account_approval_to_teams_channel(deps, eid, rname, email)
+    await post_account_approval_to_teams_channel(deps, eid, rname, email, thread)
     return {"statusCode": 200, "body": "ok"}

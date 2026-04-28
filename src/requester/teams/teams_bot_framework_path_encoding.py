@@ -14,6 +14,9 @@ _patched: bool = False
 
 _PATH_SAFE = ""
 
+# Response to ``reply`` sometimes omits ``id``; see ``reply`` wrapper below.
+MISSING_ACTIVITY_ID_PLACEHOLDER = "DO_NOT_USE_PLACEHOLDER_ID"
+
 
 def _p(seg: str) -> str:
     return quote(str(seg), safe=_PATH_SAFE)
@@ -51,7 +54,20 @@ def apply() -> None:
         return await _orig_update(self, _p(conversation_id), _p(activity_id), activity)
 
     async def reply(self, conversation_id, activity_id, activity):
-        return await _orig_reply(self, _p(conversation_id), _p(activity_id), activity)
+        # Teams sometimes returns HTTP 200 with a JSON body that has no ``id`` (esp. channel thread
+        # replies). The stock client does ``response.json()[\"id\"]`` and raises KeyError, which
+        # aborts the send even though the message was posted.
+        try:
+            return await _orig_reply(self, _p(conversation_id), _p(activity_id), activity)
+        except KeyError as err:
+            if err.args != ("id",):
+                raise
+            from microsoft_teams.api.activities.sent_activity import SentActivity
+
+            return SentActivity(
+                id=MISSING_ACTIVITY_ID_PLACEHOLDER,
+                activity_params=activity,
+            )
 
     async def delete(self, conversation_id, activity_id):
         return await _orig_delete(self, _p(conversation_id), _p(activity_id))

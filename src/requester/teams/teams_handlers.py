@@ -34,7 +34,7 @@ from microsoft_teams.apps.routing.activity_context import ActivityContext
 
 from . import teams_activity_helpers, teams_approval_deferred, teams_cards, teams_users
 from .teams_deps import TeamsDependencies
-from .teams_notifier import TeamsNotifier
+from .teams_notifier import TeamsNotifier, _teams_channel_id_and_thread_root_activity_id
 
 log = config.get_logger(service="teams_handlers")
 
@@ -52,6 +52,15 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
 
     def _notifier() -> TeamsNotifier:
         return TeamsNotifier(c, this_teams_app)
+
+    def _teams_conversation_id_from_activity(ctx: ActivityContext[Any]) -> str:
+        conv = getattr(ctx.activity, "conversation", None)
+        if conv is None:
+            return ""
+        cid = getattr(conv, "id", None)
+        if cid is None:
+            return ""
+        return str(cid).strip()
 
     def _extract_task_data(ctx: ActivityContext[Any]) -> dict[str, Any]:
         v = ctx.activity.value
@@ -222,6 +231,18 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         data: dict,
         user: entities.teams.TeamsUser,
     ) -> TaskModuleResponse:
+        teams_conversation_id = _teams_conversation_id_from_activity(_ctx)
+        su = getattr(_ctx.activity, "service_url", None)
+        teams_service_url = str(su).strip() if su else ""
+        rpar = getattr(_ctx.activity, "reply_to_id", None)
+        teams_parent_activity_id = str(rpar).strip() if rpar else ""
+        log.info(
+            "Account access task submit: teams_conversation_id from activity: %r, service_url set: %s, reply_to_id (thread parent): %r",
+            teams_conversation_id,
+            bool(teams_service_url),
+            teams_parent_activity_id or None,
+        )
+
         duration_str = str(data.get("duration", "1:00:00"))
         permission_duration = teams_cards.parse_duration_choice(duration_str)
         reason = str(data.get("reason", ""))
@@ -276,25 +297,43 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             identity_store_client=identity_store_client,
             schedule_client=schedule_client,
         )
-        if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        if not teams_conversation_id:
+            log.warning(
+                "Account task submit: no conversation id on activity; skip posting approval card to Teams",
+            )
+        elif os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
             try:
+                tthr = teams_approval_deferred.AccountApprovalTeamsThread(
+                    conversation_id=teams_conversation_id,
+                    service_url=teams_service_url,
+                    parent_activity_id=teams_parent_activity_id,
+                )
                 teams_approval_deferred.invoke_account_approval_post_async(
                     elevator_id,
                     user.display_name,
                     user.email,
+                    tthr,
                 )
             except Exception as e:
                 log.exception("Failed to schedule Teams approval post: %s", e)
         else:
             try:
+                tthr = teams_approval_deferred.AccountApprovalTeamsThread(
+                    conversation_id=teams_conversation_id,
+                    service_url=teams_service_url,
+                    parent_activity_id=teams_parent_activity_id,
+                )
                 await teams_approval_deferred.post_account_approval_to_teams_channel(
                     deps,
                     elevator_id,
                     user.display_name,
                     user.email,
+                    tthr,
                 )
             except Exception as e:
                 log.exception("Failed to post approval card to Teams channel: %s", e)
+
+        await teams_activity_helpers.update_teams_launcher_message_after_task_submit(_ctx, "account")
 
         return TaskModuleResponse(
             task=TaskModuleMessageResponse(
@@ -406,6 +445,10 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 approver_name=approver.display_name,
                 color_style=teams_cards.get_color_style(c.bad_result_emoji),
             )
+            await teams_activity_helpers.teams_send_text_message(
+                ctx,
+                f"Request was discarded by {approver.display_name}.",
+            )
             return
 
         decision = access_control.make_decision_on_approve_request(
@@ -424,7 +467,10 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 permission_set_name=rec.permission_set_name,
                 group_id=rec.group_id,
             )
-            await teams_activity_helpers.teams_send_text_message(ctx, f"{approver.display_name} you cannot approve this request.")
+            await teams_activity_helpers.teams_send_text_message(
+                ctx,
+                f"{approver.display_name}, you cannot approve this request.",
+            )
             return
 
         await _update_approval_card(
@@ -447,6 +493,10 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 elevator_request_id=elevator_request_id,
             )
             request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
+            await teams_activity_helpers.teams_send_text_message(
+                ctx,
+                f"Permissions have been granted by {approver.display_name}.",
+            )
         except Exception as e:
             log.exception("Failed to execute decision in on_adaptive_card_action: %s", e)
         finally:
@@ -494,7 +544,9 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         if not act_id or not turn_context.activity.conversation:
             return
         try:
-            conv_id = turn_context.activity.conversation.id
+            raw_cid = str(turn_context.activity.conversation.id)
+            base_cid, _thr = _teams_channel_id_and_thread_root_activity_id(raw_cid)
+            conv_id = base_cid if base_cid else raw_cid
             up = MessageActivityInput().add_attachments(
                 Attachment(content_type="application/vnd.microsoft.card.adaptive", content=updated_card)
             )

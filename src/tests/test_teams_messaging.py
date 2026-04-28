@@ -264,9 +264,22 @@ def test_get_color_style_maps_emoji_emoji() -> None:
 
 def test_account_approval_deferred_hmac_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEAMS_MICROSOFT_APP_PASSWORD", "test-secret-for-hmac")
-    sig = teams_approval_deferred.sign_account_approval_post("eid-1", "User@Example.Com")
-    assert teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", sig)
-    assert not teams_approval_deferred.verify_account_approval_post("eid-2", "user@example.com", sig)
+    conv = "19:test@thread.tacv2"
+    su = "https://smba.trafficmanager.net/tenant-guid/"
+    parent = "1777337366075"
+    th0 = teams_approval_deferred.AccountApprovalTeamsThread(conv, "", "")
+    sig = teams_approval_deferred.sign_account_approval_post("eid-1", "User@Example.Com", th0)
+    assert teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", th0, sig)
+    assert not teams_approval_deferred.verify_account_approval_post("eid-2", "user@example.com", th0, sig)
+    th_su = teams_approval_deferred.AccountApprovalTeamsThread(conv, su, "")
+    sig2 = teams_approval_deferred.sign_account_approval_post("eid-1", "User@Example.Com", th_su)
+    assert teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", th_su, sig2)
+    assert not teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", th0, sig2)
+    th_par = teams_approval_deferred.AccountApprovalTeamsThread(conv, su, parent)
+    sig3 = teams_approval_deferred.sign_account_approval_post("eid-1", "User@Example.Com", th_par)
+    assert teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", th_par, sig3)
+    th_other = teams_approval_deferred.AccountApprovalTeamsThread(conv, su, "other")
+    assert not teams_approval_deferred.verify_account_approval_post("eid-1", "user@example.com", th_other, sig3)
 
 
 def test_request_access_launcher_card_triggers_task_fetch() -> None:
@@ -278,6 +291,14 @@ def test_request_access_launcher_card_triggers_task_fetch() -> None:
         data = actions[0].get("data") or {}
         assert data.get("kind") == kind
         assert (data.get("msteams") or {}).get("type") == "task/fetch"
+
+
+def test_request_access_launcher_submitted_card_has_no_open_action() -> None:
+    """After submit, launcher is replaced with a card that has no ``Action.Submit`` (button hidden)."""
+    for kind in ("account", "group"):
+        card = teams_cards.build_request_access_launcher_submitted_card(kind)
+        assert not card.get("actions")
+        assert "Form submitted" in str(card)
 
 
 def test_teams_config_validation(monkeypatch: pytest.MonkeyPatch) -> None:
