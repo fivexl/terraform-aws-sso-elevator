@@ -181,9 +181,8 @@ def test_property_approval_card_buttons(
     acc=st.sampled_from([aws.Account(id="1" * 12, name="A")]),
     style=_STYLE_CHOICES,
     dec=st.sampled_from(["discarded", "approved"]),
-    approver=st.text(min_size=1, max_size=30),
 )
-def test_property_card_state_transition(requester: str, acc, style: str, dec: str, approver: str) -> None:  # noqa: ANN001
+def test_property_card_state_transition(requester: str, acc, style: str, dec: str) -> None:  # noqa: ANN001
     """Property 7: update after decision preserves FactSet, removes actions, appends footer."""
     orig = teams_cards.build_approval_card(
         requester,
@@ -198,10 +197,10 @@ def test_property_card_state_transition(requester: str, acc, style: str, dec: st
         elevator_request_id="z",
     )
     assert orig.get("actions")
-    u1 = teams_cards.update_card_after_decision(orig, dec, approver, style)
+    u1 = teams_cards.update_card_after_decision(orig, dec, style)
     assert u1.get("actions") is None
     assert "FactSet" in {x.get("type") for x in u1.get("body", [])}
-    assert any("Request" in (x.get("text") or "") and approver in (x.get("text") or "") for x in u1.get("body", []))
+    assert any(f"Request {dec}" in (x.get("text") or "") for x in u1.get("body", []))
     assert _head_container_style(u1) == style
 
     u2 = teams_cards.update_card_on_expiry(orig, 3, "attention")
@@ -459,5 +458,5 @@ def test_property_five_color_style_in_card(style: str) -> None:
         {"x": 1},
         elevator_request_id="e2",
     )
-    upd = teams_cards.update_card_after_decision(orig, "x", "y", style)
+    upd = teams_cards.update_card_after_decision(orig, "approved", style)
     assert _head_container_style(upd) == style

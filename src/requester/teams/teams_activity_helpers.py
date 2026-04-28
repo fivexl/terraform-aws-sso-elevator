@@ -8,6 +8,7 @@ import config
 from microsoft_teams.api import Attachment, MessageActivityInput
 from microsoft_teams.apps.routing.activity_context import ActivityContext
 
+from . import teams_users
 from .teams_notifier import _teams_channel_id_and_thread_root_activity_id
 
 log = config.get_logger(service="teams_activity_helpers")
@@ -44,6 +45,24 @@ def _reply_to_id_for_threaded_channel_message(activity: Any) -> str | None:
 async def teams_send_text_message(ctx: ActivityContext[Any], text: str) -> None:
     """Send plain text in the current channel thread when possible (parity with Slack ``thread_ts``)."""
     msg = MessageActivityInput(text=text)
+    r2 = _reply_to_id_for_threaded_channel_message(ctx.activity)
+    if r2:
+        msg.reply_to_id = r2
+    await ctx.send(msg)
+
+
+async def teams_send_text_with_user_mention(
+    ctx: ActivityContext[Any],
+    *,
+    text_before_mention: str,
+    text_after_mention: str,
+    user_id: str,
+    display_name: str,
+) -> None:
+    """Send a line that includes a Teams @mention (clickable profile) for the given user."""
+    m_text, m_ent = teams_users.build_mention(user_id, display_name)
+    full = f"{text_before_mention}{m_text}{text_after_mention}"
+    msg = MessageActivityInput(text=full, entities=[m_ent])
     r2 = _reply_to_id_for_threaded_channel_message(ctx.activity)
     if r2:
         msg.reply_to_id = r2

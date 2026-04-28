@@ -65,6 +65,7 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0915
             kind=ElevatorRequestKind.group,
             status=ElevatorRequestStatus.awaiting_approval,
             requester_slack_id=request.requester_slack_id,
+            requester_display_name=(requester.real_name or "").strip() or None,
             reason=request.reason,
             permission_duration_seconds=int(request.permission_duration.total_seconds()),
             group_id=request.group_id,
@@ -343,6 +344,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
             kind=ElevatorRequestKind.group,
             status=ElevatorRequestStatus.awaiting_approval,
             requester_slack_id=user.id,
+            requester_display_name=(user.display_name or "").strip() or None,
             reason=reason,
             permission_duration_seconds=int(permission_duration.total_seconds()),
             group_id=group_id,
@@ -449,12 +451,14 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             turn_context=turn_context,
             elevator_request_id=elevator_request_id,
             decision_action="discarded",
-            approver_name=approver.display_name,
             color_style=teams_cards.get_color_style(cfg.bad_result_emoji),
         )
-        await teams_activity_helpers.teams_send_text_message(
+        await teams_activity_helpers.teams_send_text_with_user_mention(
             turn_context,
-            f"Request was discarded by {approver.display_name}.",
+            text_before_mention="Request was discarded by ",
+            text_after_mention=".",
+            user_id=approver.id,
+            display_name=approver.display_name,
         )
         return
 
@@ -473,9 +477,12 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             permission_set_name=None,
             group_id=rec.group_id,
         )
-        await teams_activity_helpers.teams_send_text_message(
+        await teams_activity_helpers.teams_send_text_with_user_mention(
             turn_context,
-            f"{approver.display_name}, you cannot approve this request.",
+            text_before_mention="",
+            text_after_mention=", you cannot approve this request.",
+            user_id=approver.id,
+            display_name=approver.display_name,
         )
         return
 
@@ -483,7 +490,6 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
         turn_context=turn_context,
         elevator_request_id=elevator_request_id,
         decision_action="approved",
-        approver_name=approver.display_name,
         color_style=teams_cards.get_color_style(cfg.good_result_emoji),
     )
 
@@ -500,9 +506,12 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             elevator_request_id=elevator_request_id,
         )
         request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
-        await teams_activity_helpers.teams_send_text_message(
+        await teams_activity_helpers.teams_send_text_with_user_mention(
             turn_context,
-            f"Permissions have been granted by {approver.display_name}.",
+            text_before_mention="Permissions have been granted by ",
+            text_after_mention=".",
+            user_id=approver.id,
+            display_name=approver.display_name,
         )
     except Exception as e:
         logger.exception(f"Failed to execute group decision in handle_teams_group_card_action: {e}")

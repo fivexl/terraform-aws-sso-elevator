@@ -157,8 +157,9 @@ async def post_account_approval_to_teams_channel(
         "reason": rec.reason,
         "requester_id": rec.requester_slack_id,
     }
+    rname = (rec.requester_display_name or requester_display_name or rec.requester_slack_id or "Requester").strip() or "Requester"
     card = teams_cards.build_approval_card(
-        requester_name=requester_display_name,
+        requester_name=rname,
         account=account,
         group=None,
         role_name=rec.permission_set_name or "",

@@ -299,10 +299,9 @@ def build_approval_card(  # noqa: PLR0913
 def update_card_after_decision(
     original_card: dict,
     decision_action: str,
-    approver_name: str,
     color_style: str,
 ) -> dict:
-    """Remove ActionSet, add decision footer, update color style."""
+    """Remove ActionSet, add short status footer (no approver name), update color style."""
     card = copy.deepcopy(original_card)
 
     # Remove top-level actions (ActionSet)
@@ -314,11 +313,11 @@ def update_card_after_decision(
             item["style"] = color_style
             break
 
-    # Append decision footer
+    # Append status only; who acted is sent in a separate message with a Teams @mention
     card.setdefault("body", []).append(
         {
             "type": "TextBlock",
-            "text": f"Request {decision_action} by {approver_name}",
+            "text": f"Request {decision_action}",
             "wrap": True,
             "weight": "bolder",
         }

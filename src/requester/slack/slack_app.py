@@ -353,6 +353,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
                 kind=ElevatorRequestKind.account,
                 status=ElevatorRequestStatus.awaiting_approval,
                 requester_slack_id=request.requester_slack_id,
+                requester_display_name=(requester.real_name or "").strip() or None,
                 reason=request.reason,
                 permission_duration_seconds=int(request.permission_duration.total_seconds()),
                 account_id=request.account_id,

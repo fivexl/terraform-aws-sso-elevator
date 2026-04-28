@@ -121,38 +121,108 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             return "group"
         return None
 
+    def _build_card_for_approval_update(eid: str, rec: ElevatorRequestRecord) -> dict[str, Any]:
+        """Match the posted approval card (FactSet, etc.); buttons stripped in update_card_after_decision."""
+        waiting_style = teams_cards.get_color_style(c.waiting_result_emoji)
+        requester_name = (rec.requester_display_name or rec.requester_slack_id or "Requester").strip() or "Requester"
+        duration_str = str(timedelta(seconds=rec.permission_duration_seconds))
+        if rec.kind == ElevatorRequestKind.group:
+            sso_instance = sso.describe_sso_instance(sso_client, c.sso_instance_arn)
+            try:
+                sso_group = sso.describe_group(sso_instance.identity_store_id, str(rec.group_id or ""), identity_store_client)
+            except Exception:
+                sso_group = entities.aws.SSOGroup(
+                    id=rec.group_id or "",
+                    name=rec.group_id or "",
+                    description=None,
+                    identity_store_id="",
+                )
+            request_data: dict[str, Any] = {
+                "group_id": rec.group_id or "",
+                "duration": duration_str,
+                "reason": rec.reason,
+                "requester_id": rec.requester_slack_id,
+            }
+            return teams_cards.build_approval_card(
+                requester_name=requester_name,
+                account=None,
+                group=sso_group,
+                role_name=None,
+                reason=rec.reason,
+                permission_duration=duration_str,
+                show_buttons=True,
+                color_style=waiting_style,
+                request_data=request_data,
+                elevator_request_id=eid,
+            )
+        try:
+            account = organizations.describe_account(org_client, rec.account_id or "")
+        except Exception:
+            account = entities.aws.Account(id=rec.account_id or "", name=rec.account_id or "")
+        request_data_acc: dict[str, Any] = {
+            "account_id": rec.account_id or "",
+            "permission_set": rec.permission_set_name or "",
+            "duration": duration_str,
+            "reason": rec.reason,
+            "requester_id": rec.requester_slack_id,
+        }
+        return teams_cards.build_approval_card(
+            requester_name=requester_name,
+            account=account,
+            group=None,
+            role_name=rec.permission_set_name or "",
+            reason=rec.reason,
+            permission_duration=duration_str,
+            show_buttons=True,
+            color_style=waiting_style,
+            request_data=request_data_acc,
+            elevator_request_id=eid,
+        )
+
     async def _update_approval_card(
         turn_context: ActivityContext[Any],
         elevator_request_id: str,
         decision_action: str,
-        approver_name: str,
         color_style: str,
     ) -> None:
-        updated_card = {
-            "type": "AdaptiveCard",
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.5",
-            "body": [
-                {
-                    "type": "Container",
-                    "style": color_style,
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": "AWS Access Request",
-                            "size": "large",
-                            "weight": "bolder",
-                        }
-                    ],
-                },
-                {
-                    "type": "TextBlock",
-                    "text": f"Request {decision_action} by {approver_name}",
-                    "wrap": True,
-                    "weight": "bolder",
-                },
-            ],
-        }
+        rec = request_store.get_access_request(elevator_request_id)
+        if rec is not None:
+            try:
+                orig = _build_card_for_approval_update(elevator_request_id, rec)
+            except Exception as e:
+                log.exception("Failed to rebuild approval card for in-place update %s: %s", elevator_request_id, e)
+                orig = None
+        else:
+            orig = None
+        if orig is not None:
+            updated_card = teams_cards.update_card_after_decision(orig, decision_action, color_style)
+        else:
+            log.warning("Using minimal approval card update (missing record or rebuild error) for %s", elevator_request_id)
+            updated_card = {
+                "type": "AdaptiveCard",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5",
+                "body": [
+                    {
+                        "type": "Container",
+                        "style": color_style,
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": "AWS Access Request",
+                                "size": "large",
+                                "weight": "bolder",
+                            }
+                        ],
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": f"Request {decision_action}",
+                        "wrap": True,
+                        "weight": "bolder",
+                    },
+                ],
+            }
         act_id = message_activity_id_for_channel_card_invoke(turn_context.activity) or str(
             getattr(turn_context.activity, "id", None) or "",
         )
@@ -254,12 +324,14 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 turn_context=ctx,
                 elevator_request_id=elevator_request_id,
                 decision_action="discarded",
-                approver_name=approver.display_name,
                 color_style=teams_cards.get_color_style(c.bad_result_emoji),
             )
-            await teams_activity_helpers.teams_send_text_message(
+            await teams_activity_helpers.teams_send_text_with_user_mention(
                 ctx,
-                f"Request was discarded by {approver.display_name}.",
+                text_before_mention="Request was discarded by ",
+                text_after_mention=".",
+                user_id=approver.id,
+                display_name=approver.display_name,
             )
             return
 
@@ -279,9 +351,12 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 permission_set_name=rec.permission_set_name,
                 group_id=rec.group_id,
             )
-            await teams_activity_helpers.teams_send_text_message(
+            await teams_activity_helpers.teams_send_text_with_user_mention(
                 ctx,
-                f"{approver.display_name}, you cannot approve this request.",
+                text_before_mention="",
+                text_after_mention=", you cannot approve this request.",
+                user_id=approver.id,
+                display_name=approver.display_name,
             )
             return
 
@@ -289,7 +364,6 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             turn_context=ctx,
             elevator_request_id=elevator_request_id,
             decision_action="approved",
-            approver_name=approver.display_name,
             color_style=teams_cards.get_color_style(c.good_result_emoji),
         )
 
@@ -305,9 +379,12 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 elevator_request_id=elevator_request_id,
             )
             request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
-            await teams_activity_helpers.teams_send_text_message(
+            await teams_activity_helpers.teams_send_text_with_user_mention(
                 ctx,
-                f"Permissions have been granted by {approver.display_name}.",
+                text_before_mention="Permissions have been granted by ",
+                text_after_mention=".",
+                user_id=approver.id,
+                display_name=approver.display_name,
             )
         except Exception as e:
             log.exception("Failed to execute decision in on_adaptive_card_action: %s", e)
@@ -480,6 +557,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 kind=ElevatorRequestKind.account,
                 status=ElevatorRequestStatus.awaiting_approval,
                 requester_slack_id=user.id,
+                requester_display_name=(user.display_name or "").strip() or None,
                 reason=reason,
                 permission_duration_seconds=int(permission_duration.total_seconds()),
                 account_id=account_id,

@@ -700,7 +700,7 @@ def handle_approvers_renotification_event(
 
         from requester.teams import teams_runtime
 
-        async def _send_teams_reminder() -> None:
+        async def _send_teams_reminder() -> bool:
             # Default :class:`TeamsNotifier` uses config approval channel; this request lives in ``tc``.
             rn = TeamsNotifier(
                 cfg,
@@ -716,8 +716,12 @@ def handle_approvers_renotification_event(
                 )
             except Exception as e:
                 logger.exception(f"Failed to send Teams thread reply for renotification: {e}")
+                return False
+            return True
 
-        asyncio.run(_send_teams_reminder())
+        if not asyncio.run(_send_teams_reminder()):
+            return
+
         logger.info("Teams renotification sent.")
 
         schedule.schedule_approver_notification_event(

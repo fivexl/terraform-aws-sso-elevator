@@ -71,10 +71,6 @@ def value_from_message_activity_for_adaptive_submit(activity: Any) -> Any:
     chd = getattr(activity, "channel_data", None)
     if chd is not None and hasattr(chd, "model_dump"):
         chd = chd.model_dump()  # type: ignore[assignment]
-    if isinstance(chd, dict) and chd and (
-        "elevator_request_id" in chd
-        or "action" in chd
-        or "elevatorRequestId" in str(chd)
-    ):
+    if isinstance(chd, dict) and chd and ("elevator_request_id" in chd or "action" in chd or "elevatorRequestId" in str(chd)):
         return chd
     return None
