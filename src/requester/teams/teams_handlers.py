@@ -33,8 +33,13 @@ from microsoft_teams.apps import App
 from microsoft_teams.apps.routing.activity_context import ActivityContext
 
 from . import teams_activity_helpers, teams_approval_deferred, teams_cards, teams_users
+from .teams_card_action_parse import (
+    parse_adaptive_card_invoke_value,
+    value_from_message_activity_for_adaptive_submit,
+)
 from .teams_deps import TeamsDependencies
 from .teams_notifier import TeamsNotifier, _teams_channel_id_and_thread_root_activity_id
+from .teams_threading import message_activity_id_for_channel_card_invoke
 
 log = config.get_logger(service="teams_handlers")
 
@@ -116,11 +121,220 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             return "group"
         return None
 
+    async def _update_approval_card(
+        turn_context: ActivityContext[Any],
+        elevator_request_id: str,
+        decision_action: str,
+        approver_name: str,
+        color_style: str,
+    ) -> None:
+        updated_card = {
+            "type": "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.5",
+            "body": [
+                {
+                    "type": "Container",
+                    "style": color_style,
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "AWS Access Request",
+                            "size": "large",
+                            "weight": "bolder",
+                        }
+                    ],
+                },
+                {
+                    "type": "TextBlock",
+                    "text": f"Request {decision_action} by {approver_name}",
+                    "wrap": True,
+                    "weight": "bolder",
+                },
+            ],
+        }
+        act_id = message_activity_id_for_channel_card_invoke(turn_context.activity) or str(
+            getattr(turn_context.activity, "id", None) or "",
+        )
+        tpid = request_store.get_teams_presentation_ids(elevator_request_id)
+        if (not (act_id or "").strip()) and tpid is not None:
+            act_id = tpid[1]
+        raw_cid = ""
+        if turn_context.activity.conversation:
+            raw_cid = str(turn_context.activity.conversation.id)
+        if (not (raw_cid or "").strip()) and tpid is not None:
+            raw_cid = tpid[0]
+        if not (act_id or "").strip() or not (raw_cid or "").strip():
+            log.warning("Cannot update approval card: no activity or conversation for %s", elevator_request_id)
+            return
+        try:
+            base_cid, _thr = _teams_channel_id_and_thread_root_activity_id(raw_cid)
+            conv_id = base_cid if base_cid else raw_cid
+            up = MessageActivityInput().add_attachments(
+                Attachment(content_type="application/vnd.microsoft.card.adaptive", content=updated_card)
+            )
+            up.id = str(act_id)
+            await turn_context.api.conversations.activities(conv_id).update(str(act_id), up)
+        except Exception as e:
+            log.exception("Failed to update approval card: %s", e)
+
+    async def _handle_approval_card_submission(  # noqa: PLR0911, PLR0912, PLR0915
+        ctx: ActivityContext[Any],
+        elevator_request_id: str,
+        action: str | None,
+    ) -> None:
+        rec = request_store.get_access_request(elevator_request_id)
+        if rec is None:
+            log.warning("Access request not found: %s", elevator_request_id)
+            return
+
+        if not request_store.try_begin_in_flight_approval(
+            requester_slack_id=rec.requester_slack_id,
+            account_id=rec.account_id,
+            permission_set_name=rec.permission_set_name,
+            group_id=rec.group_id,
+        ):
+            await teams_activity_helpers.teams_send_text_message(
+                ctx,
+                "This request is already being processed, please wait for the result.",
+            )
+            return
+
+        try:
+            approver = await teams_users.get_user_from_activity(ctx)
+        except Exception as e:
+            log.exception("Failed to get approver in on_adaptive_card_action: %s", e)
+            request_store.end_in_flight_approval(
+                requester_slack_id=rec.requester_slack_id,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                group_id=rec.group_id,
+            )
+            try:
+                await teams_activity_helpers.teams_send_text_message(
+                    ctx,
+                    "Could not identify you as a Teams user. Please try again or contact an admin.",
+                )
+            except Exception as e2:
+                log.exception("Failed to send user-visible error after get_user failure: %s", e2)
+            return
+
+        if rec.kind == ElevatorRequestKind.group:
+            await group.handle_teams_group_card_action(
+                ctx,
+                rec,
+                approver,
+                str(elevator_request_id),
+                str(action or ""),
+                _update_approval_card,
+            )
+            return
+
+        approver_slack = approver.to_slack_user()
+        requester_slack = entities.slack.User(
+            id=rec.requester_slack_id,
+            email="",
+            real_name=rec.requester_slack_id,
+        )
+        permission_duration = timedelta(seconds=rec.permission_duration_seconds)
+        str_action = (str(action) if action is not None else "").strip().lower()
+        if not str_action:
+            str_action = "discard"
+        approver_action = entities.ApproverAction.Approve if str_action == "approve" else entities.ApproverAction.Discard
+
+        if approver_action == entities.ApproverAction.Discard:
+            request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.discarded)
+            request_store.end_in_flight_approval(
+                requester_slack_id=rec.requester_slack_id,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                group_id=rec.group_id,
+            )
+            await _update_approval_card(
+                turn_context=ctx,
+                elevator_request_id=elevator_request_id,
+                decision_action="discarded",
+                approver_name=approver.display_name,
+                color_style=teams_cards.get_color_style(c.bad_result_emoji),
+            )
+            await teams_activity_helpers.teams_send_text_message(
+                ctx,
+                f"Request was discarded by {approver.display_name}.",
+            )
+            return
+
+        decision = access_control.make_decision_on_approve_request(
+            action=approver_action,
+            statements=c.statements,
+            account_id=rec.account_id,
+            permission_set_name=rec.permission_set_name,
+            approver_email=approver.email,
+            requester_email=requester_slack.email,
+        )
+
+        if not decision.permit:
+            request_store.end_in_flight_approval(
+                requester_slack_id=rec.requester_slack_id,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                group_id=rec.group_id,
+            )
+            await teams_activity_helpers.teams_send_text_message(
+                ctx,
+                f"{approver.display_name}, you cannot approve this request.",
+            )
+            return
+
+        await _update_approval_card(
+            turn_context=ctx,
+            elevator_request_id=elevator_request_id,
+            decision_action="approved",
+            approver_name=approver.display_name,
+            color_style=teams_cards.get_color_style(c.good_result_emoji),
+        )
+
+        try:
+            access_control.execute_decision(
+                decision=decision,
+                permission_set_name=rec.permission_set_name,
+                account_id=rec.account_id,
+                permission_duration=permission_duration,
+                approver=approver_slack,
+                requester=requester_slack,
+                reason=rec.reason,
+                elevator_request_id=elevator_request_id,
+            )
+            request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
+            await teams_activity_helpers.teams_send_text_message(
+                ctx,
+                f"Permissions have been granted by {approver.display_name}.",
+            )
+        except Exception as e:
+            log.exception("Failed to execute decision in on_adaptive_card_action: %s", e)
+        finally:
+            request_store.end_in_flight_approval(
+                requester_slack_id=rec.requester_slack_id,
+                account_id=rec.account_id,
+                permission_set_name=rec.permission_set_name,
+                group_id=rec.group_id,
+            )
+
     @app.on_message
-    async def on_message(ctx: ActivityContext[MessageActivity]) -> Any:
+    async def on_message(ctx: ActivityContext[MessageActivity]) -> Any:  # noqa: PLR0911
         text = (ctx.activity.text or "").strip()
         kind0 = _message_command_kind(text)
         if kind0 is None:
+            v = value_from_message_activity_for_adaptive_submit(ctx.activity)
+            eid, act = parse_adaptive_card_invoke_value(v)
+            if v is not None and eid:
+                if act is not None and str(act).strip().lower() not in ("approve", "discard"):
+                    return None
+                log.info(
+                    "Teams approval from message activity (not invoke) eid=%r act=%r",
+                    eid,
+                    act,
+                )
+                await _handle_approval_card_submission(ctx, eid, act)
             return None
         if kind0 == "account" and not c.statements:
             await ctx.send("Statements are not configured, please check the configuration.")
@@ -351,211 +565,20 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
     async def on_adaptive_card_action(  # noqa: PLR0911, PLR0912, PLR0915
         ctx: ActivityContext[AdaptiveCardInvokeActivity],
     ) -> None:
+        act = ctx.activity
+        log.info(
+            "Teams on_card_action activity_type=%s invoke=%s",
+            getattr(act, "type", None),
+            getattr(act, "name", None),
+        )
         val = ctx.activity.value
-        vdict: dict[str, Any] = val.model_dump(mode="json", by_alias=True)  # type: ignore[no-untyped-call]
-        ad = (vdict.get("action") or {}) if isinstance(vdict.get("action"), dict) else {}
-        if isinstance(ad, dict) and "data" in ad and isinstance(ad.get("data"), dict):
-            action_data: dict = ad.get("data") or {}
-        else:
-            action_data = getattr(getattr(val, "action", None), "data", None) or {}
-        if not isinstance(action_data, dict):
-            action_data = {}
-        value = {**vdict, **(action_data if action_data else {})}
-        if isinstance(value.get("action"), dict) and (value.get("action") or {}).get("data"):
-            inner = (value.get("action") or {}).get("data")
-            if isinstance(inner, dict):
-                action_data = inner
-        if isinstance(action_data, dict) and action_data:
-            elevator_request_id = action_data.get("elevator_request_id") or vdict.get("elevatorRequestId")
-            action = action_data.get("action")
-        else:
-            elevator_request_id = vdict.get("elevatorRequestId")
-            action = None
-        if action is None and isinstance(vdict.get("action"), dict):
-            adata = (vdict.get("action") or {}).get("data")
-            if isinstance(adata, dict):
-                elevator_request_id = adata.get("elevator_request_id", elevator_request_id)
-                action = adata.get("action")
-
+        elevator_request_id, action = parse_adaptive_card_invoke_value(val)
         if not elevator_request_id:
-            log.warning("Card action missing elevator_request_id: %r", vdict)
+            raw_dump: dict[str, Any] = (
+                val.model_dump(mode="json", by_alias=True)  # type: ignore[no-untyped-call]
+                if val is not None and hasattr(val, "model_dump")
+                else {}
+            )
+            log.warning("Card action missing elevator_request_id; value keys sample: %r", list(raw_dump)[:20])
             return
-
-        rec = request_store.get_access_request(elevator_request_id)
-        if rec is None:
-            log.warning("Access request not found: %s", elevator_request_id)
-            return
-
-        if not request_store.try_begin_in_flight_approval(
-            requester_slack_id=rec.requester_slack_id,
-            account_id=rec.account_id,
-            permission_set_name=rec.permission_set_name,
-            group_id=rec.group_id,
-        ):
-            await teams_activity_helpers.teams_send_text_message(
-                ctx,
-                "This request is already being processed, please wait for the result.",
-            )
-            return
-
-        try:
-            approver = await teams_users.get_user_from_activity(ctx)
-        except Exception as e:
-            log.exception("Failed to get approver in on_adaptive_card_action: %s", e)
-            request_store.end_in_flight_approval(
-                requester_slack_id=rec.requester_slack_id,
-                account_id=rec.account_id,
-                permission_set_name=rec.permission_set_name,
-                group_id=rec.group_id,
-            )
-            return
-
-        if rec.kind == ElevatorRequestKind.group:
-            await group.handle_teams_group_card_action(
-                ctx,
-                rec,
-                approver,
-                str(elevator_request_id),
-                str(action or ""),
-                _update_approval_card,
-            )
-            return
-
-        approver_slack = approver.to_slack_user()
-        requester_slack = entities.slack.User(
-            id=rec.requester_slack_id,
-            email="",
-            real_name=rec.requester_slack_id,
-        )
-        permission_duration = timedelta(seconds=rec.permission_duration_seconds)
-        str_action = str(action or "")
-        approver_action = (
-            entities.ApproverAction.Approve
-            if str_action in ("approve", entities.ApproverAction.Approve.value)
-            else entities.ApproverAction.Discard
-        )
-
-        if approver_action == entities.ApproverAction.Discard:
-            request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.discarded)
-            request_store.end_in_flight_approval(
-                requester_slack_id=rec.requester_slack_id,
-                account_id=rec.account_id,
-                permission_set_name=rec.permission_set_name,
-                group_id=rec.group_id,
-            )
-            await _update_approval_card(
-                turn_context=ctx,
-                elevator_request_id=elevator_request_id,
-                decision_action="discarded",
-                approver_name=approver.display_name,
-                color_style=teams_cards.get_color_style(c.bad_result_emoji),
-            )
-            await teams_activity_helpers.teams_send_text_message(
-                ctx,
-                f"Request was discarded by {approver.display_name}.",
-            )
-            return
-
-        decision = access_control.make_decision_on_approve_request(
-            action=approver_action,
-            statements=c.statements,
-            account_id=rec.account_id,
-            permission_set_name=rec.permission_set_name,
-            approver_email=approver.email,
-            requester_email=requester_slack.email,
-        )
-
-        if not decision.permit:
-            request_store.end_in_flight_approval(
-                requester_slack_id=rec.requester_slack_id,
-                account_id=rec.account_id,
-                permission_set_name=rec.permission_set_name,
-                group_id=rec.group_id,
-            )
-            await teams_activity_helpers.teams_send_text_message(
-                ctx,
-                f"{approver.display_name}, you cannot approve this request.",
-            )
-            return
-
-        await _update_approval_card(
-            turn_context=ctx,
-            elevator_request_id=elevator_request_id,
-            decision_action="approved",
-            approver_name=approver.display_name,
-            color_style=teams_cards.get_color_style(c.good_result_emoji),
-        )
-
-        try:
-            access_control.execute_decision(
-                decision=decision,
-                permission_set_name=rec.permission_set_name,
-                account_id=rec.account_id,
-                permission_duration=permission_duration,
-                approver=approver_slack,
-                requester=requester_slack,
-                reason=rec.reason,
-                elevator_request_id=elevator_request_id,
-            )
-            request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)
-            await teams_activity_helpers.teams_send_text_message(
-                ctx,
-                f"Permissions have been granted by {approver.display_name}.",
-            )
-        except Exception as e:
-            log.exception("Failed to execute decision in on_adaptive_card_action: %s", e)
-        finally:
-            request_store.end_in_flight_approval(
-                requester_slack_id=rec.requester_slack_id,
-                account_id=rec.account_id,
-                permission_set_name=rec.permission_set_name,
-                group_id=rec.group_id,
-            )
-
-    async def _update_approval_card(
-        turn_context: ActivityContext[Any],
-        elevator_request_id: str,
-        decision_action: str,
-        approver_name: str,
-        color_style: str,
-    ) -> None:
-        request_store._get_plain(elevator_request_id)  # noqa: SLF001
-        updated_card = {
-            "type": "AdaptiveCard",
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.5",
-            "body": [
-                {
-                    "type": "Container",
-                    "style": color_style,
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": "AWS Access Request",
-                            "size": "large",
-                            "weight": "bolder",
-                        }
-                    ],
-                },
-                {
-                    "type": "TextBlock",
-                    "text": f"Request {decision_action} by {approver_name}",
-                    "wrap": True,
-                    "weight": "bolder",
-                },
-            ],
-        }
-        act_id = turn_context.activity.reply_to_id or turn_context.activity.id
-        if not act_id or not turn_context.activity.conversation:
-            return
-        try:
-            raw_cid = str(turn_context.activity.conversation.id)
-            base_cid, _thr = _teams_channel_id_and_thread_root_activity_id(raw_cid)
-            conv_id = base_cid if base_cid else raw_cid
-            up = MessageActivityInput().add_attachments(
-                Attachment(content_type="application/vnd.microsoft.card.adaptive", content=updated_card)
-            )
-            up.id = str(act_id)
-            await turn_context.api.conversations.activities(conv_id).update(str(act_id), up)
-        except Exception as e:
-            log.exception("Failed to update approval card: %s", e)
+        await _handle_approval_card_submission(ctx, elevator_request_id, action)

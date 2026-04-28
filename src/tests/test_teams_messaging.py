@@ -1,6 +1,7 @@
 """Property and unit tests for Microsoft Teams integration (cards, users, config, request store, events)."""
 
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -9,7 +10,7 @@ from pydantic import TypeAdapter
 
 import request_store
 import s3
-from requester.teams import teams_approval_deferred, teams_cards, teams_users
+from requester.teams import teams_approval_deferred, teams_card_action_parse, teams_cards, teams_users
 from entities import aws
 from entities.teams import TeamsUser
 from events import ApproverNotificationEvent, DiscardButtonsEvent
@@ -256,6 +257,42 @@ def test_property_audit_teams_user_fields(e_req: str, e_app: str, rid: str, aid:
 # --- Unit tests (14.x) ---
 
 
+def test_parse_adaptive_card_invoke_nested() -> None:
+    nested: dict = {
+        "msteams": {"type": "task/submit"},
+        "action": {
+            "type": "Action.Submit",
+            "data": {"account_id": "1", "elevator_request_id": "e-99", "action": "discard"},
+        },
+    }
+    eid, act = teams_card_action_parse.parse_adaptive_card_invoke_value(nested)
+    assert eid == "e-99"
+    assert act == "discard"
+
+
+def test_value_from_message_activity_value_json_and_channeldata() -> None:
+    """Some Teams clients send card submit as type=message: payload in value, JSON text, or channelData."""
+    p = {"elevator_request_id": "e-1", "action": "approve"}
+    v0 = teams_card_action_parse.value_from_message_activity_for_adaptive_submit(SimpleNamespace(value=p, text=None, channel_data=None))
+    assert v0 == p
+    eid, act = teams_card_action_parse.parse_adaptive_card_invoke_value(v0)
+    assert eid == "e-1" and act == "approve"
+
+    text_json = '{"elevator_request_id": "e-2", "action": "discard"}'
+    v1 = teams_card_action_parse.value_from_message_activity_for_adaptive_submit(
+        SimpleNamespace(value=None, text=text_json, channel_data=None)
+    )
+    eid, act = teams_card_action_parse.parse_adaptive_card_invoke_value(v1)
+    assert eid == "e-2" and act == "discard"
+
+    chd = {"elevator_request_id": "e-3", "action": "approve"}
+    v2 = teams_card_action_parse.value_from_message_activity_for_adaptive_submit(
+        SimpleNamespace(value=None, text="plain", channel_data=chd)
+    )
+    eid, act = teams_card_action_parse.parse_adaptive_card_invoke_value(v2)
+    assert eid == "e-3" and act == "approve"
+
+
 def test_get_color_style_maps_emoji_emoji() -> None:
     for em, expected in EMOJI_STYLES.items():
         assert teams_cards.get_color_style(em) == expected
@@ -342,6 +379,8 @@ def test_request_store_teams_extensions_round_trip(monkeypatch: pytest.MonkeyPat
     request_store.update_teams_presentation(eid, "conv-1", "act-1")
     assert request_store._memory[eid]["teams_conversation_id"] == "conv-1"  # noqa: SLF001
     assert request_store._memory[eid]["teams_activity_id"] == "act-1"  # noqa: SLF001
+    assert request_store.get_teams_presentation_ids(eid) == ("conv-1", "act-1")
+    assert request_store.get_teams_presentation_ids("no-such") is None
     ref = {"c": 3}
     user_aad = "aad-99"
     request_store.save_conversation_reference(user_aad, ref)

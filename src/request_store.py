@@ -256,6 +256,18 @@ def end_in_flight_approval(
     _ddb().delete_item(TableName=_table_name(), Key={"id": {"S": iid}})
 
 
+def get_teams_presentation_ids(elevator_request_id: str) -> tuple[str, str] | None:
+    """Return ``(teams_conversation_id, teams_activity_id)`` if both were stored (card PATCH target)."""
+    raw = _get_plain(elevator_request_id)
+    if not raw:
+        return None
+    c = (raw.get("teams_conversation_id") or "").strip()
+    a = (raw.get("teams_activity_id") or "").strip()
+    if c and a:
+        return (c, a)
+    return None
+
+
 def update_teams_presentation(elevator_request_id: str, conversation_id: str, activity_id: str) -> None:
     """Store Teams activity_id and conversation_id for card updates."""
     if _use_memory_store():

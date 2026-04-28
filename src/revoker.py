@@ -683,19 +683,33 @@ def handle_approvers_renotification_event(
     if cfg.chat_platform == "teams":
         import asyncio
 
-        if not event.teams_conversation_id or not event.teams_activity_id:
+        # Scheduler payload omits Teams fields (Slack-oriented); load from Dynamo for this request.
+        tc = (event.teams_conversation_id or "").strip()
+        ta = (event.teams_activity_id or "").strip()
+        if (not tc or not ta) and event.elevator_request_id:
+            tpid = request_store.get_teams_presentation_ids(event.elevator_request_id)
+            if tpid:
+                tc, ta = tpid[0], tpid[1]
+        if not tc or not ta:
             logger.warning("Teams renotification event missing conversation/activity id", extra={"event": event})
             return
 
-        assert isinstance(slack_client, TeamsNotifier)
         time_to_wait = timedelta(seconds=event.time_to_wait_in_seconds)
         if cfg.approver_renotification_backoff_multiplier != 0:
             time_to_wait = time_to_wait * cfg.approver_renotification_backoff_multiplier
 
+        from requester.teams import teams_runtime
+
         async def _send_teams_reminder() -> None:
+            # Default :class:`TeamsNotifier` uses config approval channel; this request lives in ``tc``.
+            rn = TeamsNotifier(
+                cfg,
+                teams_runtime.get_teams_app,
+                conversation_id_override=tc,
+            )
             try:
-                await slack_client.send_thread_reply(
-                    event.teams_activity_id,  # type: ignore[arg-type]
+                await rn.send_thread_reply(
+                    ta,
                     "The request is still awaiting approval. The next reminder will be "
                     f"sent in {time_to_wait.seconds // 60} minutes, "
                     "unless the request is approved or discarded beforehand.",
