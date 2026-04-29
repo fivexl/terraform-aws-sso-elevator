@@ -380,9 +380,25 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
 
     try:
         notifier = nf()
+        su = str(getattr(turn_context.activity, "service_url", None) or "").strip() or None
         activity_id = await notifier.send_message(text="New access request", card=card)
         if activity_id:
-            request_store.update_teams_presentation(elevator_id, cfg.teams_approval_conversation_id, activity_id)
+            request_store.update_teams_presentation(elevator_id, cfg.teams_approval_conversation_id, activity_id, service_url=su)
+        if activity_id and show_buttons and decision.reason == access_control.DecisionReason.RequiresApproval and decision.approvers:
+            from requester.teams import teams_approver_ping
+            from requester.teams.teams_runtime import get_teams_app
+
+            try:
+                await teams_approver_ping.send_approvers_waiting_ping_in_thread(
+                    cfg,
+                    get_teams_app,
+                    teams_conversation_id=cfg.teams_approval_conversation_id,
+                    service_url=su,
+                    card_activity_id=activity_id,
+                    approver_emails=decision.approvers,
+                )
+            except Exception as e:
+                logger.exception(f"Failed to @mention approvers in Teams (group): {e}")
 
         if show_buttons:
             schedule.schedule_discard_buttons_event(

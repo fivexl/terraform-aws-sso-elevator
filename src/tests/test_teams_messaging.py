@@ -378,7 +378,7 @@ def test_request_store_teams_extensions_round_trip(monkeypatch: pytest.MonkeyPat
     request_store.update_teams_presentation(eid, "conv-1", "act-1")
     assert request_store._memory[eid]["teams_conversation_id"] == "conv-1"  # noqa: SLF001
     assert request_store._memory[eid]["teams_activity_id"] == "act-1"  # noqa: SLF001
-    assert request_store.get_teams_presentation_ids(eid) == ("conv-1", "act-1")
+    assert request_store.get_teams_presentation_ids(eid) == ("conv-1", "act-1", None)
     assert request_store.get_teams_presentation_ids("no-such") is None
     ref = {"c": 3}
     user_aad = "aad-99"

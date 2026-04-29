@@ -39,7 +39,7 @@ from .teams_card_action_parse import (
 )
 from .teams_deps import TeamsDependencies
 from .teams_notifier import TeamsNotifier, _teams_channel_id_and_thread_root_activity_id
-from .teams_threading import message_activity_id_for_channel_card_invoke
+from .teams_threading import ChannelThreadContext, message_activity_id_for_channel_card_invoke
 
 log = config.get_logger(service="teams_handlers")
 
@@ -528,11 +528,19 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         rpar = getattr(_ctx.activity, "reply_to_id", None)
         teams_parent_activity_id = str(rpar).strip() if rpar else ""
         launcher_activity_id = teams_activity_helpers.launcher_activity_id_for_task_submit(_ctx)
+        t_conv, t_su, t_par = ChannelThreadContext.from_activity(_ctx.activity).account_approval_fields()
+        if not (t_conv or "").strip():
+            t_conv, t_su, t_par = (
+                (teams_conversation_id or "").strip(),
+                teams_service_url,
+                (teams_parent_activity_id or "").strip(),
+            )
         log.info(
-            "Account access task submit: conversation_id=%r service_url=%s reply_to_id=%r launcher_id=%r",
+            "Account access task submit: conversation_id=%r deferred_conv=%r service_url=%s reply_to_id=%r launcher_id=%r",
             teams_conversation_id,
-            bool(teams_service_url),
-            teams_parent_activity_id or None,
+            t_conv,
+            bool(teams_service_url or t_su),
+            t_par or None,
             launcher_activity_id or None,
         )
 
@@ -591,16 +599,16 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             identity_store_client=identity_store_client,
             schedule_client=schedule_client,
         )
-        if not teams_conversation_id:
+        if not t_conv:
             log.warning(
                 "Account task submit: no conversation id on activity; skip posting approval card to Teams",
             )
         elif os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
             try:
                 tthr = teams_approval_deferred.AccountApprovalTeamsThread(
-                    conversation_id=teams_conversation_id,
-                    service_url=teams_service_url,
-                    parent_activity_id=teams_parent_activity_id,
+                    conversation_id=t_conv,
+                    service_url=t_su,
+                    parent_activity_id=t_par,
                     launcher_activity_id=launcher_activity_id,
                 )
                 teams_approval_deferred.invoke_account_approval_post_async(
@@ -614,9 +622,9 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         else:
             try:
                 tthr = teams_approval_deferred.AccountApprovalTeamsThread(
-                    conversation_id=teams_conversation_id,
-                    service_url=teams_service_url,
-                    parent_activity_id=teams_parent_activity_id,
+                    conversation_id=t_conv,
+                    service_url=t_su,
+                    parent_activity_id=t_par,
                     launcher_activity_id=launcher_activity_id,
                 )
                 await teams_approval_deferred.post_account_approval_to_teams_channel(

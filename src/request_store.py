@@ -259,30 +259,44 @@ def end_in_flight_approval(
     _ddb().delete_item(TableName=_table_name(), Key={"id": {"S": iid}})
 
 
-def get_teams_presentation_ids(elevator_request_id: str) -> tuple[str, str] | None:
-    """Return ``(teams_conversation_id, teams_activity_id)`` if both were stored (card PATCH target)."""
+def get_teams_presentation_ids(elevator_request_id: str) -> tuple[str, str, str | None] | None:
+    """Return ``(teams_conversation_id, teams_activity_id, teams_service_url|None)`` if conv+activity stored."""
     raw = _get_plain(elevator_request_id)
     if not raw:
         return None
     c = (raw.get("teams_conversation_id") or "").strip()
     a = (raw.get("teams_activity_id") or "").strip()
-    if c and a:
-        return (c, a)
-    return None
+    if not c or not a:
+        return None
+    su = (raw.get("teams_service_url") or "").strip()
+    return (c, a, su or None)
 
 
-def update_teams_presentation(elevator_request_id: str, conversation_id: str, activity_id: str) -> None:
-    """Store Teams activity_id and conversation_id for card updates."""
+def update_teams_presentation(
+    elevator_request_id: str,
+    conversation_id: str,
+    activity_id: str,
+    *,
+    service_url: str | None = None,
+) -> None:
+    """Store Teams activity_id, conversation_id, and optional regional Bot Framework service URL for sends."""
     if _use_memory_store():
         if elevator_request_id in _memory:
             _memory[elevator_request_id]["teams_conversation_id"] = conversation_id
             _memory[elevator_request_id]["teams_activity_id"] = activity_id
+            if service_url is not None and (service_url or "").strip():
+                _memory[elevator_request_id]["teams_service_url"] = (service_url or "").strip()
         return
+    expr = "SET teams_conversation_id = :c, teams_activity_id = :a"
+    values: dict[str, Any] = {":c": {"S": conversation_id}, ":a": {"S": activity_id}}
+    if service_url is not None and (service_url or "").strip():
+        expr += ", teams_service_url = :s"
+        values[":s"] = {"S": (service_url or "").strip()}
     _ddb().update_item(
         TableName=_table_name(),
         Key={"id": {"S": elevator_request_id}},
-        UpdateExpression="SET teams_conversation_id = :c, teams_activity_id = :a",
-        ExpressionAttributeValues={":c": {"S": conversation_id}, ":a": {"S": activity_id}},
+        UpdateExpression=expr,
+        ExpressionAttributeValues=values,
     )
 
 

@@ -27,7 +27,7 @@ from requester.teams.teams_deps import TeamsDependencies
 from requester.teams.teams_notifier import TeamsNotifier
 from requester.teams.teams_runtime import configure_teams_dependencies, get_teams_app
 
-from . import teams_cards
+from . import teams_approver_ping, teams_cards
 
 log = config.get_logger(service="teams_approval_deferred")
 
@@ -196,7 +196,20 @@ async def post_account_approval_to_teams_channel(
         else:
             act_id = await notifier.send_message(text="New access request", card=card)
         if act_id:
-            request_store.update_teams_presentation(elevator_id, teams_conversation_id, act_id)
+            su_store = (teams_service_url or "").strip() or None
+            request_store.update_teams_presentation(elevator_id, teams_conversation_id, act_id, service_url=su_store)
+        if act_id and show_buttons and decision.reason == access_control.DecisionReason.RequiresApproval and decision.approvers:
+            try:
+                await teams_approver_ping.send_approvers_waiting_ping_in_thread(
+                    c,
+                    get_teams_app,
+                    teams_conversation_id=teams_conversation_id,
+                    service_url=teams_service_url,
+                    card_activity_id=act_id,
+                    approver_emails=decision.approvers,
+                )
+            except Exception as e:
+                log.exception("Failed to @mention approvers in Teams: %s", e)
         if show_buttons:
             schedule.schedule_discard_buttons_event(
                 schedule_client=schedule_client,

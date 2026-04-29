@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
+from http import HTTPStatus
 
 import boto3
+import httpx
 import slack_sdk
 from mypy_boto3_events import EventBridgeClient
 from mypy_boto3_identitystore import IdentityStoreClient
@@ -20,6 +22,7 @@ import sso
 from requester.slack import slack_helpers
 from requester.teams.teams_deps import TeamsDependencies
 from requester.teams.teams_notifier import TeamsNotifier
+from requester.teams.teams_threading import parent_activity_id_for_bot_thread_reply, thread_root_activity_id_for_reply
 from entities.elevator_request import ElevatorRequestStatus
 from events import (
     ApproverNotificationEvent,
@@ -46,6 +49,40 @@ s3_client = boto3.client("s3")  # type: ignore # noqa: PGH003
 
 # Slack WebClient or TeamsNotifier — built on first ``lambda_handler`` (Teams stack loads only in Teams mode).
 _notifier: list[slack_sdk.WebClient | TeamsNotifier | None] = [None]
+
+
+def _teams_presentation_for_scheduled(
+    event_teams_conversation_id: str | None,
+    event_teams_activity_id: str | None,
+    elevator_request_id: str | None,
+) -> tuple[str, str, str | None] | None:
+    """Merge EventBridge payload with Dynamo (scheduler targets omit Teams fields)."""
+    tc = (event_teams_conversation_id or "").strip()
+    ta = (event_teams_activity_id or "").strip()
+    tsu: str | None = None
+    if elevator_request_id:
+        tpid = request_store.get_teams_presentation_ids(elevator_request_id)
+        if tpid:
+            stc, sta, ssu = tpid
+            if not tc:
+                tc = stc
+            if not ta:
+                ta = sta
+            tsu = ssu
+    if not tc or not ta:
+        return None
+    return (tc, ta, tsu)
+
+
+def _teams_reply_parent_activity_candidates(tc: str, ta: str) -> list[str]:
+    """Try ordered parent ids for Bot Framework thread reply; see ``teams_threading`` module notes."""
+    p0 = (parent_activity_id_for_bot_thread_reply(tc, ta) or "").strip() or (ta or "").strip()
+    out: list[str] = []
+    for x in (p0, thread_root_activity_id_for_reply(tc), (ta or "").strip()):
+        z = (x or "").strip()
+        if z and z not in out:
+            out.append(z)
+    return out
 
 
 def _get_notifier() -> slack_sdk.WebClient | TeamsNotifier:
@@ -590,15 +627,20 @@ def handle_discard_buttons_event(
 
     if cfg.chat_platform == "teams":
         import asyncio
-        from requester.teams import teams_cards
+        from requester.teams import teams_cards, teams_runtime
 
-        if not event.teams_conversation_id or not event.teams_activity_id:
+        tmeta = _teams_presentation_for_scheduled(
+            event.teams_conversation_id,
+            event.teams_activity_id,
+            event.elevator_request_id,
+        )
+        if not tmeta:
             logger.warning("Teams event missing conversation_id or activity_id", extra={"event": event})
             if event.elevator_request_id:
                 request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
             return
 
-        assert isinstance(slack_client, TeamsNotifier)
+        tc, ta, tsu = tmeta
 
         async def _update_teams_card() -> None:
             # We need the original card to update it — fetch from request_store if available
@@ -621,7 +663,13 @@ def handle_discard_buttons_event(
                 ],
             }
             try:
-                await slack_client.update_message(event.teams_activity_id, expired_card)  # type: ignore[arg-type]
+                cn = TeamsNotifier(
+                    cfg,
+                    teams_runtime.get_teams_app,
+                    conversation_id_override=tc,
+                    service_url_override=tsu,
+                )
+                await cn.update_message(ta, expired_card)
             except Exception as e:
                 logger.exception(f"Failed to update Teams card on expiry: {e}")
 
@@ -683,16 +731,16 @@ def handle_approvers_renotification_event(
     if cfg.chat_platform == "teams":
         import asyncio
 
-        # Scheduler payload omits Teams fields (Slack-oriented); load from Dynamo for this request.
-        tc = (event.teams_conversation_id or "").strip()
-        ta = (event.teams_activity_id or "").strip()
-        if (not tc or not ta) and event.elevator_request_id:
-            tpid = request_store.get_teams_presentation_ids(event.elevator_request_id)
-            if tpid:
-                tc, ta = tpid[0], tpid[1]
-        if not tc or not ta:
+        tmeta = _teams_presentation_for_scheduled(
+            event.teams_conversation_id,
+            event.teams_activity_id,
+            event.elevator_request_id,
+        )
+        if not tmeta:
             logger.warning("Teams renotification event missing conversation/activity id", extra={"event": event})
             return
+
+        tc, ta, tsu = tmeta
 
         time_to_wait = timedelta(seconds=event.time_to_wait_in_seconds)
         if cfg.approver_renotification_backoff_multiplier != 0:
@@ -706,18 +754,32 @@ def handle_approvers_renotification_event(
                 cfg,
                 teams_runtime.get_teams_app,
                 conversation_id_override=tc,
+                service_url_override=tsu,
             )
-            try:
-                await rn.send_thread_reply(
-                    ta,
-                    "The request is still awaiting approval. The next reminder will be "
-                    f"sent in {time_to_wait.seconds // 60} minutes, "
-                    "unless the request is approved or discarded beforehand.",
-                )
-            except Exception as e:
-                logger.exception(f"Failed to send Teams thread reply for renotification: {e}")
-                return False
-            return True
+            body = (
+                "The request is still awaiting approval. The next reminder will be "
+                f"sent in {time_to_wait.seconds // 60} minutes, "
+                "unless the request is approved or discarded beforehand."
+            )
+            last: httpx.HTTPStatusError | None = None
+            for parent in _teams_reply_parent_activity_candidates(tc, ta):
+                # ``POST .../activities/{parentId}/reply`` keeps the line under the card thread; the
+                # create+``replyToId`` path (``ActivityContext``-style) often lands a new top-level post.
+                try:
+                    await rn.send_thread_reply(parent, body)
+                    return True
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == HTTPStatus.NOT_FOUND:
+                        last = e
+                        continue
+                    logger.exception(f"Failed to send Teams renotification: {e}")
+                    return False
+                except Exception as e:
+                    logger.exception(f"Failed to send Teams renotification: {e}")
+                    return False
+            if last is not None:
+                logger.exception(f"Failed to send Teams renotification (exhausted parent ids): {last}")
+            return False
 
         if not asyncio.run(_send_teams_reminder()):
             return

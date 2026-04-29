@@ -163,12 +163,51 @@ class TeamsNotifier:
         else:
             await app.api.conversations.activities(conv_id).update(str(activity_id), up)
 
-    async def send_thread_reply(self, parent_activity_id: str, text: str) -> None:
+    async def send_thread_text_as_activity_context_send(
+        self,
+        parent_activity_id: str,
+        text: str,
+        entities: list[dict] | None = None,
+    ) -> None:
+        """Post in-thread text like :func:`teams_activity_helpers.teams_send_text_with_user_mention` (``ActivityContext.send``).
+
+        Uses ``POST .../conversations/{id}/activities`` with ``replyToId`` on the body, not the reply subresource
+        (``.../activities/{parentId}``), matching interactive Approve/Discard follow-up lines.
+        """
         app = await self._get_app()
         conv_id = self._effective_approval_conversation_id()
         app_id = cast(str, self._cfg.teams_microsoft_app_id)
         tenant_id = cast(str, self._cfg.teams_azure_tenant_id)
-        msg = MessageActivityInput(text=text)
+        msg = MessageActivityInput(text=text, entities=entities) if entities else MessageActivityInput(text=text)
+        msg.reply_to_id = parent_activity_id
+        su = self._service_url_override or cast(
+            str,
+            getattr(getattr(app, "api", None), "service_url", None) or f"https://smba.trafficmanager.net/{tenant_id}/",
+        )
+        await _send_in_conversation(
+            app=app,
+            app_id=app_id,
+            tenant_id=tenant_id,
+            conversation_id=conv_id,
+            message=msg,
+            service_url=su,
+            use_activity_context_send_path=True,
+        )
+
+    async def send_thread_reply(self, parent_activity_id: str, text: str) -> None:
+        await self.send_thread_reply_with_entities(parent_activity_id, text, None)
+
+    async def send_thread_reply_with_entities(
+        self,
+        parent_activity_id: str,
+        text: str,
+        entities: list[dict] | None,
+    ) -> None:
+        app = await self._get_app()
+        conv_id = self._effective_approval_conversation_id()
+        app_id = cast(str, self._cfg.teams_microsoft_app_id)
+        tenant_id = cast(str, self._cfg.teams_azure_tenant_id)
+        msg = MessageActivityInput(text=text, entities=entities) if entities else MessageActivityInput(text=text)
         msg.reply_to_id = parent_activity_id
         su = self._service_url_override or cast(
             str,
@@ -205,6 +244,8 @@ async def _send_in_conversation(  # noqa: PLR0913
     conversation_id: str,
     message: MessageActivityInput,
     service_url: str | None = None,
+    *,
+    use_activity_context_send_path: bool = False,
 ) -> str:
     su = (
         service_url
@@ -217,7 +258,7 @@ async def _send_in_conversation(  # noqa: PLR0913
     # not ``create`` with only replyToId in the body — otherwise the message lands in the main feed.
     parent = getattr(message, "reply_to_id", None)
     as_http = getattr(getattr(app, "activity_sender", None), "_client", None)
-    if parent and as_http is not None:
+    if parent and as_http is not None and not use_activity_context_send_path:
         from microsoft_teams.api import ApiClient  # same package as App
 
         ref = _ref_for_conversation(app_id, tenant_id, conversation_id, su)
