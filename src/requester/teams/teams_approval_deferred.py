@@ -210,7 +210,7 @@ async def post_account_approval_to_teams_channel(
                 )
             except Exception as e:
                 log.exception("Failed to @mention approvers in Teams: %s", e)
-        if show_buttons:
+        if show_buttons and act_id:
             schedule.schedule_discard_buttons_event(
                 schedule_client=schedule_client,
                 time_stamp="",
@@ -223,6 +223,11 @@ async def post_account_approval_to_teams_channel(
                 channel_id="",
                 time_to_wait=timedelta(minutes=c.approver_renotification_initial_wait_time),
                 elevator_request_id=elevator_id,
+            )
+        elif show_buttons and not act_id:
+            log.warning(
+                "Teams account request: no activity id after post; cannot persist presentation or schedule discard/renotification: %s",
+                elevator_id,
             )
     except Exception as e:
         log.exception("Failed to post approval card to Teams channel (deferred): %s", e)

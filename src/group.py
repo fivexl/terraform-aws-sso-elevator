@@ -66,6 +66,7 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0915
             status=ElevatorRequestStatus.awaiting_approval,
             requester_slack_id=request.requester_slack_id,
             requester_display_name=(requester.real_name or "").strip() or None,
+            requester_email=(requester.email or "").strip() or None,
             reason=request.reason,
             permission_duration_seconds=int(request.permission_duration.total_seconds()),
             group_id=request.group_id,
@@ -345,6 +346,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
             status=ElevatorRequestStatus.awaiting_approval,
             requester_slack_id=user.id,
             requester_display_name=(user.display_name or "").strip() or None,
+            requester_email=(user.email or "").strip() or None,
             reason=reason,
             permission_duration_seconds=int(permission_duration.total_seconds()),
             group_id=group_id,
@@ -400,7 +402,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
             except Exception as e:
                 logger.exception(f"Failed to @mention approvers in Teams (group): {e}")
 
-        if show_buttons:
+        if show_buttons and activity_id:
             schedule.schedule_discard_buttons_event(
                 schedule_client=schedule_client,  # type: ignore[union-attr]
                 time_stamp="",
@@ -413,6 +415,11 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
                 channel_id="",
                 time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
                 elevator_request_id=elevator_id,
+            )
+        elif show_buttons and not activity_id:
+            logger.warning(
+                "Teams group request: no activity id from send; cannot persist presentation or schedule discard/renotification",
+                extra={"elevator_request_id": elevator_id},
             )
     except Exception as e:
         logger.exception(f"Failed to post approval card to Teams channel: {e}")
@@ -447,10 +454,11 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
     update_approval_card: Callable[..., Awaitable[None]],
 ) -> None:
     """Handle Approve/Discard on a Teams group approval card (Slack: handle_group_button_click)."""
+    re_email = (rec.requester_email or "").strip()
     requester_slack = entities.slack.User(
         id=rec.requester_slack_id,
-        email="",
-        real_name=rec.requester_slack_id,
+        email=re_email,
+        real_name=(rec.requester_display_name or rec.requester_slack_id or "").strip() or rec.requester_slack_id,
     )
     permission_duration = timedelta(seconds=rec.permission_duration_seconds)
     approver_action = entities.ApproverAction.Approve if action == "approve" else entities.ApproverAction.Discard
@@ -483,7 +491,7 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
         statements=cfg.group_statements,  # type: ignore[arg-type]
         group_id=rec.group_id,
         approver_email=approver.email,
-        requester_email=requester_slack.email,
+        requester_email=re_email,
     )
 
     if not decision.permit:

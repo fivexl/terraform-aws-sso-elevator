@@ -420,6 +420,19 @@ def get_user_principal_id_by_email(
         raise
 
 
+def email_variants_with_secondary_domains(email: str, cfg: config.Config) -> frozenset[str]:
+    """Lowercased address plus local-part + each ``secondary_fallback_email_domains`` entry (see :func:`get_user_principal_id_by_email`)."""
+    e = (email or "").strip()
+    if not e:
+        return frozenset()
+    out: set[str] = {e.lower()}
+    if "@" in e:
+        first_part, _ = e.split("@", 1)
+        for domain in cfg.secondary_fallback_email_domains or []:
+            out.add((first_part + domain).lower())
+    return frozenset(out)
+
+
 def get_user_emails(client: IdentityStoreClient, identity_store_id: str, user_id: str) -> list[str]:
     user = client.describe_user(
         IdentityStoreId=identity_store_id,

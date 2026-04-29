@@ -89,6 +89,7 @@ def _item_to_record(item: dict[str, Any] | None) -> ElevatorRequestRecord | None
             "status": item["status"],
             "requester_slack_id": item["requester_slack_id"],
             "requester_display_name": item.get("requester_display_name") or None,
+            "requester_email": item.get("requester_email") or None,
             "reason": item["reason"],
             "permission_duration_seconds": int(item["permission_duration_seconds"]),
             "account_id": item.get("account_id") or None,
@@ -112,6 +113,8 @@ def put_access_request(rec: ElevatorRequestRecord) -> None:
     }
     if rec.requester_display_name:
         d["requester_display_name"] = rec.requester_display_name
+    if rec.requester_email:
+        d["requester_email"] = rec.requester_email
     if rec.account_id:
         d["account_id"] = rec.account_id
     if rec.permission_set_name:

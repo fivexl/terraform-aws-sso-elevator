@@ -301,10 +301,11 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             return
 
         approver_slack = approver.to_slack_user()
+        re_email = (rec.requester_email or "").strip()
         requester_slack = entities.slack.User(
             id=rec.requester_slack_id,
-            email="",
-            real_name=rec.requester_slack_id,
+            email=re_email,
+            real_name=(rec.requester_display_name or rec.requester_slack_id or "").strip() or rec.requester_slack_id,
         )
         permission_duration = timedelta(seconds=rec.permission_duration_seconds)
         str_action = (str(action) if action is not None else "").strip().lower()
@@ -341,7 +342,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             account_id=rec.account_id,
             permission_set_name=rec.permission_set_name,
             approver_email=approver.email,
-            requester_email=requester_slack.email,
+            requester_email=re_email,
         )
 
         if not decision.permit:
@@ -566,6 +567,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 status=ElevatorRequestStatus.awaiting_approval,
                 requester_slack_id=user.id,
                 requester_display_name=(user.display_name or "").strip() or None,
+                requester_email=(user.email or "").strip() or None,
                 reason=reason,
                 permission_duration_seconds=int(permission_duration.total_seconds()),
                 account_id=account_id,

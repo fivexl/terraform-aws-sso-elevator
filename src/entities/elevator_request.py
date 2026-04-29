@@ -28,6 +28,7 @@ class ElevatorRequestRecord(BaseModel):
     status: ElevatorRequestStatus
     requester_slack_id: str
     requester_display_name: str | None = None
+    requester_email: str | None = None
     reason: str
     permission_duration_seconds: int
     account_id: str | None = None

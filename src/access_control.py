@@ -37,6 +37,24 @@ class AccessRequestDecision(BaseModel):
     approvers: FrozenSet[str] = frozenset()
 
 
+def _approver_in_configured_approvers(approver_email: str, approvers: frozenset) -> bool:
+    """``approvers`` from policy vs. Teams: match exact/case, or ``local@`` + ``secondary_fallback_email_domains`` (same as SSO)."""
+    candidates = sso.email_variants_with_secondary_domains(approver_email, cfg)
+    allowed = {str(a).strip().lower() for a in approvers if str(a).strip()}
+    return bool(candidates & allowed)
+
+
+def _requester_is_same_user_as_approver(approver_email: str, requester_email: str) -> bool:
+    """Same person if addresses overlap, including after secondary domain expansion."""
+    ae = (approver_email or "").strip()
+    re = (requester_email or "").strip()
+    if not ae and not re:
+        return True
+    if not ae or not re:
+        return False
+    return bool(sso.email_variants_with_secondary_domains(ae, cfg) & sso.email_variants_with_secondary_domains(re, cfg))
+
+
 def determine_affected_statements(
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     account_id: str | None = None,
@@ -126,7 +144,7 @@ class ApproveRequestDecision(BaseModel):
 
 def make_decision_on_approve_request(  # noqa: PLR0913
     action: entities.ApproverAction,
-    statements: frozenset[Statement],
+    statements: frozenset[Statement] | frozenset[GroupStatement],
     approver_email: str,
     requester_email: str,
     permission_set_name: str | None = None,
@@ -136,14 +154,15 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
 
     for statement in affected_statements:
-        if approver_email in statement.approvers:
-            is_self_approval = approver_email == requester_email
-            if is_self_approval and statement.allow_self_approval or not is_self_approval:
-                return ApproveRequestDecision(
-                    grant=action == entities.ApproverAction.Approve,
-                    permit=True,
-                    based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
-                )
+        if not _approver_in_configured_approvers(approver_email, statement.approvers):
+            continue
+        is_self_approval = _requester_is_same_user_as_approver(approver_email, requester_email)
+        if (is_self_approval and statement.allow_self_approval) or (not is_self_approval):
+            return ApproveRequestDecision(
+                grant=action == entities.ApproverAction.Approve,
+                permit=True,
+                based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
+            )
 
     return ApproveRequestDecision(
         grant=False,
