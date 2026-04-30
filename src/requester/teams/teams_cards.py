@@ -300,8 +300,9 @@ def update_card_after_decision(
     original_card: dict,
     decision_action: str,
     color_style: str,
+    decision_by: str | None = None,
 ) -> dict:
-    """Remove ActionSet, add short status footer (no approver name), update color style."""
+    """Remove ActionSet, add status footer (optionally with actor), update color style."""
     card = copy.deepcopy(original_card)
 
     # Remove top-level actions (ActionSet)
@@ -313,11 +314,14 @@ def update_card_after_decision(
             item["style"] = color_style
             break
 
-    # Append status only; who acted is sent in a separate message with a Teams @mention
+    # Append status. Teams @mention is sent separately, but we still include a plain-text actor name
+    # in the card so the collapsed/updated message preserves who acted.
+    acted_by = (decision_by or "").strip()
+    suffix = f" by {acted_by}" if acted_by else ""
     card.setdefault("body", []).append(
         {
             "type": "TextBlock",
-            "text": f"Request {decision_action}",
+            "text": f"Request {decision_action}{suffix}",
             "wrap": True,
             "weight": "bolder",
         }

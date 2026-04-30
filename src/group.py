@@ -492,6 +492,7 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             elevator_request_id=elevator_request_id,
             decision_action="discarded",
             color_style=teams_cards.get_color_style(cfg.bad_result_emoji),
+            decision_by=approver.display_name,
         )
         await teams_activity_helpers.teams_send_text_with_user_mention(
             turn_context,
@@ -531,6 +532,7 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
         elevator_request_id=elevator_request_id,
         decision_action="approved",
         color_style=teams_cards.get_color_style(cfg.good_result_emoji),
+        decision_by=approver.display_name,
     )
 
     try:

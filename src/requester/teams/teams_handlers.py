@@ -184,6 +184,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         elevator_request_id: str,
         decision_action: str,
         color_style: str,
+        decision_by: str | None = None,
     ) -> None:
         rec = request_store.get_access_request(elevator_request_id)
         if rec is not None:
@@ -195,9 +196,11 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         else:
             orig = None
         if orig is not None:
-            updated_card = teams_cards.update_card_after_decision(orig, decision_action, color_style)
+            updated_card = teams_cards.update_card_after_decision(orig, decision_action, color_style, decision_by=decision_by)
         else:
             log.warning("Using minimal approval card update (missing record or rebuild error) for %s", elevator_request_id)
+            acted_by = (decision_by or "").strip()
+            suffix = f" by {acted_by}" if acted_by else ""
             updated_card = {
                 "type": "AdaptiveCard",
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -217,7 +220,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                     },
                     {
                         "type": "TextBlock",
-                        "text": f"Request {decision_action}",
+                        "text": f"Request {decision_action}{suffix}",
                         "wrap": True,
                         "weight": "bolder",
                     },
@@ -326,6 +329,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 elevator_request_id=elevator_request_id,
                 decision_action="discarded",
                 color_style=teams_cards.get_color_style(c.bad_result_emoji),
+                decision_by=approver.display_name,
             )
             await teams_activity_helpers.teams_send_text_with_user_mention(
                 ctx,
@@ -366,6 +370,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             elevator_request_id=elevator_request_id,
             decision_action="approved",
             color_style=teams_cards.get_color_style(c.good_result_emoji),
+            decision_by=approver.display_name,
         )
 
         try:

@@ -197,7 +197,7 @@ def test_property_card_state_transition(requester: str, acc, style: str, dec: st
         elevator_request_id="z",
     )
     assert orig.get("actions")
-    u1 = teams_cards.update_card_after_decision(orig, dec, style)
+    u1 = teams_cards.update_card_after_decision(orig, dec, style, decision_by=None)
     assert u1.get("actions") is None
     assert "FactSet" in {x.get("type") for x in u1.get("body", [])}
     assert any(f"Request {dec}" in (x.get("text") or "") for x in u1.get("body", []))
@@ -458,5 +458,6 @@ def test_property_five_color_style_in_card(style: str) -> None:
         {"x": 1},
         elevator_request_id="e2",
     )
-    upd = teams_cards.update_card_after_decision(orig, "approved", style)
+    upd = teams_cards.update_card_after_decision(orig, "approved", style, decision_by="Alice Approver")
     assert _head_container_style(upd) == style
+    assert any("Request approved by Alice Approver" in (x.get("text") or "") for x in upd.get("body", []))
