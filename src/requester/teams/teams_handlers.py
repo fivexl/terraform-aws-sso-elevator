@@ -179,12 +179,13 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             elevator_request_id=eid,
         )
 
-    async def _update_approval_card(
+    async def _update_approval_card(  # noqa: PLR0913
         turn_context: ActivityContext[Any],
         elevator_request_id: str,
         decision_action: str,
         color_style: str,
         decision_by: str | None = None,
+        decision_by_user_id: str | None = None,
     ) -> None:
         rec = request_store.get_access_request(elevator_request_id)
         if rec is not None:
@@ -196,7 +197,13 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         else:
             orig = None
         if orig is not None:
-            updated_card = teams_cards.update_card_after_decision(orig, decision_action, color_style, decision_by=decision_by)
+            updated_card = teams_cards.update_card_after_decision(
+                orig,
+                decision_action,
+                color_style,
+                decision_by=decision_by,
+                decision_by_user_id=decision_by_user_id,
+            )
         else:
             log.warning("Using minimal approval card update (missing record or rebuild error) for %s", elevator_request_id)
             acted_by = (decision_by or "").strip()
@@ -330,6 +337,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
                 decision_action="discarded",
                 color_style=teams_cards.get_color_style(c.bad_result_emoji),
                 decision_by=approver.display_name,
+                decision_by_user_id=approver.id,
             )
             await teams_activity_helpers.teams_send_text_with_user_mention(
                 ctx,
@@ -371,6 +379,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             decision_action="approved",
             color_style=teams_cards.get_color_style(c.good_result_emoji),
             decision_by=approver.display_name,
+            decision_by_user_id=approver.id,
         )
 
         try:

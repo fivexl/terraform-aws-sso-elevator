@@ -10,7 +10,10 @@ import httpx
 import pytest
 
 import config as config_module
+import entities
+import request_store
 import schedule
+from events import ApproverNotificationEvent
 from requester.teams.teams_notifier import TeamsNotifier
 from requester.teams.teams_threading import (
     parent_activity_id_for_bot_thread_reply,
@@ -18,6 +21,7 @@ from requester.teams.teams_threading import (
     thread_root_activity_id_for_reply,
 )
 from revoker import _teams_reply_parent_activity_candidates
+from revoker import handle_approvers_renotification_event
 from tests.test_config import valid_config_dict
 
 
@@ -147,6 +151,64 @@ def test_schedule_approver_notification_event_serializes_teams_ids(monkeypatch: 
     assert payload["elevator_request_id"] == "e1"
     assert payload["teams_conversation_id"] == "19:c@t;messageid=r"
     assert payload["teams_activity_id"] == "act1"
+
+
+def test_teams_renotification_does_not_reschedule_after_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in valid_config_dict().items():
+        monkeypatch.setenv(k, str(v))
+    monkeypatch.setenv("chat_platform", "teams")
+    monkeypatch.setenv("teams_microsoft_app_id", "app-id")
+    monkeypatch.setenv("teams_microsoft_app_password", "app-secret")
+    monkeypatch.setenv("teams_azure_tenant_id", "tenant-id")
+    monkeypatch.setenv("teams_approval_conversation_id", "19:approval@thread.tacv2")
+    config_module._config = None
+
+    import revoker as revoker_module
+
+    revoker_module.cfg = config_module.Config()  # type: ignore[call-arg]
+    request_store._memory.clear()  # noqa: SLF001
+
+    eid = "e-finalized"
+    request_store.put_access_request(
+        entities.elevator_request.ElevatorRequestRecord(
+            elevator_request_id=eid,
+            kind=entities.elevator_request.ElevatorRequestKind.account,
+            status=entities.elevator_request.ElevatorRequestStatus.completed,
+            requester_slack_id="U1",
+            requester_display_name="R",
+            requester_email="r@example.com",
+            reason="x",
+            permission_duration_seconds=60,
+            account_id="123456789012",
+            permission_set_name="Admin",
+            group_id=None,
+            slack_channel_id="C",
+            slack_message_ts="T",
+        )
+    )
+
+    event = ApproverNotificationEvent(
+        action="approvers_renotification",
+        schedule_name="approvers-renotificationX",
+        time_stamp="1",
+        channel_id="C",
+        time_to_wait_in_seconds=60.0,
+        elevator_request_id=eid,
+        teams_conversation_id="19:c@thread.tacv2;messageid=root",
+        teams_activity_id="act1",
+    )
+
+    scheduler_client = MagicMock()
+    monkeypatch.setattr(schedule, "delete_schedule", MagicMock())
+    monkeypatch.setattr(schedule, "schedule_approver_notification_event", MagicMock())
+
+    handle_approvers_renotification_event(
+        event=event,
+        slack_client=MagicMock(),
+        scheduler_client=scheduler_client,
+    )
+
+    schedule.schedule_approver_notification_event.assert_not_called()
 
 
 def test_thread_root_activity_id_for_reply_parses_suffix() -> None:

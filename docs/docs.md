@@ -26,6 +26,6 @@ However, there is still a way to provide **temporary** access to the management 
 
 1. Go to the management account and create a `ManagementAccountAccess` group and permission set (with required permissions).
 2. From the management account, assign the `ManagementAccountAccess` group and permission set to the management account.
-3. Use SSO Elevator to `/group_access` request access to this `ManagementAccountAccess` group, which will add you to the group and grant you access to the management account. (this way you don't directly use the permission set, so you don't hit the limitation and get access to the management account)
+3. Use SSO Elevator’s **group access** flow to request access to this `ManagementAccountAccess` group (Slack: **`group-access`** global shortcut; Teams: **`/request-group`**). This will add you to the group and grant you access to the management account (without directly using a permission set from the delegated admin account).
 
 With this approach, you can reduce how often you use the management account and how many resources you deploy there, while still being able to manage the entire organization and temporarily access the management account.

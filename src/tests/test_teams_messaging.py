@@ -430,6 +430,32 @@ def test_build_mention_structure() -> None:
     assert e["mentioned"]["id"] == "u"
 
 
+def test_graph_filter_escapes_single_quotes() -> None:
+    cfg = teams_users._build_user_filter_config("o'hara@example.com")
+    if cfg is None:
+        pytest.skip("Graph SDK is not available; cannot validate filter escaping")
+    qp = getattr(cfg, "query_parameters", None)
+    filt = getattr(qp, "filter", "") if qp is not None else ""
+    assert "o''hara@example.com" in str(filt)
+
+
+def test_extract_retry_after_from_response_headers() -> None:
+    class DummyResponse:  # noqa: D401
+        status_code = 429
+
+        def __init__(self, headers: dict) -> None:
+            self.headers = headers
+
+    class DummyError(Exception):
+        def __init__(self, headers: dict) -> None:
+            super().__init__("rate limited")
+            self.response = DummyResponse(headers)
+
+    assert teams_users._extract_retry_after(DummyError({"Retry-After": "2"})) == 2.0
+    assert teams_users._extract_retry_after(DummyError({"retry-after": "0.5"})) == 0.5
+    assert teams_users._extract_retry_after(DummyError({"Retry-After": "not-a-number"})) == 1.0
+
+
 # Property 5: any valid style is applied
 @settings(max_examples=10, suppress_health_check=(HealthCheck.too_slow,))
 @given(style=_STYLE_CHOICES)
@@ -461,3 +487,27 @@ def test_property_five_color_style_in_card(style: str) -> None:
     upd = teams_cards.update_card_after_decision(orig, "approved", style, decision_by="Alice Approver")
     assert _head_container_style(upd) == style
     assert any("Request approved by Alice Approver" in (x.get("text") or "") for x in upd.get("body", []))
+
+
+def test_update_card_after_decision_embeds_mention_when_id_present() -> None:
+    orig = teams_cards.build_approval_card(
+        requester_name="R",
+        account=None,
+        group=None,
+        role_name=None,
+        reason="x",
+        permission_duration="1:0:0",
+        show_buttons=True,
+        color_style="default",
+        request_data={},
+        elevator_request_id="e1",
+    )
+    upd = teams_cards.update_card_after_decision(
+        orig,
+        "approved",
+        "good",
+        decision_by="Alice Approver",
+        decision_by_user_id="29:alice-id",
+    )
+    assert upd.get("msteams", {}).get("entities")
+    assert any("<at>Alice Approver</at>" in (x.get("text") or "") for x in upd.get("body", []))

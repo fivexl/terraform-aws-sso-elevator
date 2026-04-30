@@ -24,12 +24,19 @@ _MAX_GRAPH_RETRIES = 3
 _HTTP_STATUS_TOO_MANY_REQUESTS = 429
 
 
+def _activity_from(activity: object) -> object | None:
+    return getattr(activity, "from_property", None) or getattr(activity, "from_", None)
+
+
 async def get_user_from_activity(turn_context: object) -> entities.teams.TeamsUser:
     """Extract user info from an incoming activity (ActivityContext or legacy TurnContext)."""
     activity = turn_context.activity
-    from_prop = getattr(activity, "from_property", None) or getattr(activity, "from_", None)
+    from_prop = _activity_from(activity)
     if from_prop is None:
         raise ValueError("Activity has no sender (from)")
+
+    default_display_name = str(getattr(from_prop, "name", None) or "")
+    default_aad_object_id = str(getattr(from_prop, "aad_object_id", None) or "")
 
     conv = getattr(activity, "conversation", None)
     if conv and getattr(conv, "id", None) and hasattr(turn_context, "api"):
@@ -37,17 +44,17 @@ async def get_user_from_activity(turn_context: object) -> entities.teams.TeamsUs
             member = await turn_context.api.conversations.members(cast("str", conv.id)).get(str(from_prop.id))
             raw_addr = getattr(member, "email", None) or getattr(member, "user_principal_name", None)
             email = str(raw_addr or "")
-            display_name = str(getattr(member, "name", None) or from_prop.name or "")
-            aad_object_id = str(getattr(member, "aad_object_id", None) or getattr(from_prop, "aad_object_id", None) or "")
+            display_name = str(getattr(member, "name", None) or default_display_name)
+            aad_object_id = str(getattr(member, "aad_object_id", None) or default_aad_object_id)
         except Exception as e:
             logger.exception("Failed to get member from conversation API, using activity: %s", e)
             email = ""
-            display_name = from_prop.name or ""
-            aad_object_id = str(getattr(from_prop, "aad_object_id", None) or "")
+            display_name = default_display_name
+            aad_object_id = default_aad_object_id
     else:
         email = ""
-        display_name = from_prop.name or ""
-        aad_object_id = str(getattr(from_prop, "aad_object_id", None) or "")
+        display_name = default_display_name
+        aad_object_id = default_aad_object_id
 
     return entities.teams.TeamsUser(
         id=str(from_prop.id),
@@ -199,7 +206,11 @@ async def get_user_by_email(graph_client: object, email: str) -> entities.teams.
             # Check for 429 rate limit
             retry_after = _extract_retry_after(e)
             if retry_after is not None and attempt < _MAX_GRAPH_RETRIES - 1:
-                logger.warning(f"Graph API rate limited (429), retrying after {retry_after}s (attempt {attempt + 1})")
+                logger.warning(
+                    "Graph API rate limited (429), retrying after %ss (attempt %s)",
+                    retry_after,
+                    attempt + 1,
+                )
                 await asyncio.sleep(retry_after)
                 last_error = e
                 continue
@@ -215,14 +226,22 @@ def _build_user_filter_config(email: str) -> object | None:
         from msgraph.generated.users.users_request_builder import UsersRequestBuilder  # type: ignore[import]
         from kiota_abstractions.base_request_configuration import RequestConfiguration  # type: ignore[import]
 
+        # OData string literal escaping uses doubled single quotes.
+        # This is a no-op for normal emails, and hardens against malformed input.
+        safe_email = _escape_odata_string_literal(email)
         query_params = UsersRequestBuilder.UsersRequestBuilderGetQueryParameters(
-            filter=f"mail eq '{email}' or userPrincipalName eq '{email}'",
+            filter=f"mail eq '{safe_email}' or userPrincipalName eq '{safe_email}'",
             select=["id", "mail", "userPrincipalName", "displayName"],
         )
 
         return RequestConfiguration(query_parameters=query_params)
     except ImportError:
         return None
+
+
+def _escape_odata_string_literal(value: str) -> str:
+    """Escape a value for embedding inside single-quoted OData string literal."""
+    return (value or "").replace("'", "''")
 
 
 def _extract_retry_after(error: Exception) -> float | None:
@@ -321,10 +340,10 @@ async def resolve_principal_to_teams_user(
         if not email and emails:
             email = emails[0].get("Value")
         if not email:
-            logger.warning(f"No email found for SSO user {sso_user_id}")
+            logger.warning("No email found for SSO user %s", sso_user_id)
             return None
 
         return await get_user_by_email_with_config(graph_client, email, cfg)
     except Exception as e:
-        logger.exception(f"Failed to resolve SSO principal {sso_user_id} to Teams user: {e}")
+        logger.exception("Failed to resolve SSO principal %s to Teams user: %s", sso_user_id, e)
         return None

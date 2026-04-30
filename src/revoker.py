@@ -846,7 +846,7 @@ def handle_discard_buttons_event(
     logger.info("Buttons were not found", extra={"event": event})
 
 
-def handle_approvers_renotification_event(
+def handle_approvers_renotification_event(  # noqa: PLR0912, PLR0915
     event: ApproverNotificationEvent,
     slack_client: slack_sdk.WebClient | TeamsNotifier,
     scheduler_client: EventBridgeSchedulerClient,
@@ -854,6 +854,21 @@ def handle_approvers_renotification_event(
     schedule.delete_schedule(scheduler_client, event.schedule_name)
 
     if cfg.chat_platform == "teams":
+        if event.elevator_request_id:
+            rec = request_store.get_access_request(event.elevator_request_id)
+            if rec is None:
+                logger.warning(
+                    "Skip Teams renotification: request record not found",
+                    extra={"event": event, "elevator_request_id": event.elevator_request_id},
+                )
+                return
+            if rec.status != ElevatorRequestStatus.awaiting_approval:
+                logger.info(
+                    "Skip Teams renotification for finalized request",
+                    extra={"event": event, "status": rec.status, "elevator_request_id": event.elevator_request_id},
+                )
+                return
+
         import asyncio
 
         tmeta = _teams_presentation_for_scheduled(
@@ -918,21 +933,21 @@ def handle_approvers_renotification_event(
             teams_conversation_id=tc,
             teams_activity_id=ta,
         )
-        return
+    else:
+        # Slack path
+        assert isinstance(slack_client, slack_sdk.WebClient)
+        message = slack_helpers.get_message_from_timestamp(
+            channel_id=event.channel_id,
+            message_ts=event.time_stamp,
+            slack_client=slack_client,
+        )
+        if message is None:
+            logger.warning("Message not found", extra={"event": event})
+            return
 
-    # Slack path
-    assert isinstance(slack_client, slack_sdk.WebClient)
-    message = slack_helpers.get_message_from_timestamp(
-        channel_id=event.channel_id,
-        message_ts=event.time_stamp,
-        slack_client=slack_client,
-    )
-    if message is None:
-        logger.warning("Message not found", extra={"event": event})
-        return
-
-    for block in message["blocks"]:
-        if slack_helpers.get_block_id(block) == "buttons":
+        for block in message["blocks"]:
+            if slack_helpers.get_block_id(block) != "buttons":
+                continue
             time_to_wait = timedelta(seconds=event.time_to_wait_in_seconds)
             if cfg.approver_renotification_backoff_multiplier != 0:
                 time_to_wait = time_to_wait * cfg.approver_renotification_backoff_multiplier
@@ -953,7 +968,6 @@ def handle_approvers_renotification_event(
                 time_to_wait=time_to_wait,
                 elevator_request_id=event.elevator_request_id,
             )
-            return
-
-    logger.info("The request has already been approved or discarded.", extra={"event": event})
-    return
+            break
+        else:
+            logger.info("The request has already been approved or discarded.", extra={"event": event})

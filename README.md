@@ -11,9 +11,9 @@
 
 =========================================================================
 
-# Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack
+# Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack or Microsoft Teams
 
-- [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack)
+- [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack or Microsoft Teams](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack-or-microsoft-teams)
 - [Introduction](#introduction)
 - [Functionality](#functionality)
   - [Group Assignments Mode](#group-assignments-mode)
@@ -53,7 +53,7 @@ The terraform-aws-sso-elevator module addresses this issue by allowing the imple
 
 For more information on temporary elevated access for AWS and the AWS-provided solution, visit [Managing temporary elevated access to your AWS environment](https://aws.amazon.com/blogs/security/managing-temporary-elevated-access-to-your-aws-environment/).
 
-The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a Slack form. We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
+The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a chat form (Slack or Microsoft Teams). We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
 
 AWS announced that [Customers of AWS IAM Identity Center (successor to AWS Single Sign-On) can use CyberArk Secure Cloud Access, Ermetic, and Okta Access Requests for temporary elevated access](https://aws.amazon.com/about-aws/whats-new/2023/05/aws-partners-temporary-elevated-access-capabilities-iam-identity-center/). So if you are already using one of those vendors we recommend checking their offering first.
 
@@ -62,20 +62,31 @@ Watch demo
 
 # Functionality
 
+SSO Elevator supports two chat platforms:
+
+- **Slack**: modal form via global shortcut and Slack app interactions.
+- **Microsoft Teams**: bot commands `/request-access` and `/request-group` that post a launcher Adaptive Card; the button opens a Task Module (`task/fetch`) with the form. Approvals use Adaptive Card buttons and in-thread updates.
+
+### Demo scenarios (Teams)
+- **Request account access**: in Teams, type `/request-access`, open the form, select account + permission set + duration + reason, submit.
+- **Request group membership**: in Teams, type `/request-group`, open the form, select group + duration + reason, submit.
+- **Approve / discard**: approvers click **Approve** / **Discard** on the approval Adaptive Card; the card is updated in-place with the outcome.
+- **Expiration & reminders**: if enabled, the revoker removes buttons on expiry and can post reminder replies in the same thread.
+
 ```mermaid
 sequenceDiagram
-    Requester->>Slack: submits form in Slack - CMD+K, search access or /access command
-    Slack->>AWS Lambda - Access Requester: sends request to access-requester
-    AWS Lambda - Access Requester->>Slack: sends a message to Slack channel with approve/deny buttons and tags approvers
-    Approver->>Slack: pressed approve button in Slack message
-    Slack->>AWS Lambda - Access Requester: Send approved request to access-requester
+    Requester->>Chat platform: opens request form (Slack shortcut / Teams /request-access or /request-group)
+    Chat platform->>AWS Lambda - Access Requester: sends request to access-requester
+    AWS Lambda - Access Requester->>Chat platform: posts approval card/message in approval channel thread
+    Approver->>Chat platform: clicks approve/discard on the approval card/message
+    Chat platform->>AWS Lambda - Access Requester: sends decision to access-requester
     AWS Lambda - Access Requester->>AWS IAM Identity Center(SSO): creates user-level permission set assignment based on approved request
     AWS Lambda - Access Requester->>AWS EventBridge: creates revocation schedule
     AWS Lambda - Access Requester->>AWS S3: logs audit record
     AWS EventBridge->>AWS Lambda - Access Revoker: sends revocation event when times come
     AWS Lambda - Access Revoker->>AWS IAM Identity Center(SSO): revokes user-level permission set assignment
     AWS Lambda - Access Revoker->>AWS S3: logs audit record
-    AWS Lambda - Access Revoker->>Slack:  send notification about revocation
+    AWS Lambda - Access Revoker->>Chat platform: sends notification about revocation
 ```
 
 The module deploys two AWS Lambda functions: access-requester and access-revoker. The access-requester handles requests from Slack, creating user-level permission set assignments and an Amazon EventBridge trigger that activates the access-revoker Lambda when it is time to revoke access. The access-revoker revokes user access when triggered by EventBridge and also runs daily to revoke any user-level permission set assignments without an associated EventBridge trigger. Group-level permission sets are not affected.
@@ -85,9 +96,12 @@ For auditing purposes, information about all access grants and revocations is st
 Additionally, the Access-Revoker continuously reconciles the revocation schedule with all user-level permission set assignments and issues warnings if it detects assignments without a revocation schedule (presumably created by someone manually). By default, the Access-Revoker will automatically revoke all unknown user-level permission set assignments daily. However, you can configure it to operate more or less frequently.
 
 ## Group Assignments Mode
-Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access. SSO elevator now can add users to a groups, to do so, you will need to use /group-access command, which, instead of showing the form for account assignments, will present a Slack form where the user can select a group they want access to, specify a reason, and define the duration for which access is required.
+Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access (temporary group membership with scheduled revocation).
 
-The basic logic for access, configuration, and Slack integration remains the same as before. To enable the new Group Assignments Mode, you need to provide the module with a new group_config Terraform variable:
+- **Slack**: use the global shortcut **`group-access`** (configured in the Slack app manifest with callback `request_for_group_membership`) to open the group request form.
+- **Microsoft Teams**: use the bot command **`/request-group`** to post a launcher card, then open the group request form in a Task Module.
+
+To enable Group Assignments Mode, provide the module with the `group_config` Terraform variable:
 ```hcl
 group_config = [
     {              
@@ -118,7 +132,7 @@ There are two key differences compared to the standard Elevator configuration:
 
 The Elevator will only work with groups specified in the configuration.
 
-If you were using Terraform AWS SSO Elevator before version 2.0.0, you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
+If you were using Terraform AWS SSO Elevator before version 2.0.0 (Slack), you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
 {
     "name": "group-access",
     "type": "global",
@@ -689,6 +703,21 @@ settings:
 8. Click `install to workspace`
 9. Copy `Signing Secret` # for `slack_signing_secret` module input
 10. Copy `Bot User OAuth Token` # for `slack_bot_token` module input
+
+## Microsoft Teams bot setup (high-level)
+1. In Azure/Entra, create/register a **Bot Framework** app (App ID + client secret).
+2. Configure the bot’s **messaging endpoint** to the Terraform output `requester_api_endpoint_url` (HTTP API / Lambda endpoint).
+3. In Terraform, set:
+   - `chat_platform = "teams"`
+   - `teams_microsoft_app_id`
+   - `teams_microsoft_app_password`
+   - `teams_azure_tenant_id` (recommended for single-tenant org installs)
+   - `teams_approval_conversation_id` (the target Teams channel or group chat `conversation.id` where approval cards should be posted)
+4. Install the Teams app/bot into the target team/channel (and ensure the bot is allowed by org policy).
+5. Demo:
+   - Type `/request-access` (account) or `/request-group` (group) in Teams
+   - Open the form from the launcher card, submit
+   - Approvers click buttons on the posted approval card
 
 # Terraform docs 
 

@@ -149,12 +149,13 @@ async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913, PLR0912
             try:
                 u = await teams_users.get_user_by_email_with_config(graph, e, cfg)
             except Exception as ex:
-                log.warning("Could not resolve approver in Teams: %s (%s)", e, ex)
+                # Avoid logging raw approver emails (PII) on resolution failures.
+                log.warning("Could not resolve an approver in Teams: %s", ex)
         if u is not None:
             resolved.append(u)
             resolved_by_config_email.add(e)
     if graph is None and not resolved:
-        log.warning("Graph client not configured; sending plain-text approver ping (emails)")
+        log.info("Graph client not configured; sending plain-text approver ping (emails)")
 
     if resolved:
         parts: list[str] = []

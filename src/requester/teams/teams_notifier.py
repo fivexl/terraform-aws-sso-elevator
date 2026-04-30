@@ -25,6 +25,15 @@ log = logging.getLogger(__name__)
 TeamsGetApp = Callable[[], Awaitable[Any]]
 
 
+def _resolve_service_url(service_url: str | None, app: Any, tenant_id: str) -> str:
+    """Resolve a Bot Framework base service URL without trailing slash."""
+    su = (service_url or "").strip() or cast(
+        str,
+        getattr(getattr(app, "api", None), "service_url", None) or f"https://smba.trafficmanager.net/{tenant_id}/",
+    )
+    return su.rstrip("/")
+
+
 def _config_conversation_id_for_bot(conversation_id: str) -> str:
     """Strip ``;messageid=...`` from pasted Terraform values (channel root id only)."""
     s = (conversation_id or "").strip()
@@ -162,13 +171,7 @@ class TeamsNotifier:
         up = MessageActivityInput(
             id=str(activity_id),
         ).add_attachments(Attachment(content_type="application/vnd.microsoft.card.adaptive", content=card))
-        su = (
-            (self._service_url_override or "").strip()
-            or cast(
-                str,
-                getattr(getattr(app, "api", None), "service_url", None) or f"https://smba.trafficmanager.net/{tenant_id}/",
-            )
-        ).rstrip("/")
+        su = _resolve_service_url(self._service_url_override, app, tenant_id)
         as_http = getattr(getattr(app, "activity_sender", None), "_client", None)
         if as_http is not None:
             from microsoft_teams.api import ApiClient  # same package as App
@@ -199,10 +202,7 @@ class TeamsNotifier:
         tenant_id = cast(str, self._cfg.teams_azure_tenant_id)
         msg = MessageActivityInput(text=text, entities=entities) if entities else MessageActivityInput(text=text)
         msg.reply_to_id = parent_activity_id
-        su = self._service_url_override or cast(
-            str,
-            getattr(getattr(app, "api", None), "service_url", None) or f"https://smba.trafficmanager.net/{tenant_id}/",
-        )
+        su = _resolve_service_url(self._service_url_override, app, tenant_id) + "/"
         await _send_in_conversation(
             app=app,
             app_id=app_id,
@@ -228,10 +228,7 @@ class TeamsNotifier:
         tenant_id = cast(str, self._cfg.teams_azure_tenant_id)
         msg = MessageActivityInput(text=text, entities=entities) if entities else MessageActivityInput(text=text)
         msg.reply_to_id = parent_activity_id
-        su = self._service_url_override or cast(
-            str,
-            getattr(getattr(app, "api", None), "service_url", None) or f"https://smba.trafficmanager.net/{tenant_id}/",
-        )
+        su = _resolve_service_url(self._service_url_override, app, tenant_id) + "/"
         await _send_in_conversation(
             app=app,
             app_id=app_id,
@@ -278,7 +275,7 @@ class TeamsNotifier:
             await app.activity_sender.send(msg, ref)
         except Exception as e:
             if "403" in str(e) or "Forbidden" in str(e):
-                log.exception(f"Proactive DM blocked (403 Forbidden): {e}")
+                log.exception("Proactive DM blocked (403 Forbidden): %s", e)
             else:
                 raise
 
@@ -293,13 +290,7 @@ async def _send_in_conversation(  # noqa: PLR0913
     *,
     use_activity_context_send_path: bool = False,
 ) -> str:
-    su = (
-        service_url
-        or cast(
-            str,
-            getattr(getattr(app, "api", None), "service_url", None) or f"https://smba.trafficmanager.net/{tenant_id}/",
-        )
-    ).rstrip("/")
+    su = _resolve_service_url(service_url, app, tenant_id)
     # Proactive in-thread: ``use_activity_context_send_path`` matches :meth:`ActivityContext.send`; the ``reply``
     # subresource is used for other callers with ``use_activity_context_send_path`` false.
     parent = getattr(message, "reply_to_id", None)

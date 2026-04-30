@@ -347,11 +347,12 @@ Teams authentication:
 
 | Current (Slack) | New (Teams) | Notes |
 |-----------------|-------------|-------|
-| `slack_bot_token` | `microsoft_app_id` + `microsoft_app_password` | Bot Framework credentials |
-| `slack_channel_id` | `teams_channel_id` + `teams_team_id` | Teams channel identification requires both |
+| `slack_bot_token` | `teams_microsoft_app_id` + `teams_microsoft_app_password` | Bot Framework credentials (Teams bot App ID + secret) |
+| `slack_channel_id` | `teams_approval_conversation_id` | Teams **conversation.id** for the approval channel (or group chat) where Adaptive Cards are posted |
+| (n/a) | `teams_azure_tenant_id` | Entra tenant ID (recommended for single-tenant deployments; used for Bot Framework / Graph contexts) |
 | `slack_app_log_level` | `bot_log_level` | Same concept |
 | `send_dm_if_user_not_in_channel` | `send_dm_if_user_not_in_channel` | Same flag, different implementation |
-| `post_update_to_slack` | `post_update_to_teams` | Same flag |
+| `post_update_to_slack` | `post_update_to_slack` | Flag name is shared; when `chat_platform="teams"` it means “post revocation/updates to the Teams approval conversation” |
 | Emoji config (`good_result_emoji`, etc.) | Color/style config (`good_result_style`, etc.) | Adaptive Card uses `style` not emoji |
 
 ---
@@ -415,7 +416,7 @@ Teams authentication:
 
 ### Phase 3: Configuration
 1. Add `messaging_platform: "slack" | "teams"` config parameter
-2. Add Teams-specific config (`microsoft_app_id`, `microsoft_app_password`, `teams_channel_id`, `teams_team_id`)
+2. Add Teams-specific config (`teams_microsoft_app_id`, `teams_microsoft_app_password`, `teams_azure_tenant_id`, `teams_approval_conversation_id`)
 3. Update Terraform to optionally deploy Teams bot infrastructure
 
 ### Phase 4: Revoker updates

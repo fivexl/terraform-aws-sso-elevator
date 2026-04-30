@@ -301,6 +301,7 @@ def update_card_after_decision(
     decision_action: str,
     color_style: str,
     decision_by: str | None = None,
+    decision_by_user_id: str | None = None,
 ) -> dict:
     """Remove ActionSet, add status footer (optionally with actor), update color style."""
     card = copy.deepcopy(original_card)
@@ -314,10 +315,23 @@ def update_card_after_decision(
             item["style"] = color_style
             break
 
-    # Append status. Teams @mention is sent separately, but we still include a plain-text actor name
-    # in the card so the collapsed/updated message preserves who acted.
+    # Append status. When we know the actor's Teams id, embed an Adaptive Card mention so Teams renders
+    # it as a clickable @mention. When we don't, fall back to plain text.
     acted_by = (decision_by or "").strip()
-    suffix = f" by {acted_by}" if acted_by else ""
+    acted_by_id = (decision_by_user_id or "").strip()
+    mention_text = f"<at>{acted_by}</at>" if acted_by else ""
+    use_mention = bool(acted_by and acted_by_id)
+    suffix = f" by {mention_text if use_mention else acted_by}" if acted_by else ""
+    if use_mention:
+        card["msteams"] = {
+            "entities": [
+                {
+                    "type": "mention",
+                    "text": mention_text,
+                    "mentioned": {"id": acted_by_id, "name": acted_by},
+                }
+            ]
+        }
     card.setdefault("body", []).append(
         {
             "type": "TextBlock",
