@@ -12,7 +12,11 @@ import pytest
 import config as config_module
 import schedule
 from requester.teams.teams_notifier import TeamsNotifier
-from requester.teams.teams_threading import parent_activity_id_for_bot_thread_reply, thread_root_activity_id_for_reply
+from requester.teams.teams_threading import (
+    parent_activity_id_for_bot_thread_reply,
+    thread_follow_up_reply_parent_candidates,
+    thread_root_activity_id_for_reply,
+)
 from revoker import _teams_reply_parent_activity_candidates
 from tests.test_config import valid_config_dict
 
@@ -39,7 +43,16 @@ def test_teams_reply_parent_activity_candidates_unique_order() -> None:
     tc = "19:c@t;messageid=root1"
     ta = "card99"
     out = _teams_reply_parent_activity_candidates(tc, ta)
-    assert out == ["root1", "card99"]
+    assert out == ["card99", "root1"]
+    assert thread_follow_up_reply_parent_candidates(tc, ta) == out
+
+
+def test_thread_follow_up_candidates_card_only() -> None:
+    assert thread_follow_up_reply_parent_candidates("19:c@thread.tacv2", "only-card") == ["only-card"]
+
+
+def test_thread_follow_up_candidates_root_only_in_conversation() -> None:
+    assert thread_follow_up_reply_parent_candidates("19:c@t;messageid=rootx", "") == ["rootx"]
 
 
 def test_teams_reply_parent_activity_candidates_dedupes() -> None:
@@ -139,3 +152,24 @@ def test_schedule_approver_notification_event_serializes_teams_ids(monkeypatch: 
 def test_thread_root_activity_id_for_reply_parses_suffix() -> None:
     assert thread_root_activity_id_for_reply("19:x@t;messageid=abc") == "abc"
     assert thread_root_activity_id_for_reply("19:x@t") == ""
+
+
+def test_thread_methods_use_full_conversation_id_override_for_url(teams_notifier_config: config_module.Config) -> None:
+    cfg = teams_notifier_config
+    app_m = MagicMock()
+    app_m.api.service_url = "https://smba.test.example/"
+    app_m.activity_sender.send = AsyncMock()
+    get_app = AsyncMock(return_value=app_m)
+
+    async def _run() -> None:
+        notifier = TeamsNotifier(
+            cfg,
+            get_app,
+            conversation_id_override="19:ch@thread.tacv2;messageid=root1",
+            service_url_override="https://smba.test.example/",
+        )
+        with patch("requester.teams.teams_notifier._send_in_conversation", new_callable=AsyncMock, return_value="aid") as m_send:
+            await notifier.send_thread_reply("parent1", "hello")
+            assert m_send.await_args.kwargs["conversation_id"] == "19:ch@thread.tacv2;messageid=root1"
+
+    asyncio.run(_run())

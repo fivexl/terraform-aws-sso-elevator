@@ -103,22 +103,30 @@ class TeamsNotifier:
             return base
         return _config_conversation_id_for_bot(cast(str, self._cfg.teams_approval_conversation_id))
 
+    def _effective_thread_conversation_id_for_url(self) -> str:
+        """Conversation id to use for in-thread proactive sends.
+
+        Observed 2026-04: some tenants only deliver in-thread proactive replies when the URL/reference uses
+        the full ``conversation.id`` including ``;messageid=...``. When we have an override (from the incoming
+        activity), keep it intact; otherwise fall back to the base channel id.
+        """
+        if self._conversation_id_override:
+            return self._conversation_id_override
+        return self._effective_approval_conversation_id()
+
     def _approval_thread_reply_to_id(self) -> str | None:
-        # Proactive send must use the right parent for ``/activities/{parentId}`` (see
-        # ``parent_activity_id_for_bot_thread_reply``) or NEW messages can land in the main channel
-        # instead of the thread. ``reply_to_id`` on task may point at the launcher card, not the root.
+        # Proactive send must use a parent that keeps the message in the thread (see
+        # ``thread_follow_up_reply_parent_candidates`` — we use its first id, typically the launcher/card).
         t = (self._reply_parent_activity_id or "").strip() or None
         if not self._conversation_id_override:
             if t:
                 return t
             return None
-        from .teams_threading import parent_activity_id_for_bot_thread_reply
+        from .teams_threading import thread_follow_up_reply_parent_candidates
 
-        p = (parent_activity_id_for_bot_thread_reply(self._conversation_id_override, t or "") or "").strip()
-        if p:
-            return p
-        if t:
-            return t
+        cands = thread_follow_up_reply_parent_candidates(self._conversation_id_override, (t or "").strip())
+        if cands:
+            return cands[0]
         return None
 
     async def send_message(self, text: str, card: dict | None = None) -> str:
@@ -186,7 +194,7 @@ class TeamsNotifier:
         (``.../activities/{parentId}``), matching interactive Approve/Discard follow-up lines.
         """
         app = await self._get_app()
-        conv_id = self._effective_approval_conversation_id()
+        conv_id = self._effective_thread_conversation_id_for_url()
         app_id = cast(str, self._cfg.teams_microsoft_app_id)
         tenant_id = cast(str, self._cfg.teams_azure_tenant_id)
         msg = MessageActivityInput(text=text, entities=entities) if entities else MessageActivityInput(text=text)
@@ -215,7 +223,7 @@ class TeamsNotifier:
         entities: list[dict] | None,
     ) -> None:
         app = await self._get_app()
-        conv_id = self._effective_approval_conversation_id()
+        conv_id = self._effective_thread_conversation_id_for_url()
         app_id = cast(str, self._cfg.teams_microsoft_app_id)
         tenant_id = cast(str, self._cfg.teams_azure_tenant_id)
         msg = MessageActivityInput(text=text, entities=entities) if entities else MessageActivityInput(text=text)

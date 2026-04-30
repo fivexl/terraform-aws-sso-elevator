@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from http import HTTPStatus
+
+import httpx
 
 import config
 import sso
-from requester.teams.teams_notifier import TeamsGetApp, TeamsNotifier
-from requester.teams.teams_threading import parent_activity_id_for_bot_thread_reply
+from requester.teams.teams_notifier import (
+    TeamsGetApp,
+    TeamsNotifier,
+)
+from requester.teams.teams_threading import thread_follow_up_reply_parent_candidates
 
 from . import teams_notifier, teams_users
 
@@ -54,6 +60,31 @@ async def _post_thread_approver_line(
     await rn.send_thread_text_with_transport_fallback(parent, text, entities)
 
 
+async def _post_thread_line_with_parent_candidates(
+    t: _TeamsThreadSend,
+    teams_conversation_id: str,
+    card_activity_id: str,
+    text: str,
+    entities: list[dict] | None,
+) -> None:
+    parents = thread_follow_up_reply_parent_candidates(teams_conversation_id, card_activity_id)
+    if not parents:
+        log.warning("Empty thread parent candidates for approver ping; skipping")
+        return
+    last: httpx.HTTPStatusError | None = None
+    for parent in parents:
+        try:
+            await _post_thread_approver_line(t, parent, text, entities)
+            return
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == HTTPStatus.NOT_FOUND:
+                last = e
+                continue
+            raise
+    if last is not None:
+        raise last
+
+
 async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913, PLR0912
     cfg: config.Config,
     get_app: TeamsGetApp,
@@ -70,9 +101,8 @@ async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913, PLR0912
     """
     if not approver_emails:
         return
-    parent = (parent_activity_id_for_bot_thread_reply(teams_conversation_id, card_activity_id) or "").strip()
-    if not parent:
-        log.warning("Empty thread parent for approver ping; skipping")
+    if not thread_follow_up_reply_parent_candidates(teams_conversation_id, card_activity_id):
+        log.warning("Empty thread parent candidates for approver ping; skipping")
         return
 
     normalized: list[str] = []
@@ -141,7 +171,7 @@ async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913, PLR0912
                 mv = sso.ordered_email_variants_for_graph_lookup(e, cfg)
                 miss_labels.append(mv[1] if len(mv) > 1 else mv[0])
             text = f"{text} Also notify: {', '.join(miss_labels)}"
-        await _post_thread_approver_line(tsend, parent, text, ent_list)
+        await _post_thread_line_with_parent_candidates(tsend, teams_conversation_id, card_activity_id, text, ent_list)
         return
 
     # No Graph or no resolvable user: plain text; show alternate domain (e.g. UPN) when secondary domains expand the list
@@ -149,6 +179,6 @@ async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913, PLR0912
     for e in normalized:
         v = sso.ordered_email_variants_for_graph_lookup(e, cfg)
         labels.append(v[1] if len(v) > 1 else v[0])
-    body = f"There is a request waiting for the approval. Approvers: {', '.join(labels)}"
+    body = f"There is a request waiting for approval. Approvers: {', '.join(labels)}"
     log.info("Sending plain-text approver waiting ping (Graph could not resolve any approver for @mention)")
-    await _post_thread_approver_line(tsend, parent, body, None)
+    await _post_thread_line_with_parent_candidates(tsend, teams_conversation_id, card_activity_id, body, None)

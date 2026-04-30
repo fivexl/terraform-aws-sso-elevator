@@ -92,6 +92,14 @@ Teams (equivalent):
 | `client.chat_postMessage(thread_ts=ts)` | Thread replies | `reply_to_id` on activity / `TeamsNotifier.send_thread_reply` |
 | `client.chat_update(channel, ts, blocks, text)` | Update message (color coding, remove buttons) | `TeamsNotifier.update_message` or `ctx.api.conversations.activities(...).update` |
 
+**Teams thread replies (proactive) — important note (observed 2026-04):**
+
+- Some tenants only keep proactive replies inside the channel **thread** when the outbound request uses the **full**
+  `conversation.id` string that includes `;messageid=...` (the thread root id). Using the base channel id (without the
+  suffix) can succeed (HTTP 200) but still place the message in the **main channel** instead of the thread.
+- The project standard is therefore: for proactive in-thread sends (`TeamsNotifier.send_thread_*`), use the incoming
+  activity’s raw `conversation.id` (including `;messageid=`) when available.
+
 **Message structure mapping:**
 
 | Slack blocks | Adaptive Card elements |

@@ -22,7 +22,7 @@ import sso
 from requester.slack import slack_helpers
 from requester.teams.teams_deps import TeamsDependencies
 from requester.teams.teams_notifier import TeamsNotifier
-from requester.teams.teams_threading import parent_activity_id_for_bot_thread_reply, thread_root_activity_id_for_reply
+from requester.teams.teams_threading import thread_follow_up_reply_parent_candidates
 from entities.elevator_request import ElevatorRequestStatus
 from events import (
     ApproverNotificationEvent,
@@ -75,14 +75,8 @@ def _teams_presentation_for_scheduled(
 
 
 def _teams_reply_parent_activity_candidates(tc: str, ta: str) -> list[str]:
-    """Try ordered parent ids for Bot Framework thread reply; see ``teams_threading`` module notes."""
-    p0 = (parent_activity_id_for_bot_thread_reply(tc, ta) or "").strip() or (ta or "").strip()
-    out: list[str] = []
-    for x in (p0, thread_root_activity_id_for_reply(tc), (ta or "").strip()):
-        z = (x or "").strip()
-        if z and z not in out:
-            out.append(z)
-    return out
+    """Try ordered parent ids for Bot Framework thread reply; see ``thread_follow_up_reply_parent_candidates``."""
+    return thread_follow_up_reply_parent_candidates(tc, ta)
 
 
 def _get_notifier() -> slack_sdk.WebClient | TeamsNotifier:
@@ -757,9 +751,9 @@ def handle_approvers_renotification_event(
                 service_url_override=tsu,
             )
             body = (
-                "The request is still awaiting approval. The next reminder will be "
-                f"sent in {time_to_wait.seconds // 60} minutes, "
-                "unless the request is approved or discarded beforehand."
+                "Reminder: this request is still awaiting approval. "
+                "Please reply to the request in this thread using the Approve/Discard buttons. "
+                f"If no action is taken, the next reminder will be sent in {time_to_wait.seconds // 60} minutes."
             )
             last: httpx.HTTPStatusError | None = None
             for parent in _teams_reply_parent_activity_candidates(tc, ta):

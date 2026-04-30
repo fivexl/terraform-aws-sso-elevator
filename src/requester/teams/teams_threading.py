@@ -89,12 +89,42 @@ def parent_activity_id_for_bot_thread_reply(
     Observed 2026-04: with ``parentId`` = task submit's ``replyToId`` and ``;messageid=`` = a different
     thread root, Bot Framework sometimes placed messages on the **channel** instead of the thread. Using
     the **root** id in ``/conversations/.../activities/{parentId}`` matched the in-client thread.
+
+    For **follow-up** lines (approver ping, scheduled reminders), prefer
+    :func:`thread_follow_up_reply_parent_candidates` which tries the **approval card** id first, then root
+    — some tenants only keep replies in-thread when ``replyToId`` targets the card message.
     """
     root = thread_root_activity_id_for_reply(raw_conversation_id)
     t = (task_submit_or_invoke_parent or "").strip()
     if root and t and t != root:
         return root
     return t or root
+
+
+def thread_follow_up_reply_parent_candidates(raw_conversation_id: str, card_activity_id: str) -> list[str]:
+    """Ordered Bot Framework activity ids to use as ``replyToId`` / reply parent under the approval card.
+
+    When ``;messageid=ROOT`` and the stored **card** activity id differ, try **card first**, then **root**.
+    Some Teams channel configurations deliver follow-ups to the main channel when replying only to ROOT;
+    replying to the launcher / approval card id matches the in-client thread.
+    """
+    root = thread_root_activity_id_for_reply(raw_conversation_id)
+    ta = (card_activity_id or "").strip()
+    ordered: tuple[str, ...]
+    if root and ta and root != ta:
+        ordered = (ta, root)
+    elif ta:
+        ordered = (ta,)
+    elif root:
+        ordered = (root,)
+    else:
+        ordered = ()
+    out: list[str] = []
+    for x in ordered:
+        z = (x or "").strip()
+        if z and z not in out:
+            out.append(z)
+    return out
 
 
 def base_channel_conversation_id_for_path(raw_conversation_id: str) -> str:
