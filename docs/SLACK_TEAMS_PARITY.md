@@ -277,7 +277,7 @@ await turn_context.send_activity(Activity(
 | `schedule_discard_buttons_event` | `schedule.py` → EventBridge → revoker Lambda | **Same** EventBridge mechanism, revoker calls Teams Bot API instead of Slack API |
 | `schedule_approver_notification_event` | `schedule.py` → EventBridge → revoker Lambda | **Same** — post thread reply via Bot Framework |
 | `handle_discard_buttons_event` | `revoker.py` — `chat.update` to remove buttons | `update_activity` with card without buttons |
-| `handle_approvers_renotification_event` | `revoker.py` — `chat.postMessage` in thread | `TeamsNotifier.send_thread_reply` |
+| `handle_approvers_renotification_event` | `revoker.py` — `chat.postMessage` in thread | `TeamsNotifier.send_thread_text_with_transport_fallback` (activity `replyToId` path, then Bot Framework `reply` subresource on 404/405) |
 
 **No change needed** in EventBridge Scheduler logic. Only the **notification delivery** changes: instead of `slack_client.chat_postMessage`, use `TeamsNotifier` (Teams SDK on top of the same app credentials as `main`).
 

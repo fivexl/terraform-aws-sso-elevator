@@ -23,6 +23,7 @@ from entities.teams import TeamsUser
 from errors import handle_errors
 from requester.slack import slack_helpers
 from requester.teams import teams_activity_helpers, teams_cards
+from requester.teams.teams_threading import ChannelThreadContext
 
 if TYPE_CHECKING:
     from requester.teams.teams_notifier import TeamsNotifier
@@ -316,11 +317,25 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
     notifier_factory: Callable[[], "TeamsNotifier"] | None = None,
 ) -> dict:
     """Parse group task/submit, run access control, post approval card, auto-execute if grant."""
+    _thr = ChannelThreadContext.from_activity(turn_context.activity)
+    t_conv, t_su, t_par = _thr.account_approval_fields()
+    su_from_act = str(getattr(turn_context.activity, "service_url", None) or "").strip() or None
+    su_effective = (t_su or "").strip() or su_from_act
+    store_conv = (t_conv or "").strip() or cfg.teams_approval_conversation_id
+
     if notifier_factory is None:
         from requester.teams.teams_notifier import TeamsNotifier
         from requester.teams.teams_runtime import get_teams_app
 
         def _default_teams_notifier() -> "TeamsNotifier":
+            if (t_conv or "").strip():
+                return TeamsNotifier(
+                    config.get_config(),
+                    get_teams_app,
+                    conversation_id_override=(t_conv or "").strip(),
+                    service_url_override=(su_effective or None),
+                    reply_parent_activity_id_override=(t_par or "").strip() or None,
+                )
             return TeamsNotifier(config.get_config(), get_teams_app)
 
         nf: Callable[[], "TeamsNotifier"] = _default_teams_notifier
@@ -382,10 +397,9 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
 
     try:
         notifier = nf()
-        su = str(getattr(turn_context.activity, "service_url", None) or "").strip() or None
         activity_id = await notifier.send_message(text="New access request", card=card)
         if activity_id:
-            request_store.update_teams_presentation(elevator_id, cfg.teams_approval_conversation_id, activity_id, service_url=su)
+            request_store.update_teams_presentation(elevator_id, store_conv, activity_id, service_url=su_effective)
         if activity_id and show_buttons and decision.reason == access_control.DecisionReason.RequiresApproval and decision.approvers:
             from requester.teams import teams_approver_ping
             from requester.teams.teams_runtime import get_teams_app
@@ -394,8 +408,8 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
                 await teams_approver_ping.send_approvers_waiting_ping_in_thread(
                     cfg,
                     get_teams_app,
-                    teams_conversation_id=cfg.teams_approval_conversation_id,
-                    service_url=su,
+                    teams_conversation_id=store_conv,
+                    service_url=su_effective,
                     card_activity_id=activity_id,
                     approver_emails=decision.approvers,
                 )
@@ -415,6 +429,8 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
                 channel_id="",
                 time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
                 elevator_request_id=elevator_id,
+                teams_conversation_id=store_conv,
+                teams_activity_id=activity_id,
             )
         elif show_buttons and not activity_id:
             logger.warning(

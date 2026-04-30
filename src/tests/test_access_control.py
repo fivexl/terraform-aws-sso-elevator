@@ -1049,3 +1049,16 @@ def test_make_and_excute_approve_request_decision(
     decision = make_decision_on_approve_request(**test_cases_for_approve_request_decision["in"])
     if decision.grant is not True:
         assert execute_decision(decision=decision, **execute_decision_info) is False
+
+
+def test_ordered_email_variants_for_graph_lookup_order():
+    from types import SimpleNamespace
+
+    import sso
+
+    cfg = SimpleNamespace(secondary_fallback_email_domains=["@tenant.onmicrosoft.com", "@contoso.com"])
+    assert sso.ordered_email_variants_for_graph_lookup("User@Custom.TLD", cfg) == [
+        "user@custom.tld",
+        "user@tenant.onmicrosoft.com",
+        "user@contoso.com",
+    ]

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from http import HTTPStatus
 from typing import Any, cast
 
 import config
+import httpx
 from microsoft_teams.api import (
     Account,
     Attachment,
@@ -48,6 +50,15 @@ def _teams_channel_id_and_thread_root_activity_id(conversation_id: str) -> tuple
     if ";" in tail:
         tail = tail.split(";", 1)[0].strip()
     return (base, tail) if tail else (base, None)
+
+
+def base_approval_channel_conversation_id(teams_conversation_id: str | None, cfg: config.Config) -> str:
+    """Base channel id (no ``;messageid=``) for Bot Framework ``/conversations/{id}/members`` (e.g. approver roster)."""
+    s = (teams_conversation_id or "").strip()
+    if s:
+        base, _ = _teams_channel_id_and_thread_root_activity_id(s)
+        return (base or _config_conversation_id_for_bot(s)).strip()
+    return _config_conversation_id_for_bot(cast(str, cfg.teams_approval_conversation_id))
 
 
 def _ref_for_conversation(app_id: str, tenant_id: str, conversation_id: str, service_url: str | None = None) -> ConversationReference:
@@ -222,6 +233,33 @@ class TeamsNotifier:
             service_url=su,
         )
 
+    async def send_thread_text_with_transport_fallback(
+        self,
+        parent_activity_id: str,
+        text: str,
+        entities: list[dict] | None = None,
+    ) -> None:
+        """Post plain text (optional entities) as a **thread reply** only.
+
+        Tries ``ActivityContext``-style ``POST .../activities`` with ``replyToId``, then Bot Framework
+        ``POST .../activities/{parentId}/reply`` when the first path returns 404/405. Both targets the
+        same parent — never posts a top-level channel message without ``replyToId``.
+        """
+        parent = (parent_activity_id or "").strip()
+        if not parent:
+            msg = "parent_activity_id is required for threaded Teams messages"
+            raise ValueError(msg)
+        try:
+            await self.send_thread_text_as_activity_context_send(parent, text, entities)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code not in (HTTPStatus.NOT_FOUND, HTTPStatus.METHOD_NOT_ALLOWED):
+                raise
+            log.info(
+                "Teams in-thread send (activity_sender + replyToId) returned %s; retrying reply subresource",
+                e.response.status_code,
+            )
+            await self.send_thread_reply_with_entities(parent, text, entities)
+
     async def send_proactive_dm(self, conversation_reference: dict, text: str) -> None:
         app = await self._get_app()
         ref = ConversationReference.model_validate(conversation_reference)
@@ -254,10 +292,10 @@ async def _send_in_conversation(  # noqa: PLR0913
             getattr(getattr(app, "api", None), "service_url", None) or f"https://smba.trafficmanager.net/{tenant_id}/",
         )
     ).rstrip("/")
-    # Teams: replies in a channel thread must use Bot Framework ``reply`` (POST .../activities/{parentId}),
-    # not ``create`` with only replyToId in the body — otherwise the message lands in the main feed.
+    # Proactive in-thread: ``use_activity_context_send_path`` matches :meth:`ActivityContext.send`; the ``reply``
+    # subresource is used for other callers with ``use_activity_context_send_path`` false.
     parent = getattr(message, "reply_to_id", None)
-    as_http = getattr(getattr(app, "activity_sender", None), "_client", None)
+    as_http = getattr(getattr(app, "activity_sender", None), "_client", None) or getattr(app, "http_client", None)
     if parent and as_http is not None and not use_activity_context_send_path:
         from microsoft_teams.api import ApiClient  # same package as App
 

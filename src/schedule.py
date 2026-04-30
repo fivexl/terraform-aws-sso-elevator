@@ -252,12 +252,14 @@ def schedule_discard_buttons_event(
     )
 
 
-def schedule_approver_notification_event(
+def schedule_approver_notification_event(  # noqa: PLR0913
     schedule_client: EventBridgeSchedulerClient,
     message_ts: str,
     channel_id: str,
     time_to_wait: timedelta,
     elevator_request_id: str | None = None,
+    teams_conversation_id: str | None = None,
+    teams_activity_id: str | None = None,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef | None:
     # If the initial wait time is 0, we don't schedule the event
     if cfg.approver_renotification_initial_wait_time == 0:
@@ -293,6 +295,8 @@ def schedule_approver_notification_event(
                     channel_id=channel_id,
                     time_to_wait_in_seconds=time_to_wait.total_seconds(),
                     elevator_request_id=elevator_request_id,
+                    teams_conversation_id=teams_conversation_id,
+                    teams_activity_id=teams_activity_id,
                 ).dict()
             ),
         ),

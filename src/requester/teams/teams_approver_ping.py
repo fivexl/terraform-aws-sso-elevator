@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import config
+import sso
 from requester.teams.teams_notifier import TeamsGetApp, TeamsNotifier
 from requester.teams.teams_threading import parent_activity_id_for_bot_thread_reply
 
-from . import teams_users
+from . import teams_notifier, teams_users
 
 log = config.get_logger(service="teams_approver_ping")
 
@@ -42,7 +43,7 @@ async def _post_thread_approver_line(
     text: str,
     entities: list[dict] | None,
 ) -> None:
-    """Post one line in the approval card thread (Slack-style ping) via Bot Framework ``reply`` (in-thread)."""
+    """In-thread line via :meth:`TeamsNotifier.send_thread_text_with_transport_fallback`."""
     su = (t.service_url or "").strip() or None
     rn = TeamsNotifier(
         t.cfg,
@@ -50,13 +51,10 @@ async def _post_thread_approver_line(
         conversation_id_override=t.teams_conversation_id,
         service_url_override=su,
     )
-    if entities:
-        await rn.send_thread_reply_with_entities(parent, text, entities)
-    else:
-        await rn.send_thread_reply(parent, text)
+    await rn.send_thread_text_with_transport_fallback(parent, text, entities)
 
 
-async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913
+async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913, PLR0912
     cfg: config.Config,
     get_app: TeamsGetApp,
     *,
@@ -92,14 +90,40 @@ async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913
         service_url=service_url,
     )
     graph = _graph_client(cfg)
+    roster: list = []
+    try:
+        app = await get_app()
+        base_cid = teams_notifier.base_approval_channel_conversation_id(teams_conversation_id, cfg)
+        roster = await teams_users.fetch_channel_roster_teams_users(
+            app,
+            base_cid,
+            service_url=service_url,
+            fallback_tenant_id=cfg.teams_azure_tenant_id,
+        )
+        if roster:
+            log.info("Channel roster loaded for approver match: %d members", len(roster))
+    except Exception as ex:
+        log.exception("Could not load channel roster for approver match: %s", ex)
+        roster = []
     resolved: list = []
-    if graph is not None:
-        for e in normalized:
+    resolved_by_config_email: set[str] = set()
+    for e in normalized:
+        u = None
+        if roster:
+            u = teams_users.find_teams_user_in_roster_by_approver_email(e, roster)
+        if u is not None:
+            resolved.append(u)
+            resolved_by_config_email.add(e)
+            continue
+        if graph is not None:
             try:
-                resolved.append(await teams_users.get_user_by_email(graph, e))
+                u = await teams_users.get_user_by_email_with_config(graph, e, cfg)
             except Exception as ex:
                 log.warning("Could not resolve approver in Teams: %s (%s)", e, ex)
-    else:
+        if u is not None:
+            resolved.append(u)
+            resolved_by_config_email.add(e)
+    if graph is None and not resolved:
         log.warning("Graph client not configured; sending plain-text approver ping (emails)")
 
     if resolved:
@@ -110,14 +134,21 @@ async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913
             parts.append(t)
             ent_list.append(ent)
         text = f"{' '.join(parts)} {_SLACK_PARITY_LINE}"
-        resolved_emails = {(u.email or "").strip().lower() for u in resolved}
-        missing = [e for e in normalized if e not in resolved_emails]
+        missing = [e for e in normalized if e not in resolved_by_config_email]
         if missing:
-            text = f"{text} Also notify: {', '.join(missing)}"
+            miss_labels: list[str] = []
+            for e in missing:
+                mv = sso.ordered_email_variants_for_graph_lookup(e, cfg)
+                miss_labels.append(mv[1] if len(mv) > 1 else mv[0])
+            text = f"{text} Also notify: {', '.join(miss_labels)}"
         await _post_thread_approver_line(tsend, parent, text, ent_list)
         return
 
-    # No Graph or no resolvable user: same immediate thread line as Slack, with emails (no @mention entities)
-    body = f"There is a request waiting for the approval. Approvers: {', '.join(normalized)}"
+    # No Graph or no resolvable user: plain text; show alternate domain (e.g. UPN) when secondary domains expand the list
+    labels: list[str] = []
+    for e in normalized:
+        v = sso.ordered_email_variants_for_graph_lookup(e, cfg)
+        labels.append(v[1] if len(v) > 1 else v[0])
+    body = f"There is a request waiting for the approval. Approvers: {', '.join(labels)}"
     log.info("Sending plain-text approver waiting ping (Graph could not resolve any approver for @mention)")
     await _post_thread_approver_line(tsend, parent, body, None)

@@ -763,10 +763,8 @@ def handle_approvers_renotification_event(
             )
             last: httpx.HTTPStatusError | None = None
             for parent in _teams_reply_parent_activity_candidates(tc, ta):
-                # ``POST .../activities/{parentId}/reply`` keeps the line under the card thread; the
-                # create+``replyToId`` path (``ActivityContext``-style) often lands a new top-level post.
                 try:
-                    await rn.send_thread_reply(parent, body)
+                    await rn.send_thread_text_with_transport_fallback(parent, body, None)
                     return True
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == HTTPStatus.NOT_FOUND:
@@ -792,6 +790,8 @@ def handle_approvers_renotification_event(
             message_ts=event.time_stamp,
             time_to_wait=time_to_wait,
             elevator_request_id=event.elevator_request_id,
+            teams_conversation_id=tc,
+            teams_activity_id=ta,
         )
         return
 

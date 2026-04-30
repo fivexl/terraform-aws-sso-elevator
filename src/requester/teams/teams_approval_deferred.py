@@ -223,6 +223,8 @@ async def post_account_approval_to_teams_channel(
                 channel_id="",
                 time_to_wait=timedelta(minutes=c.approver_renotification_initial_wait_time),
                 elevator_request_id=elevator_id,
+                teams_conversation_id=teams_conversation_id,
+                teams_activity_id=act_id,
             )
         elif show_buttons and not act_id:
             log.warning(

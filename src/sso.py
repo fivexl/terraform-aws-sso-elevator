@@ -433,6 +433,24 @@ def email_variants_with_secondary_domains(email: str, cfg: config.Config) -> fro
     return frozenset(out)
 
 
+def ordered_email_variants_for_graph_lookup(email: str, cfg: config.Config) -> list[str]:
+    """Primary address first, then each ``secondary_fallback_email_domains`` (same order as IAM Identity Center lookup).
+
+    Use for Microsoft Graph ``mail``/``userPrincipalName`` resolution when directory and Entra UPN differ.
+    """
+    e = (email or "").strip().lower()
+    if not e:
+        return []
+    out: list[str] = [e]
+    if "@" in e:
+        first_part, _ = e.split("@", 1)
+        for domain in cfg.secondary_fallback_email_domains or []:
+            alt = (first_part + domain).lower()
+            if alt not in out:
+                out.append(alt)
+    return out
+
+
 def get_user_emails(client: IdentityStoreClient, identity_store_id: str, user_id: str) -> list[str]:
     user = client.describe_user(
         IdentityStoreId=identity_store_id,
