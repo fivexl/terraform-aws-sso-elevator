@@ -65,17 +65,17 @@ Watch demo
 SSO Elevator supports two chat platforms:
 
 - **Slack**: modal form via global shortcut and Slack app interactions.
-- **Microsoft Teams**: bot commands `/request-access` and `/request-group` that post a launcher Adaptive Card; the button opens a Task Module (`task/fetch`) with the form. Approvals use Adaptive Card buttons and in-thread updates.
+- **Microsoft Teams**: bot commands `/access` and `/group-access` (same names as Slack global shortcuts) that post a launcher Adaptive Card; the button opens a Task Module (`task/fetch`) with the form. Approvals use Adaptive Card buttons and in-thread updates.
 
 ### Demo scenarios (Teams)
-- **Request account access**: in Teams, type `/request-access`, open the form, select account + permission set + duration + reason, submit.
-- **Request group membership**: in Teams, type `/request-group`, open the form, select group + duration + reason, submit.
+- **Request account access**: in Teams, type `/access`, open the form, select account + permission set + duration + reason, submit.
+- **Request group membership**: in Teams, type `/group-access`, open the form, select group + duration + reason, submit.
 - **Approve / discard**: approvers click **Approve** / **Discard** on the approval Adaptive Card; the card is updated in-place with the outcome.
 - **Expiration & reminders**: if enabled, the revoker removes buttons on expiry and can post reminder replies in the same thread.
 
 ```mermaid
 sequenceDiagram
-    Requester->>Chat platform: opens request form (Slack shortcut / Teams /request-access or /request-group)
+    Requester->>Chat platform: opens request form (Slack shortcut / Teams /access or /group-access)
     Chat platform->>AWS Lambda - Access Requester: sends request to access-requester
     AWS Lambda - Access Requester->>Chat platform: posts approval card/message in approval channel thread
     Approver->>Chat platform: clicks approve/discard on the approval card/message
@@ -99,7 +99,7 @@ Additionally, the Access-Revoker continuously reconciles the revocation schedule
 Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access (temporary group membership with scheduled revocation).
 
 - **Slack**: use the global shortcut **`group-access`** (configured in the Slack app manifest with callback `request_for_group_membership`) to open the group request form.
-- **Microsoft Teams**: use the bot command **`/request-group`** to post a launcher card, then open the group request form in a Task Module.
+- **Microsoft Teams**: use the bot command **`/group-access`** to post a launcher card, then open the group request form in a Task Module.
 
 To enable Group Assignments Mode, provide the module with the `group_config` Terraform variable:
 ```hcl
@@ -707,7 +707,7 @@ settings:
    - `teams_approval_conversation_id` (the target Teams channel or group chat `conversation.id` where approval cards should be posted)
 4. Install the Teams app/bot into the target team/channel (and ensure the bot is allowed by org policy).
 5. Demo:
-   - Type `/request-access` (account) or `/request-group` (group) in Teams
+   - Type `/access` (account) or `/group-access` (group) in Teams
    - Open the form from the launcher card, submit
    - Approvers click buttons on the posted approval card
 

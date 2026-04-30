@@ -111,13 +111,17 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         return TaskModuleResponse(task=TaskModuleContinueResponse(type="continue", value=cti))
 
     def _message_command_kind(raw: str) -> str | None:
-        """Map message text to account vs group. /slash, hyphen titles (manifest), or space (from menu)."""
+        """Map message text to account vs group. Names match Slack global shortcut titles (access, group-access)."""
         text = (raw or "").strip()
-        text = re.sub(r"^<at>[^<]*</at>\s*", "", text, count=1)
+        while True:
+            nxt = re.sub(r"^<at>[^<]*</at>\s*", "", text, count=1)
+            if nxt == text:
+                break
+            text = nxt.strip()
         low = text.lower()
-        if "/request-access" in low or low in ("request access", "request-access"):
+        if low in ("/access", "access"):
             return "account"
-        if "/request-group" in low or low in ("request group", "request-group"):
+        if low in ("/group-access", "group-access", "group access"):
             return "group"
         return None
 

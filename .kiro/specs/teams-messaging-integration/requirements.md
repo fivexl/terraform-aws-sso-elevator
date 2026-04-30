@@ -28,10 +28,10 @@ The goal of this feature is to adapt the existing SSO Elevator workflow for Micr
 
 #### Acceptance Criteria
 
-1. WHEN a user sends the `/request-access` command to the bot in Teams, THE Teams_Bot SHALL open a Task_Module with an AWS account access request form
-2. WHEN a user sends the `/request-group` command to the bot in Teams, THE Teams_Bot SHALL open a Task_Module with a group access request form
-3. WHEN the `/request-access` command is received and statements are not configured, THE Teams_Bot SHALL send a message to the approval channel indicating that statements are not configured
-4. WHEN the `/request-group` command is received and group_statements are not configured, THE Teams_Bot SHALL send a message to the approval channel indicating that group_statements are not configured
+1. WHEN a user sends the `/access` command to the bot in Teams, THE Teams_Bot SHALL open a Task_Module with an AWS account access request form
+2. WHEN a user sends the `/group-access` command to the bot in Teams, THE Teams_Bot SHALL open a Task_Module with a group access request form
+3. WHEN the `/access` command is received and statements are not configured, THE Teams_Bot SHALL send a message to the approval channel indicating that statements are not configured
+4. WHEN the `/group-access` command is received and group_statements are not configured, THE Teams_Bot SHALL send a message to the approval channel indicating that group_statements are not configured
 5. WHEN a command is received from a user who does not exist in AWS SSO (Identity Center), THE Teams_Bot SHALL send an SSOUserNotFound error message to the approval channel with a mention of the user
 
 ### Requirement 2: Access Request Forms via Adaptive Cards in Task Module

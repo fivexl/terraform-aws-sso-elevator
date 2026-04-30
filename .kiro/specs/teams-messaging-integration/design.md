@@ -351,7 +351,7 @@ sequenceDiagram
     participant EB as EventBridge
     participant RS as request_store
 
-    U->>T: /request-access
+    U->>T: /access
     T->>ABS: Message activity
     ABS->>L: HTTP POST (activity)
     L->>L: Validate JWT (SDK)
@@ -589,7 +589,7 @@ Each correctness property from the design maps to a single Hypothesis test:
 
 Example-based tests for specific scenarios and edge cases:
 
-- **Command routing**: `/request-access` opens account form, `/request-group` opens group form
+- **Command routing**: `/access` opens account form, `/group-access` opens group form (same names as Slack global shortcuts)
 - **Missing config**: Empty statements → error message to channel
 - **SSO user not found**: `SSOUserNotFound` → error message with user mention
 - **Unauthorized approver**: `decision.permit=False` → thread reply with denial

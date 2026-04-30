@@ -54,7 +54,7 @@
   - [x] 9.4 Update `handle_scheduled_account_assignment_deletion` and `handle_scheduled_group_assignment_deletion` to use `TeamsNotifier` notification methods when `chat_platform == "teams"`
 
 - [x] 10. Add Teams bot and handler to `src/main.py`
-  - [x] 10.1 Add `SSOElevatorBot(ActivityHandler)` class with `on_message_activity` routing `/request-access` and `/request-group` commands
+  - [x] 10.1 Add `SSOElevatorBot(ActivityHandler)` class with `on_message_activity` routing `/access` and `/group-access` commands
   - [x] 10.2 Add `on_invoke_activity` dispatching `task/fetch`, `task/submit`, and `adaptiveCard/action` invoke types
   - [x] 10.3 Implement `_handle_task_fetch` — returns `TaskModuleResponse` with account or group access form card
   - [x] 10.4 Implement `_handle_task_submit` — parses form data, calls `access_control.make_decision_on_access_request`, stores request via `request_store.put_access_request`, posts approval card to channel, schedules EventBridge events
