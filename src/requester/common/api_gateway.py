@@ -1,4 +1,4 @@
-"""API Gateway / Function URL event helpers shared by any HTTP-wrapped handler on Lambda."""
+"""API Gateway event helpers shared by any HTTP-wrapped handler on Lambda."""
 
 from __future__ import annotations
 

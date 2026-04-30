@@ -78,7 +78,7 @@ async def get_teams_app() -> App:
 
 
 async def process_teams_lambda_event(event: dict) -> dict:
-    """Map API Gateway/Function URL event through :meth:`App.server.handle_request` (JWT + routes)."""
+    """Map API Gateway event through :meth:`App.server.handle_request` (JWT + routes)."""
     app = await get_teams_app()
     body, err = parse_api_gateway_event_json_body(event)
     if err is not None:

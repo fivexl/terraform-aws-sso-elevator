@@ -13,11 +13,6 @@ output "chat_platform" {
   value       = var.chat_platform
 }
 
-output "lambda_function_url" {
-  description = "value for the access_requester lambda function URL"
-  value       = var.create_lambda_url ? module.access_requester_slack_handler.lambda_function_url : null
-}
-
 output "config_s3_bucket_name" {
   description = "The name of the S3 bucket for storing configuration and cache data."
   value       = module.config_bucket.s3_bucket_id

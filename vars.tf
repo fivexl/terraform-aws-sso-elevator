@@ -4,15 +4,6 @@ variable "create_api_gateway" {
   default     = true
 }
 
-variable "create_lambda_url" {
-  description = <<-EOT
-  If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future
-  If false, Lambda url will be deleted.
-  EOT
-  type        = bool
-  default     = true
-}
-
 variable "ecr_repo_name" {
   description = "The name of the ECR repository."
   type        = string
@@ -118,7 +109,7 @@ variable "teams_approval_conversation_id" {
 }
 
 variable "requester_cors_allow_origins" {
-  description = "CORS allow_origins for the access-requester Lambda URL and HTTP API. If null, defaults to Slack or Bot Framework / Teams hostnames from locals."
+  description = "CORS allow_origins for the access-requester HTTP API. If null, defaults to Slack or Bot Framework / Teams hostnames from locals."
   type        = list(string)
   default     = null
 }

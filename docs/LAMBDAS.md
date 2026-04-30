@@ -16,7 +16,7 @@ With `use_pre_created_image`, the artifact is **different** ECR tags (`requester
 
 **Purpose:** accept HTTP from the chat platform, drive request forms, approval cards, and grant / schedule access.
 
-**Inputs:** Function URL and/or API Gateway HTTP API → same handler (see `slack_handler_lambda.tf`).
+**Inputs:** API Gateway HTTP API → `main.lambda_handler` (see `slack_handler_lambda.tf`).
 
 ### Slack (`chat_platform = "slack"`)
 
