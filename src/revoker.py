@@ -612,12 +612,133 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
             )
 
 
+def _skip_expiry_update_for_status(status: ElevatorRequestStatus | None) -> bool:
+    return status in (ElevatorRequestStatus.completed, ElevatorRequestStatus.discarded)
+
+
+def _expiry_notification_text() -> str:
+    return "This request expired due to no action being taken in time and was automatically discarded. No further action is required."
+
+
+def _build_minimal_teams_expired_card(*, style: str, text: str) -> dict:
+    return {
+        "type": "AdaptiveCard",
+        "version": "1.5",
+        "body": [
+            {
+                "type": "Container",
+                "style": style,
+                "items": [{"type": "TextBlock", "text": "AWS Access Request", "size": "large", "weight": "bolder"}],
+            },
+            {"type": "TextBlock", "text": text, "wrap": True, "weight": "bolder"},
+        ],
+    }
+
+
+def _build_teams_approval_card_for_expiry(
+    *,
+    rec: entities.elevator_request.ElevatorRequestRecord,
+    elevator_request_id: str,
+    waiting_style: str,
+) -> dict:
+    from requester.teams import teams_cards
+
+    requester_name = (rec.requester_display_name or rec.requester_slack_id or "Requester").strip() or "Requester"
+    duration_str = str(timedelta(seconds=rec.permission_duration_seconds))
+    if rec.kind.value == "group":
+        sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+        try:
+            sso_group = sso.describe_group(
+                sso_instance.identity_store_id,
+                str(rec.group_id or ""),
+                identitystore_client,
+            )
+        except Exception:
+            sso_group = entities.aws.SSOGroup(
+                id=rec.group_id or "",
+                name=rec.group_id or "",
+                description=None,
+                identity_store_id="",
+            )
+        req_data: dict = {
+            "group_id": rec.group_id or "",
+            "duration": duration_str,
+            "reason": rec.reason,
+            "requester_id": rec.requester_slack_id,
+        }
+        return teams_cards.build_approval_card(
+            requester_name=requester_name,
+            account=None,
+            group=sso_group,
+            role_name=None,
+            reason=rec.reason,
+            permission_duration=duration_str,
+            show_buttons=True,
+            color_style=waiting_style,
+            request_data=req_data,
+            elevator_request_id=elevator_request_id,
+        )
+
+    try:
+        account = organizations.describe_account(org_client, rec.account_id or "")
+    except Exception:
+        account = entities.aws.Account(id=rec.account_id or "", name=rec.account_id or "")
+    req_data2: dict = {
+        "account_id": rec.account_id or "",
+        "permission_set": rec.permission_set_name or "",
+        "duration": duration_str,
+        "reason": rec.reason,
+        "requester_id": rec.requester_slack_id,
+    }
+    return teams_cards.build_approval_card(
+        requester_name=requester_name,
+        account=account,
+        group=None,
+        role_name=rec.permission_set_name or "",
+        reason=rec.reason,
+        permission_duration=duration_str,
+        show_buttons=True,
+        color_style=waiting_style,
+        request_data=req_data2,
+        elevator_request_id=elevator_request_id,
+    )
+
+
+async def _teams_send_expiry_notification(
+    *,
+    notifier: TeamsNotifier,
+    tc: str,
+    ta: str,
+) -> None:
+    body = _expiry_notification_text()
+    last: httpx.HTTPStatusError | None = None
+    for parent in _teams_reply_parent_activity_candidates(tc, ta):
+        try:
+            await notifier.send_thread_text_with_transport_fallback(parent, body, None)
+            return
+        except httpx.HTTPStatusError as e:
+            last = e
+            if e.response.status_code == HTTPStatus.NOT_FOUND:
+                continue
+            raise
+    if last is not None:
+        logger.exception(f"Failed to send Teams expiry notification (exhausted parent ids): {last}")
+
+
 def handle_discard_buttons_event(
     event: DiscardButtonsEvent,
     slack_client: slack_sdk.WebClient | TeamsNotifier,
     scheduler_client: EventBridgeSchedulerClient,
 ) -> None:
     schedule.delete_schedule(scheduler_client, event.schedule_name)
+
+    rec = request_store.get_access_request(event.elevator_request_id) if event.elevator_request_id else None
+    if _skip_expiry_update_for_status(rec.status if rec is not None else None):
+        logger.info(
+            "Skip expiry update for finalized request",
+            extra={"event": event, "status": rec.status if rec else None},
+        )
+        return
 
     if cfg.chat_platform == "teams":
         import asyncio
@@ -630,32 +751,31 @@ def handle_discard_buttons_event(
         )
         if not tmeta:
             logger.warning("Teams event missing conversation_id or activity_id", extra={"event": event})
-            if event.elevator_request_id:
-                request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
             return
 
         tc, ta, tsu = tmeta
 
         async def _update_teams_card() -> None:
-            # We need the original card to update it — fetch from request_store if available
-            # For simplicity, build a minimal expiry card update
-            expired_card = {
-                "type": "AdaptiveCard",
-                "version": "1.5",
-                "body": [
-                    {
-                        "type": "Container",
-                        "style": teams_cards.get_color_style(cfg.discarded_result_emoji),
-                        "items": [{"type": "TextBlock", "text": "AWS Access Request", "size": "large", "weight": "bolder"}],
-                    },
-                    {
-                        "type": "TextBlock",
-                        "text": f"Request expired after {cfg.request_expiration_hours} hour(s).",
-                        "wrap": True,
-                        "weight": "bolder",
-                    },
-                ],
-            }
+            expired_style = teams_cards.get_color_style(cfg.discarded_result_emoji)
+            expired_text = f"Request expired after {cfg.request_expiration_hours} hour(s)."
+
+            orig_card: dict | None = None
+            if rec is not None and rec.status == ElevatorRequestStatus.awaiting_approval and event.elevator_request_id:
+                waiting_style = teams_cards.get_color_style(cfg.waiting_result_emoji)
+                try:
+                    orig_card = _build_teams_approval_card_for_expiry(
+                        rec=rec,
+                        elevator_request_id=event.elevator_request_id,
+                        waiting_style=waiting_style,
+                    )
+                except Exception as e:
+                    logger.exception(f"Failed to rebuild Teams card for expiry update: {e}")
+
+            expired_card = (
+                teams_cards.update_card_on_expiry(orig_card, cfg.request_expiration_hours, expired_style)
+                if orig_card is not None
+                else _build_minimal_teams_expired_card(style=expired_style, text=expired_text)
+            )
             try:
                 cn = TeamsNotifier(
                     cfg,
@@ -664,17 +784,22 @@ def handle_discard_buttons_event(
                     service_url_override=tsu,
                 )
                 await cn.update_message(ta, expired_card)
+
+                await _teams_send_expiry_notification(notifier=cn, tc=tc, ta=ta)
             except Exception as e:
                 logger.exception(f"Failed to update Teams card on expiry: {e}")
 
         asyncio.run(_update_teams_card())
-        if event.elevator_request_id:
-            request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
-        logger.info("Teams card updated on expiry", extra={"event": event})
+        if event.elevator_request_id and rec is not None and rec.status == ElevatorRequestStatus.awaiting_approval:
+            request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.discarded)
+        logger.info("Teams expiry handling finished", extra={"event": event})
         return
 
     # Slack path
     assert isinstance(slack_client, slack_sdk.WebClient)
+    if rec is not None and rec.status != ElevatorRequestStatus.awaiting_approval:
+        logger.info("Skip Slack expiry update for non-awaiting request", extra={"event": event, "status": rec.status})
+        return
     message = slack_helpers.get_message_from_timestamp(
         channel_id=event.channel_id,
         message_ts=event.time_stamp,
@@ -707,9 +832,15 @@ def handle_discard_buttons_event(
                 blocks=blocks,
                 text=text,
             )
+            slack_client.chat_postMessage(
+                channel=event.channel_id,
+                thread_ts=message["ts"],
+                text="This request expired due to no action being taken in time and was automatically discarded. "
+                "No further action is required.",
+            )
             logger.info("Buttons were removed", extra={"event": event})
             if event.elevator_request_id:
-                request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.expired)
+                request_store.update_request_status(event.elevator_request_id, ElevatorRequestStatus.discarded)
             return
 
     logger.info("Buttons were not found", extra={"event": event})
