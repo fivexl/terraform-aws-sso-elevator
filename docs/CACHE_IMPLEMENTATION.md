@@ -245,7 +245,7 @@ Monitor these CloudWatch metrics for the cache bucket:
 1. **Data Sensitivity**: Cache contains account IDs, names, and permission set information
 2. **Encryption**: 
    - Server-side encryption is **enabled by default** using AES256
-   - Optional customer-managed KMS key support via `cache_kms_key_arn` variable
+   - Optional customer-managed KMS key support via `config_bucket_kms_key_arn` variable
    - Encryption at rest is always active
 3. **Access Control**: IAM permissions limit cache access to Lambda functions only
 4. **Public Access**: All public access is blocked by default

@@ -83,19 +83,15 @@ async def process_teams_lambda_event(event: dict) -> dict:
     body, err = parse_api_gateway_event_json_body(event)
     if err is not None:
         return err
-    if body is None:
-        return {"statusCode": 400, "headers": {"Content-Type": "text/plain"}, "body": "Invalid body"}
 
     headers = normalize_api_gateway_headers(event.get("headers", {}) or {})
     try:
-        raw = json.loads(body) if isinstance(body, str) else body
-        if isinstance(raw, dict):
-            # Log message text only: ``extra`` keys like ``name``/``type`` can clash with LogRecord/Powertools.
-            log.info(
-                "Teams incoming (pre-routing) activity_type=%s invoke=%s",
-                raw.get("type"),
-                raw.get("name"),
-            )
+        # Log message text only: ``extra`` keys like ``name``/``type`` can clash with LogRecord/Powertools.
+        log.info(
+            "Teams incoming (pre-routing) activity_type=%s invoke=%s",
+            body.get("type"),
+            body.get("name"),
+        )
     except Exception as e:
         log.warning("Teams incoming: could not log body summary: %s", str(e), exc_info=False)
     res = await app.server.handle_request({"body": body, "headers": headers})
