@@ -4,13 +4,13 @@ output "sso_elevator_bucket_id" {
 }
 
 output "requester_api_endpoint_url" {
-  description = "The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL."
+  description = "The full URL to invoke the API. For Slack, set it as the Request URL in the app manifest. For Teams / Bot Framework, set it as the bot messaging endpoint where applicable."
   value       = var.create_api_gateway ? local.full_api_url : null
 }
 
-output "lambda_function_url" {
-  description = "value for the access_requester lambda function URL"
-  value       = var.create_lambda_url ? module.access_requester_slack_handler.lambda_function_url : null
+output "chat_platform" {
+  description = "The configured chat integration: slack or teams."
+  value       = var.chat_platform
 }
 
 output "config_s3_bucket_name" {
@@ -21,6 +21,11 @@ output "config_s3_bucket_name" {
 output "config_s3_bucket_arn" {
   description = "The ARN of the S3 bucket for storing configuration and cache data."
   value       = module.config_bucket.s3_bucket_arn
+}
+
+output "elevator_requests_table_name" {
+  description = "DynamoDB table name holding access request state and ephemeral UI keys."
+  value       = aws_dynamodb_table.elevator_requests.name
 }
 
 

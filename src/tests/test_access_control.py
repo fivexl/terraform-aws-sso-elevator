@@ -982,6 +982,41 @@ def test_make_decision_on_approve_request(test_cases_for_approve_request_decisio
     )
 
 
+def test_make_decision_on_approve_request_teams_upn_matches_policy_secondary_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``secondary_fallback_email_domains`` (e.g. from TF) maps Teams UPN to policy approver like SSO does."""
+    from types import SimpleNamespace
+
+    import access_control
+    import sso
+
+    _real = sso.email_variants_with_secondary_domains
+
+    def _variants_with_tf_like_domains(email: str, _c: object) -> frozenset[str]:
+        return _real(email, SimpleNamespace(secondary_fallback_email_domains=["@fivexl.io"]))
+
+    monkeypatch.setattr(access_control.sso, "email_variants_with_secondary_domains", _variants_with_tf_like_domains)
+    st = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approvers": ["aleksandr.kuznetsov@fivexl.io"],
+        }
+    )
+    d = make_decision_on_approve_request(
+        action=entities.ApproverAction.Approve,
+        statements=frozenset([st]),
+        approver_email="aleksandr.kuznetsov@fivexl.onmicrosoft.com",
+        requester_email="requester@example.com",
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+    )
+    assert d.permit is True
+    assert d.grant is True
+
+
 def test_execute_access_request_decision(
     test_cases_for_access_request_decision,
     execute_decision_info,
@@ -1014,3 +1049,16 @@ def test_make_and_excute_approve_request_decision(
     decision = make_decision_on_approve_request(**test_cases_for_approve_request_decision["in"])
     if decision.grant is not True:
         assert execute_decision(decision=decision, **execute_decision_info) is False
+
+
+def test_ordered_email_variants_for_graph_lookup_order():
+    from types import SimpleNamespace
+
+    import sso
+
+    cfg = SimpleNamespace(secondary_fallback_email_domains=["@tenant.onmicrosoft.com", "@contoso.com"])
+    assert sso.ordered_email_variants_for_graph_lookup("User@Custom.TLD", cfg) == [
+        "user@custom.tld",
+        "user@tenant.onmicrosoft.com",
+        "user@contoso.com",
+    ]

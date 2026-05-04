@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import time
 from datetime import timedelta, timezone
@@ -5,8 +7,8 @@ from typing import Optional, TypeVar, Union
 
 import jmespath as jp
 import slack_sdk.errors
-from mypy_boto3_identitystore import IdentityStoreClient
-from mypy_boto3_sso_admin import SSOAdminClient
+from mypy_boto3_identitystore import IdentityStoreClient  # noqa: TC002
+from mypy_boto3_sso_admin import SSOAdminClient  # noqa: TC002
 from pydantic import model_validator
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import (
@@ -28,6 +30,8 @@ import config
 import entities
 import sso
 from entities import BaseModel
+from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord
+from request_store import get_access_request
 
 # ruff: noqa: ANN102, PGH003
 
@@ -234,6 +238,7 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
     group: Optional[entities.aws.SSOGroup] = None,
     role_name: Optional[str] = None,
     show_buttons: bool = True,
+    elevator_request_id: str | None = None,
 ) -> list[Block]:
     fields = [
         MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
@@ -270,6 +275,9 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
         SectionBlock(block_id="content", fields=fields),
     ]
     if show_buttons:
+        ap, dp = entities.ApproverAction.Approve.value, entities.ApproverAction.Discard.value
+        approve_val = f"{ap}::{elevator_request_id}" if elevator_request_id else ap
+        discard_val = f"{dp}::{elevator_request_id}" if elevator_request_id else dp
         blocks.append(
             ActionsBlock(
                 block_id="buttons",
@@ -278,13 +286,13 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
                         action_id=entities.ApproverAction.Approve.value,
                         text=PlainTextObject(text="Approve"),
                         style="primary",
-                        value=entities.ApproverAction.Approve.value,
+                        value=approve_val,
                     ),
                     ButtonElement(
                         action_id=entities.ApproverAction.Discard.value,
                         text=PlainTextObject(text="Discard"),
                         style="danger",
-                        value=entities.ApproverAction.Discard.value,
+                        value=discard_val,
                     ),
                 ],
             )
@@ -318,6 +326,29 @@ def button_click_info_block(action: entities.ApproverAction, approver_slack_id: 
     )
 
 
+def _request_for_access_from_record(rec: ElevatorRequestRecord) -> RequestForAccess:
+    if rec.kind != ElevatorRequestKind.account or not rec.account_id or not rec.permission_set_name:
+        raise ValueError("Record is not an account access request")
+    return RequestForAccess(
+        permission_set_name=rec.permission_set_name,
+        account_id=rec.account_id,
+        reason=rec.reason,
+        requester_slack_id=rec.requester_slack_id,
+        permission_duration=timedelta(seconds=rec.permission_duration_seconds),
+    )
+
+
+def _request_for_group_from_record(rec: ElevatorRequestRecord) -> RequestForGroupAccess:
+    if rec.kind != ElevatorRequestKind.group or not rec.group_id:
+        raise ValueError("Record is not a group access request")
+    return RequestForGroupAccess(
+        group_id=rec.group_id,
+        reason=rec.reason,
+        requester_slack_id=rec.requester_slack_id,
+        permission_duration=timedelta(seconds=rec.permission_duration_seconds),
+    )
+
+
 def check_if_user_is_in_channel(client: WebClient, channel_id: str, user_id: str) -> bool:
     logger.info(f"Checking if user {user_id} is in channel {channel_id}")
 
@@ -335,11 +366,30 @@ class ButtonClickedPayload(BaseModel):
     channel_id: str
     message: dict
     request: RequestForAccess
+    elevator_request_id: str | None = None
 
     @model_validator(mode="before")
     @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
         message = values["message"]
+        action_raw = str(jp.search("actions[0].value", values) or "")
+        split_action: str | None = None
+        split_elevator_id: str | None = None
+        if "::" in action_raw:
+            action_str, eid = action_raw.split("::", 1)
+            split_action, split_elevator_id = action_str, eid
+            rec = get_access_request(eid)
+            if rec is not None and rec.kind == ElevatorRequestKind.account:
+                return {
+                    "action": action_str,
+                    "approver_slack_id": jp.search("user.id", values),
+                    "thread_ts": jp.search("message.ts", values),
+                    "channel_id": jp.search("channel.id", values),
+                    "message": message,
+                    "request": _request_for_access_from_record(rec),
+                    "elevator_request_id": eid,
+                }
+            # No row or wrong kind: parse from message (legacy) so account clicks are not misrouted to the group handler.
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
@@ -348,7 +398,7 @@ class ButtonClickedPayload(BaseModel):
         account = cls.find_in_fields(fields, "Account")
         account_id = account.split("#")[-1]
         return {
-            "action": jp.search("actions[0].value", values),
+            "action": split_action or jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),
             "thread_ts": jp.search("message.ts", values),
             "channel_id": jp.search("channel.id", values),
@@ -360,6 +410,7 @@ class ButtonClickedPayload(BaseModel):
                 reason=cls.find_in_fields(fields, "Reason"),
                 permission_duration=permission_duration,
             ),
+            "elevator_request_id": split_elevator_id if split_action is not None else None,
         }
 
     @staticmethod
@@ -613,11 +664,29 @@ class ButtonGroupClickedPayload(BaseModel):
     channel_id: str
     message: dict
     request: RequestForGroupAccess
+    elevator_request_id: str | None = None
 
     @model_validator(mode="before")
     @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
         message = values["message"]
+        action_raw = str(jp.search("actions[0].value", values) or "")
+        split_action: str | None = None
+        split_elevator_id: str | None = None
+        if "::" in action_raw:
+            action_str, eid = action_raw.split("::", 1)
+            split_action, split_elevator_id = action_str, eid
+            rec = get_access_request(eid)
+            if rec is not None and rec.kind == ElevatorRequestKind.group:
+                return {
+                    "action": action_str,
+                    "approver_slack_id": jp.search("user.id", values),
+                    "thread_ts": jp.search("message.ts", values),
+                    "channel_id": jp.search("channel.id", values),
+                    "message": message,
+                    "request": _request_for_group_from_record(rec),
+                    "elevator_request_id": eid,
+                }
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
         requester_mention = cls.find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
@@ -626,7 +695,7 @@ class ButtonGroupClickedPayload(BaseModel):
         group = cls.find_in_fields(fields, "Group")
         group_id = group.split("#")[-1]
         return {
-            "action": jp.search("actions[0].value", values),
+            "action": split_action or jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),
             "thread_ts": jp.search("message.ts", values),
             "channel_id": jp.search("channel.id", values),
@@ -637,6 +706,7 @@ class ButtonGroupClickedPayload(BaseModel):
                 reason=cls.find_in_fields(fields, "Reason"),
                 permission_duration=permission_duration,
             ),
+            "elevator_request_id": split_elevator_id if split_action is not None else None,
         }
 
     @staticmethod

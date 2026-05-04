@@ -380,6 +380,11 @@ def get_user_principal_id_by_email(
     list_of_users = list_users(identity_store_client, identity_store_id)
 
     try:
+        email = (email or "").strip()
+        if not email:
+            raise errors.SSOUserNotFound(
+                "Cannot look up SSO user: email is empty. Ensure the client provides a work or school account email/UPN."
+            )
         logger.debug("Attempting to find user by primary email", extra={"email": email})
         if user_id := _find_user_principal_id_by_email(email, list_of_users):
             return user_id, False
@@ -388,14 +393,18 @@ def get_user_principal_id_by_email(
             "User not found with primary email, trying secondary domains",
             extra={"primary_email": email, "secondary_fallback_email_domains": secondary_fallback_email_domains},
         )
-        first_part, _ = email.split("@", 1)
-        for domain in secondary_fallback_email_domains:
-            secondary_domain_email = first_part + domain
+        if secondary_fallback_email_domains and "@" in email:
+            first_part, _ = email.split("@", 1)
+            for domain in secondary_fallback_email_domains:
+                secondary_domain_email = first_part + domain
 
-            if user_id := _find_user_principal_id_by_email(secondary_domain_email, list_of_users):
-                logger.info("Found user using secondary domain", extra={"candidate_email": secondary_domain_email, "original_email": email})
-                logger.debug("User found", extra={"user_id": user_id})
-                return user_id, True
+                if user_id := _find_user_principal_id_by_email(secondary_domain_email, list_of_users):
+                    logger.info(
+                        "Found user using secondary domain",
+                        extra={"candidate_email": secondary_domain_email, "original_email": email},
+                    )
+                    logger.debug("User found", extra={"user_id": user_id})
+                    return user_id, True
 
         logger.warning(
             "User was not found in SSO",
@@ -409,6 +418,37 @@ def get_user_principal_id_by_email(
     except Exception as e:
         logger.error("Error while getting user principal id by email", extra={"error": e})
         raise
+
+
+def email_variants_with_secondary_domains(email: str, cfg: config.Config) -> frozenset[str]:
+    """Lowercased address plus local-part + each ``secondary_fallback_email_domains`` entry (see :func:`get_user_principal_id_by_email`)."""
+    e = (email or "").strip()
+    if not e:
+        return frozenset()
+    out: set[str] = {e.lower()}
+    if "@" in e:
+        first_part, _ = e.split("@", 1)
+        for domain in cfg.secondary_fallback_email_domains or []:
+            out.add((first_part + domain).lower())
+    return frozenset(out)
+
+
+def ordered_email_variants_for_graph_lookup(email: str, cfg: config.Config) -> list[str]:
+    """Primary address first, then each ``secondary_fallback_email_domains`` (same order as IAM Identity Center lookup).
+
+    Use for Microsoft Graph ``mail``/``userPrincipalName`` resolution when directory and Entra UPN differ.
+    """
+    e = (email or "").strip().lower()
+    if not e:
+        return []
+    out: list[str] = [e]
+    if "@" in e:
+        first_part, _ = e.split("@", 1)
+        for domain in cfg.secondary_fallback_email_domains or []:
+            alt = (first_part + domain).lower()
+            if alt not in out:
+                out.append(alt)
+    return out
 
 
 def get_user_emails(client: IdentityStoreClient, identity_store_id: str, user_id: str) -> list[str]:

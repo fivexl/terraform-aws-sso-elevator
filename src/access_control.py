@@ -37,6 +37,24 @@ class AccessRequestDecision(BaseModel):
     approvers: FrozenSet[str] = frozenset()
 
 
+def _approver_in_configured_approvers(approver_email: str, approvers: frozenset) -> bool:
+    """``approvers`` from policy vs. Teams: match exact/case, or ``local@`` + ``secondary_fallback_email_domains`` (same as SSO)."""
+    candidates = sso.email_variants_with_secondary_domains(approver_email, cfg)
+    allowed = {str(a).strip().lower() for a in approvers if str(a).strip()}
+    return bool(candidates & allowed)
+
+
+def _requester_is_same_user_as_approver(approver_email: str, requester_email: str) -> bool:
+    """Same person if addresses overlap, including after secondary domain expansion."""
+    ae = (approver_email or "").strip()
+    re = (requester_email or "").strip()
+    if not ae and not re:
+        return True
+    if not ae or not re:
+        return False
+    return bool(sso.email_variants_with_secondary_domains(ae, cfg) & sso.email_variants_with_secondary_domains(re, cfg))
+
+
 def determine_affected_statements(
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     account_id: str | None = None,
@@ -126,7 +144,7 @@ class ApproveRequestDecision(BaseModel):
 
 def make_decision_on_approve_request(  # noqa: PLR0913
     action: entities.ApproverAction,
-    statements: frozenset[Statement],
+    statements: frozenset[Statement] | frozenset[GroupStatement],
     approver_email: str,
     requester_email: str,
     permission_set_name: str | None = None,
@@ -136,14 +154,15 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
 
     for statement in affected_statements:
-        if approver_email in statement.approvers:
-            is_self_approval = approver_email == requester_email
-            if is_self_approval and statement.allow_self_approval or not is_self_approval:
-                return ApproveRequestDecision(
-                    grant=action == entities.ApproverAction.Approve,
-                    permit=True,
-                    based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
-                )
+        if not _approver_in_configured_approvers(approver_email, statement.approvers):
+            continue
+        is_self_approval = _requester_is_same_user_as_approver(approver_email, requester_email)
+        if (is_self_approval and statement.allow_self_approval) or (not is_self_approval):
+            return ApproveRequestDecision(
+                grant=action == entities.ApproverAction.Approve,
+                permit=True,
+                based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
+            )
 
     return ApproveRequestDecision(
         grant=False,
@@ -160,6 +179,7 @@ def execute_decision(  # noqa: PLR0913
     approver: entities.slack.User,
     requester: entities.slack.User,
     reason: str,
+    elevator_request_id: str | None = None,
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -196,6 +216,7 @@ def execute_decision(  # noqa: PLR0913
             approver_slack_id=approver.id,
             approver_email=approver.email,
             request_id=account_assignment_status.request_id,
+            elevator_request_id=elevator_request_id or "NA",
             operation_type="grant",
             permission_duration=permission_duration,
             sso_user_principal_id=sso_user_principal_id,
@@ -215,6 +236,7 @@ def execute_decision(  # noqa: PLR0913
             permission_set_arn=permission_set.arn,
             user_principal_id=sso_user_principal_id,
         ),
+        elevator_request_id=elevator_request_id,
     )
     return True  # Temporary solution for testing
 
@@ -227,6 +249,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     requester: entities.slack.User,
     reason: str,
     identity_store_id: str,
+    elevator_request_id: str | None = None,
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -264,6 +287,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             requester_email=requester.email,
             approver_slack_id=approver.id,
             approver_email=approver.email,
+            elevator_request_id=elevator_request_id or "NA",
             operation_type="grant",
             permission_duration=permission_duration,
             audit_entry_type="group",
@@ -284,5 +308,6 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             user_principal_id=sso_user_principal_id,
             membership_id=membership_id,
         ),
+        elevator_request_id=elevator_request_id,
     )
     return  # type: ignore # noqa: PGH003

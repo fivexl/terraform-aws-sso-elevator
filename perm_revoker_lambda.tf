@@ -46,10 +46,18 @@ module "access_revoker" {
   environment_variables = {
     LOG_LEVEL = var.log_level
 
+    CHAT_PLATFORM = var.chat_platform
+
     SLACK_SIGNING_SECRET = var.slack_signing_secret
     SLACK_BOT_TOKEN      = var.slack_bot_token
     SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = var.schedule_group_name
+
+    TEAMS_MICROSOFT_APP_ID         = var.teams_microsoft_app_id
+    TEAMS_MICROSOFT_APP_PASSWORD   = var.teams_microsoft_app_password
+    TEAMS_AZURE_TENANT_ID          = var.teams_azure_tenant_id
+    TEAMS_APPROVAL_CONVERSATION_ID = var.teams_approval_conversation_id
+
+    SCHEDULE_GROUP_NAME = var.schedule_group_name
 
     SSO_INSTANCE_ARN            = local.sso_instance_arn
     POWERTOOLS_LOGGER_LOG_EVENT = true
@@ -71,6 +79,7 @@ module "access_revoker" {
     APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
     SECONDARY_FALLBACK_EMAIL_DOMAINS           = jsonencode(var.secondary_fallback_email_domains)
     SEND_DM_IF_USER_NOT_IN_CHANNEL             = var.send_dm_if_user_not_in_channel
+    ELEVATOR_REQUESTS_TABLE_NAME               = aws_dynamodb_table.elevator_requests.name
   }
 
   allowed_triggers = {
@@ -182,6 +191,17 @@ data "aws_iam_policy_document" "revoker" {
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
+  }
+  statement {
+    sid    = "ElevatorRequestsDynamoDB"
+    effect = "Allow"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+    ]
+    resources = [aws_dynamodb_table.elevator_requests.arn]
   }
 
 }

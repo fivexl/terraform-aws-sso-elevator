@@ -131,12 +131,13 @@ def event_bridge_schedule_after(td: timedelta) -> str:
     return f"at({(now + td).replace(microsecond=0).isoformat().replace('+00:00', '')})"
 
 
-def schedule_revoke_event(
+def schedule_revoke_event(  # noqa: PLR0913
     schedule_client: EventBridgeSchedulerClient,
     permission_duration: timedelta,
     approver: entities.slack.User,
     requester: entities.slack.User,
     user_account_assignment: sso.UserAccountAssignment,
+    elevator_request_id: str | None = None,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
     logger.info("Scheduling revoke event")
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
@@ -147,6 +148,7 @@ def schedule_revoke_event(
         requester=requester,
         user_account_assignment=user_account_assignment,
         permission_duration=permission_duration,
+        elevator_request_id=elevator_request_id,
     )
     logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
     return schedule_client.create_schedule(
@@ -169,12 +171,13 @@ def schedule_revoke_event(
     )
 
 
-def schedule_group_revoke_event(
+def schedule_group_revoke_event(  # noqa: PLR0913
     schedule_client: EventBridgeSchedulerClient,
     permission_duration: timedelta,
     approver: entities.slack.User,
     requester: entities.slack.User,
     group_assignment: sso.GroupAssignment,
+    elevator_request_id: str | None = None,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
     logger.info("Scheduling revoke event")
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
@@ -184,6 +187,7 @@ def schedule_group_revoke_event(
         requester=requester,
         group_assignment=group_assignment,
         permission_duration=permission_duration,
+        elevator_request_id=elevator_request_id,
     )
     get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, group_assignment)
     logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
@@ -211,6 +215,7 @@ def schedule_discard_buttons_event(
     schedule_client: EventBridgeSchedulerClient,
     time_stamp: str,
     channel_id: str,
+    elevator_request_id: str | None = None,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef | None:
     if cfg.request_expiration_hours == 0:
         logger.info("Request expiration is disabled, not scheduling discard buttons event")
@@ -244,17 +249,21 @@ def schedule_discard_buttons_event(
                     schedule_name=schedule_name,
                     time_stamp=time_stamp,
                     channel_id=channel_id,
+                    elevator_request_id=elevator_request_id,
                 ).dict()
             ),
         ),
     )
 
 
-def schedule_approver_notification_event(
+def schedule_approver_notification_event(  # noqa: PLR0913
     schedule_client: EventBridgeSchedulerClient,
     message_ts: str,
     channel_id: str,
     time_to_wait: timedelta,
+    elevator_request_id: str | None = None,
+    teams_conversation_id: str | None = None,
+    teams_activity_id: str | None = None,
 ) -> scheduler_type_defs.CreateScheduleOutputTypeDef | None:
     # If the initial wait time is 0, we don't schedule the event
     if cfg.approver_renotification_initial_wait_time == 0:
@@ -289,6 +298,9 @@ def schedule_approver_notification_event(
                     time_stamp=message_ts,
                     channel_id=channel_id,
                     time_to_wait_in_seconds=time_to_wait.total_seconds(),
+                    elevator_request_id=elevator_request_id,
+                    teams_conversation_id=teams_conversation_id,
+                    teams_activity_id=teams_activity_id,
                 ).dict()
             ),
         ),
