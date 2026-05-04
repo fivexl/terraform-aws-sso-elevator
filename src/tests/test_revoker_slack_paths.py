@@ -6,7 +6,6 @@ import pytest
 import slack_sdk
 
 import config as config_module
-import entities
 import request_store
 from entities.elevator_request import ElevatorRequestKind, ElevatorRequestRecord, ElevatorRequestStatus
 from events import ApproverNotificationEvent, DiscardButtonsEvent

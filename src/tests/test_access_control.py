@@ -1017,6 +1017,74 @@ def test_make_decision_on_approve_request_teams_upn_matches_policy_secondary_dom
     assert d.grant is True
 
 
+def test_make_decision_on_access_request_self_approval_matches_policy_secondary_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Access request self-approval uses the same email variants as approve flows (Teams UPN vs policy primary)."""
+    from types import SimpleNamespace
+
+    import access_control
+    import sso
+
+    _real = sso.email_variants_with_secondary_domains
+
+    def _variants_with_tf_like_domains(email: str, _c: object) -> frozenset[str]:
+        return _real(email, SimpleNamespace(secondary_fallback_email_domains=["@fivexl.io"]))
+
+    monkeypatch.setattr(access_control.sso, "email_variants_with_secondary_domains", _variants_with_tf_like_domains)
+    st = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approvers": ["aleksandr.kuznetsov@fivexl.io"],
+            "allow_self_approval": True,
+        }
+    )
+    d = make_decision_on_access_request(
+        statements=frozenset([st]),
+        requester_email="aleksandr.kuznetsov@fivexl.onmicrosoft.com",
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+    )
+    assert d.grant is True
+    assert d.reason == DecisionReason.SelfApproval
+
+
+def test_make_decision_on_access_request_potential_approvers_excludes_same_person_secondary_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RequiresApproval must not ping the requester under an alternate address from ``secondary_fallback_email_domains``."""
+    from types import SimpleNamespace
+
+    import access_control
+    import sso
+
+    _real = sso.email_variants_with_secondary_domains
+
+    def _variants_with_tf_like_domains(email: str, _c: object) -> frozenset[str]:
+        return _real(email, SimpleNamespace(secondary_fallback_email_domains=["@fivexl.io"]))
+
+    monkeypatch.setattr(access_control.sso, "email_variants_with_secondary_domains", _variants_with_tf_like_domains)
+    st = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approvers": ["aleksandr.kuznetsov@fivexl.io", "colleague@example.com"],
+        }
+    )
+    d = make_decision_on_access_request(
+        statements=frozenset([st]),
+        requester_email="aleksandr.kuznetsov@fivexl.onmicrosoft.com",
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+    )
+    assert d.grant is False
+    assert d.reason == DecisionReason.RequiresApproval
+    assert d.approvers == frozenset({"colleague@example.com"})
+
+
 def test_execute_access_request_decision(
     test_cases_for_access_request_decision,
     execute_decision_info,

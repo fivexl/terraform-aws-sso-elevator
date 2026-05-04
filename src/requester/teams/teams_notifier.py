@@ -138,7 +138,7 @@ class TeamsNotifier:
             return cands[0]
         return None
 
-    async def send_message(self, text: str, card: dict | None = None) -> str:
+    async def send_message(self, text: str, card: dict | None = None, entities: list[dict] | None = None) -> str:
         app = await self._get_app()
         msg: MessageActivityInput
         if card:
@@ -150,7 +150,7 @@ class TeamsNotifier:
                 )
             )
         else:
-            msg = MessageActivityInput(text=text)
+            msg = MessageActivityInput(text=text, entities=entities) if entities else MessageActivityInput(text=text)
         r2 = self._approval_thread_reply_to_id()
         if r2:
             msg.reply_to_id = r2
@@ -159,6 +159,24 @@ class TeamsNotifier:
             app_id=cast(str, self._cfg.teams_microsoft_app_id),
             tenant_id=cast(str, self._cfg.teams_azure_tenant_id),
             conversation_id=self._effective_approval_conversation_id(),
+            message=msg,
+            service_url=self._service_url_override,
+        )
+
+    async def send_channel_text(self, text: str, entities: list[dict] | None = None) -> str:
+        """Post a top-level channel message (no ``replyToId``), using the base channel id.
+
+        Visible in the main channel feed. May return 403/404 if the bot cannot post there; callers can
+        fall back to :meth:`send_thread_text_with_transport_fallback`.
+        """
+        app = await self._get_app()
+        conv_id = self._effective_approval_conversation_id()
+        msg = MessageActivityInput(text=text, entities=entities) if entities else MessageActivityInput(text=text)
+        return await _send_in_conversation(
+            app=app,
+            app_id=cast(str, self._cfg.teams_microsoft_app_id),
+            tenant_id=cast(str, self._cfg.teams_azure_tenant_id),
+            conversation_id=conv_id,
             message=msg,
             service_url=self._service_url_override,
         )

@@ -11,6 +11,7 @@ from typing import Any, cast
 import access_control
 import config
 import entities
+import permission_duration_options
 import group
 import organizations
 import request_store
@@ -83,11 +84,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         return {}
 
     async def _build_form_card(kind: str) -> dict:
-        duration_options = (
-            [str(timedelta(hours=h)) for h in range(1, c.max_permissions_duration_time + 1)]
-            if not c.permission_duration_list_override
-            else c.permission_duration_list_override
-        )
+        duration_options = permission_duration_options.permission_duration_choice_strings(c)
         if kind == "account":
             accounts = organizations.get_accounts_from_config_with_cache(org_client=org_client, s3_client=s3_client, cfg=c)
             permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=c)

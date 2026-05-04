@@ -79,49 +79,21 @@ def _teams_reply_parent_activity_candidates(tc: str, ta: str) -> list[str]:
     return thread_follow_up_reply_parent_candidates(tc, ta)
 
 
-async def _send_teams_revoke_text_in_request_thread_or_channel(
-    text: str,
-    elevator_request_id: str | None,
-    default_notifier: TeamsNotifier,
-) -> None:
-    """Post revocation text in the same Teams thread as the approval card (matches approver reminders)."""
-    eid = (elevator_request_id or "").strip()
-    if not eid:
-        await default_notifier.send_message(text)
-        return
-    tmeta = _teams_presentation_for_scheduled(None, None, eid)
-    if not tmeta:
-        await default_notifier.send_message(text)
-        return
-    tc, ta, tsu = tmeta
-    from requester.teams import teams_runtime
+def _teams_revoke_line_with_requester_mention(
+    *,
+    prefix: str,
+    suffix: str,
+    requester: entities.slack.User,
+) -> tuple[str, list[dict] | None]:
+    """Build message text + optional Mention entities so the requester is a clickable @mention in Teams."""
+    from requester.teams import teams_users
 
-    rn = TeamsNotifier(
-        cfg,
-        teams_runtime.get_teams_app,
-        conversation_id_override=tc,
-        service_url_override=tsu,
-    )
-    last: httpx.HTTPStatusError | None = None
-    for parent in _teams_reply_parent_activity_candidates(tc, ta):
-        try:
-            await rn.send_thread_text_with_transport_fallback(parent, text, None)
-            return
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == HTTPStatus.NOT_FOUND:
-                last = e
-                continue
-            logger.exception(f"Failed to send Teams revocation notification in thread: {e}")
-            break
-        except Exception as e:
-            logger.exception(f"Failed to send Teams revocation notification in thread: {e}")
-            break
-    if last is not None:
-        logger.exception(f"Failed to send Teams revocation notification in thread (exhausted parent ids): {last}")
-    try:
-        await default_notifier.send_message(text)
-    except Exception as e:
-        logger.exception(f"Failed to send Teams revocation notification fallback: {e}")
+    display = (requester.real_name or "").strip() or (requester.email or "").strip() or "user"
+    uid = (requester.id or "").strip()
+    if uid:
+        m_text, m_ent = teams_users.build_mention(uid, display)
+        return (prefix + m_text + suffix, [m_ent])
+    return (prefix + display + suffix, None)
 
 
 def _get_notifier() -> slack_sdk.WebClient | TeamsNotifier:
@@ -371,20 +343,22 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
         if cfg.chat_platform == "teams":
             import asyncio
 
-            assert isinstance(slack_client, TeamsNotifier)
-            text = f"Revoked role {permission_set.name} for user {revoke_event.requester.real_name} in account {account.name}"
+            revoke_text, revoke_entities = _teams_revoke_line_with_requester_mention(
+                prefix=f"Revoked role {permission_set.name} for user ",
+                suffix=f" in account {account.name}",
+                requester=revoke_event.requester,
+            )
 
-            async def _send_teams_revoke_notification() -> None:
-                try:
-                    await _send_teams_revoke_text_in_request_thread_or_channel(
-                        text,
-                        revoke_event.elevator_request_id,
-                        slack_client,
+            try:
+                asyncio.run(
+                    _teams_send_scheduled_revocation_notification(
+                        elevator_request_id=revoke_event.elevator_request_id,
+                        text=revoke_text,
+                        entities=revoke_entities,
                     )
-                except Exception as e:
-                    logger.exception(f"Failed to send Teams revocation notification: {e}")
-
-            asyncio.run(_send_teams_revoke_notification())
+                )
+            except Exception as e:
+                logger.exception(f"Failed to send Teams revocation notification: {e}")
         else:
             assert isinstance(slack_client, slack_sdk.WebClient)
             slack_notify_user_on_revoke(
@@ -429,20 +403,22 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
         if cfg.chat_platform == "teams":
             import asyncio
 
-            assert isinstance(slack_client, TeamsNotifier)
-            text = f"User {group_revoke_event.requester.real_name} has been removed from the group {group_assignment.group_name}."
+            revoke_text, revoke_entities = _teams_revoke_line_with_requester_mention(
+                prefix="User ",
+                suffix=f" has been removed from the group {group_assignment.group_name}.",
+                requester=group_revoke_event.requester,
+            )
 
-            async def _send_teams_group_revoke_notification() -> None:
-                try:
-                    await _send_teams_revoke_text_in_request_thread_or_channel(
-                        text,
-                        group_revoke_event.elevator_request_id,
-                        slack_client,
+            try:
+                asyncio.run(
+                    _teams_send_scheduled_revocation_notification(
+                        elevator_request_id=group_revoke_event.elevator_request_id,
+                        text=revoke_text,
+                        entities=revoke_entities,
                     )
-                except Exception as e:
-                    logger.exception(f"Failed to send Teams group revocation notification: {e}")
-
-            asyncio.run(_send_teams_group_revoke_notification())
+                )
+            except Exception as e:
+                logger.exception(f"Failed to send Teams group revocation notification: {e}")
         else:
             assert isinstance(slack_client, slack_sdk.WebClient)
             slack_notify_user_on_group_access_revoke(
@@ -776,6 +752,65 @@ async def _teams_send_expiry_notification(
             raise
     if last is not None:
         logger.exception(f"Failed to send Teams expiry notification (exhausted parent ids): {last}")
+
+
+async def _teams_send_scheduled_revocation_notification(
+    *,
+    elevator_request_id: str | None,
+    text: str,
+    entities: list[dict] | None = None,
+) -> None:
+    """Post Teams revocation: prefer a top-level channel message, then the approval-card thread.
+
+    Needs stored ``teams_presentation`` for regional ``serviceUrl`` and thread fallback parents.
+    """
+    from requester.teams import teams_runtime
+
+    tmeta = _teams_presentation_for_scheduled(None, None, elevator_request_id)
+    if not tmeta:
+        logger.warning(
+            "Teams revocation: no teams_presentation in store; falling back to configured approval channel",
+            extra={"elevator_request_id": elevator_request_id},
+        )
+        rn = TeamsNotifier(cfg, teams_runtime.get_teams_app)
+        await rn.send_message(text, entities=entities)
+        return
+
+    tc, ta, tsu = tmeta
+    rn = TeamsNotifier(
+        cfg,
+        teams_runtime.get_teams_app,
+        conversation_id_override=tc,
+        service_url_override=tsu,
+    )
+    try:
+        await rn.send_channel_text(text, entities)
+        return
+    except httpx.HTTPStatusError as e:
+        logger.info(
+            "Teams revocation: channel post returned HTTP %s; falling back to thread under approval card",
+            e.response.status_code,
+            extra={"elevator_request_id": elevator_request_id},
+        )
+    except Exception as e:
+        logger.exception(
+            f"Teams revocation: channel post failed; falling back to thread under approval card: {e}",
+            extra={"elevator_request_id": elevator_request_id},
+        )
+
+    last: httpx.HTTPStatusError | None = None
+    for parent in _teams_reply_parent_activity_candidates(tc, ta):
+        try:
+            await rn.send_thread_text_with_transport_fallback(parent, text, entities)
+            return
+        except httpx.HTTPStatusError as e:
+            last = e
+            if e.response.status_code == HTTPStatus.NOT_FOUND:
+                continue
+            logger.exception(f"Failed to send Teams revocation notification: {e}")
+            return
+    if last is not None:
+        logger.exception(f"Failed to send Teams revocation notification (exhausted parent ids): {last}")
 
 
 def handle_discard_buttons_event(

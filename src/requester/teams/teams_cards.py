@@ -11,17 +11,21 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import access_control
     import entities.aws
 
-_DURATION_PARTS = 3
+_DURATION_PARTS_HMS = 3
+_DURATION_PARTS_HM = 2
 
 
 def parse_duration_choice(duration_str: str) -> timedelta:
-    """Parse HH:MM:SS duration from Teams Adaptive Card `duration` input."""
+    """Parse duration from Teams Adaptive Card `duration` input (HH:MM, same as Slack, or HH:MM:SS)."""
     try:
-        parts = duration_str.split(":")
-        if len(parts) == _DURATION_PARTS:
+        parts = duration_str.strip().split(":")
+        if len(parts) == _DURATION_PARTS_HMS:
             return timedelta(hours=int(parts[0]), minutes=int(parts[1]), seconds=int(parts[2]))
+        if len(parts) == _DURATION_PARTS_HM:
+            return timedelta(hours=int(parts[0]), minutes=int(parts[1]))
     except (ValueError, TypeError, OverflowError):
         pass
     return timedelta(hours=1)
@@ -42,6 +46,56 @@ def get_color_style(emoji_config: str) -> str:
     Falls back to 'default' for unknown values.
     """
     return _EMOJI_TO_STYLE.get(emoji_config, "default")
+
+
+def teams_access_request_card_style_and_subtitle(
+    decision: "access_control.AccessRequestDecision",
+    waiting_emoji: str,
+    bad_emoji: str,
+    *,
+    is_group: bool = False,
+) -> tuple[str, str | None]:
+    """Adaptive Card container style and optional in-card subtitle.
+
+    Auto-grant (self / approval not required): same neutral card as pending — status is posted in the thread
+    (Slack parity), not inside the card.
+    """
+    import access_control as ac
+
+    match decision.reason:
+        case ac.DecisionReason.ApprovalNotRequired | ac.DecisionReason.SelfApproval:
+            return get_color_style(waiting_emoji), None
+        case ac.DecisionReason.RequiresApproval:
+            return get_color_style(waiting_emoji), None
+        case ac.DecisionReason.NoApprovers:
+            return get_color_style(bad_emoji), "Nobody can approve this request."
+        case ac.DecisionReason.NoStatements:
+            return get_color_style(bad_emoji), (
+                "There are no statements for this group." if is_group else "There are no statements for this permission set and account."
+            )
+        case _:
+            return get_color_style(waiting_emoji), None
+
+
+def teams_access_auto_grant_thread_status_text(
+    decision: "access_control.AccessRequestDecision",
+    *,
+    is_group: bool = False,
+) -> str | None:
+    """Plain text for the first in-thread line when access was auto-granted (not shown on the card)."""
+    import access_control as ac
+
+    match decision.reason:
+        case ac.DecisionReason.ApprovalNotRequired:
+            return (
+                "Approval for this group is not required. Your request was approved automatically."
+                if is_group
+                else "Approval for this permission set and account is not required. Your request was approved automatically."
+            )
+        case ac.DecisionReason.SelfApproval:
+            return "Self approval is allowed and you are listed as an approver. Your request was approved automatically."
+        case _:
+            return None
 
 
 def build_request_access_launcher_card(kind: str) -> dict:
@@ -227,6 +281,7 @@ def build_approval_card(  # noqa: PLR0913
     color_style: str,
     request_data: dict,
     elevator_request_id: str | None = None,
+    header_subtitle: str | None = None,
 ) -> dict:
     """Build Adaptive Card for approval request message in channel."""
     if account is not None:
@@ -247,18 +302,29 @@ def build_approval_card(  # noqa: PLR0913
             {"title": "Duration", "value": permission_duration},
         ]
 
+    header_items: list[dict] = [
+        {
+            "type": "TextBlock",
+            "text": title,
+            "size": "large",
+            "weight": "bolder",
+        }
+    ]
+    if (header_subtitle or "").strip():
+        header_items.append(
+            {
+                "type": "TextBlock",
+                "text": (header_subtitle or "").strip(),
+                "wrap": True,
+                "isSubtle": True,
+            }
+        )
+
     body = [
         {
             "type": "Container",
             "style": color_style,
-            "items": [
-                {
-                    "type": "TextBlock",
-                    "text": title,
-                    "size": "large",
-                    "weight": "bolder",
-                }
-            ],
+            "items": header_items,
         },
         {
             "type": "FactSet",

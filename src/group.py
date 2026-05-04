@@ -40,7 +40,7 @@ identity_store_id = sso_instance.identity_store_id
 
 
 @handle_errors
-def handle_request_for_group_access_submittion(  # noqa: PLR0915
+def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
     body: dict,
     ack: Ack,  # noqa: ARG001
     client: WebClient,
@@ -113,15 +113,18 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0915
                 elevator_request_id=elevator_id,
             )
 
+    auto_grant_without_parent_card_update = decision.reason in (
+        access_control.DecisionReason.ApprovalNotRequired,
+        access_control.DecisionReason.SelfApproval,
+    )
+
     match decision.reason:
         case access_control.DecisionReason.ApprovalNotRequired:
-            text = "Approval for this Group is not required. Request will be approved automatically."
-            dm_text = "Approval for this Group is not required. Your request will be approved automatically."
-            color_coding_emoji = cfg.good_result_emoji
+            text = "Approval for this Group is not required. Your request was approved automatically."
+            dm_text = "Approval for this Group is not required. Your request was approved automatically."
         case access_control.DecisionReason.SelfApproval:
-            text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
-            dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
-            color_coding_emoji = cfg.good_result_emoji
+            text = "Self approval is allowed and you are listed as an approver. Your request was approved automatically."
+            dm_text = "Self approval is allowed and you are listed as an approver. Your request was approved automatically."
         case access_control.DecisionReason.RequiresApproval:
             approvers = [slack_helpers.get_user_by_email(client, email) for email in decision.approvers]
             mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
@@ -150,16 +153,17 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0915
             """,
         )
 
-    blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-        blocks=slack_response["message"]["blocks"],
-        color_coding_emoji=color_coding_emoji,
-    )
-    client.chat_update(
-        channel=cfg.slack_channel_id,
-        ts=slack_response["ts"],
-        blocks=blocks,
-        text=text,
-    )
+    if not auto_grant_without_parent_card_update:
+        blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+            blocks=slack_response["message"]["blocks"],
+            color_coding_emoji=color_coding_emoji,
+        )
+        client.chat_update(
+            channel=cfg.slack_channel_id,
+            ts=slack_response["ts"],
+            blocks=blocks,
+            text=text,
+        )
 
     access_control.execute_decision_on_group_request(
         group=group,
@@ -175,16 +179,14 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0915
         request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
 
     if decision.grant:
+        grant_notice = f"Permissions have been granted by <@{requester.id}>."
         client.chat_postMessage(
             channel=cfg.slack_channel_id,
-            text=f"Permissions granted to <@{requester.id}>",
+            text=grant_notice,
             thread_ts=slack_response["ts"],
         )
         if not is_user_in_channel and cfg.send_dm_if_user_not_in_channel:
-            client.chat_postMessage(
-                channel=requester.id,
-                text="Your request was processed, permissions granted.",
-            )
+            client.chat_postMessage(channel=requester.id, text=grant_notice)
 
 
 @handle_errors
@@ -310,7 +312,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     )
 
 
-async def handle_teams_group_task_submit(  # noqa: PLR0915
+async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
     turn_context,  # noqa: ANN001
     data: dict,
     user: TeamsUser,
@@ -374,7 +376,12 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
         sso_group = entities.aws.SSOGroup(id=group_id, identity_store_id="", name=group_id)
 
     show_buttons = bool(decision.approvers)
-    color_style = teams_cards.get_color_style(cfg.waiting_result_emoji)
+    color_style, header_subtitle = teams_cards.teams_access_request_card_style_and_subtitle(
+        decision,
+        cfg.waiting_result_emoji,
+        cfg.bad_result_emoji,
+        is_group=True,
+    )
     duration_str = str(data.get("duration", "1:00:00"))
     request_data = {
         "group_id": group_id,
@@ -393,13 +400,35 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
         color_style=color_style,
         request_data=request_data,
         elevator_request_id=elevator_id,
+        header_subtitle=header_subtitle,
     )
+
+    auto_status = teams_cards.teams_access_auto_grant_thread_status_text(decision, is_group=True)
+    posted_card_id = ""
 
     try:
         notifier = nf()
         activity_id = await notifier.send_message(text="New access request", card=card)
+        posted_card_id = (activity_id or "").strip()
         if activity_id:
             request_store.update_teams_presentation(elevator_id, store_conv, activity_id, service_url=su_effective)
+        if posted_card_id and decision.grant and auto_status:
+            from requester.teams import teams_approver_ping
+            from requester.teams.teams_runtime import get_teams_app
+
+            try:
+                await teams_approver_ping.post_auto_grant_thread_follow_ups(
+                    cfg,
+                    get_teams_app,
+                    teams_conversation_id=store_conv,
+                    service_url=su_effective,
+                    card_activity_id=posted_card_id,
+                    status_text=auto_status,
+                    requester=user,
+                    include_grant_line=False,
+                )
+            except Exception as e:
+                logger.exception(f"Failed to post auto-grant status in Teams thread (group): {e}")
         if activity_id and show_buttons and decision.reason == access_control.DecisionReason.RequiresApproval and decision.approvers:
             from requester.teams import teams_approver_ping
             from requester.teams.teams_runtime import get_teams_app
@@ -440,6 +469,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
     except Exception as e:
         logger.exception(f"Failed to post approval card to Teams channel: {e}")
 
+    grant_executed_ok = False
     if decision.grant:
         try:
             access_control.execute_decision_on_group_request(
@@ -453,8 +483,28 @@ async def handle_teams_group_task_submit(  # noqa: PLR0915
                 elevator_request_id=elevator_id,
             )
             request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
+            grant_executed_ok = True
         except Exception as e:
             logger.exception(f"Failed to execute auto-approved group decision: {e}")
+
+    if posted_card_id and decision.grant and auto_status and grant_executed_ok:
+        from requester.teams import teams_approver_ping
+        from requester.teams.teams_runtime import get_teams_app
+
+        try:
+            await teams_approver_ping.post_auto_grant_thread_follow_ups(
+                cfg,
+                get_teams_app,
+                teams_conversation_id=store_conv,
+                service_url=su_effective,
+                card_activity_id=posted_card_id,
+                status_text="",
+                requester=user,
+                include_status=False,
+                include_grant_line=True,
+            )
+        except Exception as e:
+            logger.exception(f"Failed to post auto-grant grantor line in Teams thread (group): {e}")
 
     await teams_activity_helpers.update_teams_launcher_message_after_task_submit(turn_context, "group")
 

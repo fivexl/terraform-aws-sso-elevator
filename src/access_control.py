@@ -86,7 +86,8 @@ def make_decision_on_access_request(  # noqa: PLR0911
     potential_approvers = set()
 
     explicit_deny_self_approval = any(
-        statement.allow_self_approval is False and requester_email in statement.approvers for statement in affected_statements
+        statement.allow_self_approval is False and _approver_in_configured_approvers(requester_email, statement.approvers)
+        for statement in affected_statements
     )
     explicit_deny_approval_not_required = any(statement.approval_is_not_required is False for statement in affected_statements)
 
@@ -97,7 +98,11 @@ def make_decision_on_access_request(  # noqa: PLR0911
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
             )
-        if requester_email in statement.approvers and statement.allow_self_approval and not explicit_deny_self_approval:
+        if (
+            _approver_in_configured_approvers(requester_email, statement.approvers)
+            and statement.allow_self_approval
+            and not explicit_deny_self_approval
+        ):
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.SelfApproval,
@@ -105,7 +110,9 @@ def make_decision_on_access_request(  # noqa: PLR0911
             )
 
         decision_based_on_statements.add(statement)  # type: ignore # noqa: PGH003
-        potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
+        potential_approvers.update(
+            approver for approver in statement.approvers if not _requester_is_same_user_as_approver(approver, requester_email)
+        )
 
     if not decision_based_on_statements:
         return AccessRequestDecision(

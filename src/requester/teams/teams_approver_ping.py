@@ -8,6 +8,7 @@ from http import HTTPStatus
 import httpx
 
 import config
+import entities
 import sso
 from requester.teams.teams_notifier import (
     TeamsGetApp,
@@ -83,6 +84,104 @@ async def _post_thread_line_with_parent_candidates(
             raise
     if last is not None:
         raise last
+
+
+async def _resolve_single_teams_user_by_email(
+    cfg: config.Config,
+    get_app: TeamsGetApp,
+    *,
+    teams_conversation_id: str,
+    service_url: str | None,
+    email: str,
+) -> entities.teams.TeamsUser | None:
+    """Match one address to a channel member or Graph user (same strategy as approver ping)."""
+    e = (email or "").strip().lower()
+    if not e:
+        return None
+    app = await get_app()
+    roster: list = []
+    try:
+        base_cid = teams_notifier.base_approval_channel_conversation_id(teams_conversation_id, cfg)
+        roster = await teams_users.fetch_channel_roster_teams_users(
+            app,
+            base_cid,
+            service_url=service_url,
+            fallback_tenant_id=cfg.teams_azure_tenant_id,
+        )
+    except Exception as ex:
+        log.exception("Could not load channel roster for grant mention: %s", ex)
+    if roster:
+        u = teams_users.find_teams_user_in_roster_by_approver_email(e, roster)
+        if u is not None:
+            return u
+    graph = _graph_client(cfg)
+    if graph is None:
+        return None
+    try:
+        return await teams_users.get_user_by_email_with_config(graph, e, cfg)
+    except Exception as ex:
+        log.warning("Could not resolve requester in Teams for grant mention: %s", ex)
+        return None
+
+
+async def post_auto_grant_thread_follow_ups(  # noqa: PLR0913
+    cfg: config.Config,
+    get_app: TeamsGetApp,
+    *,
+    teams_conversation_id: str,
+    service_url: str | None,
+    card_activity_id: str,
+    status_text: str | None,
+    requester: entities.teams.TeamsUser | None = None,
+    requester_email: str = "",
+    requester_display_name: str = "",
+    include_status: bool = True,
+    include_grant_line: bool = True,
+) -> None:
+    """Post auto-grant explanation and/or grantor line in the approval thread (Slack parity)."""
+    if not thread_follow_up_reply_parent_candidates(teams_conversation_id, card_activity_id):
+        log.warning("Empty thread parent candidates for auto-grant follow-up; skipping")
+        return
+    tsend = _TeamsThreadSend(
+        cfg=cfg,
+        get_app=get_app,
+        teams_conversation_id=teams_conversation_id,
+        service_url=(service_url or "").strip(),
+    )
+    if include_status and (status_text or "").strip():
+        await _post_thread_line_with_parent_candidates(
+            tsend,
+            teams_conversation_id,
+            card_activity_id,
+            (status_text or "").strip(),
+            None,
+        )
+    if not include_grant_line:
+        return
+
+    u = requester if (requester and str(requester.id or "").strip()) else None
+    if u is None and (requester_email or "").strip():
+        u = await _resolve_single_teams_user_by_email(
+            cfg,
+            get_app,
+            teams_conversation_id=teams_conversation_id,
+            service_url=service_url,
+            email=requester_email,
+        )
+    fallback_name = (
+        (requester_display_name or "").strip()
+        or (requester.display_name if requester else "")
+        or (u.display_name if u else "")
+        or (requester_email or "").strip()
+        or "Requester"
+    )
+    if u and str(u.id or "").strip():
+        m, ent = teams_users.build_mention(u.id, (u.display_name or "").strip() or fallback_name)
+        grant_line = f"Permissions have been granted by {m}."
+        await _post_thread_line_with_parent_candidates(tsend, teams_conversation_id, card_activity_id, grant_line, [ent])
+    else:
+        plain = f"Permissions have been granted by {fallback_name}."
+        await _post_thread_line_with_parent_candidates(tsend, teams_conversation_id, card_activity_id, plain, None)
 
 
 async def send_approvers_waiting_ping_in_thread(  # noqa: PLR0913, PLR0912

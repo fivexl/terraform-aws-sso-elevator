@@ -430,6 +430,35 @@ def test_build_mention_structure() -> None:
     assert e["mentioned"]["id"] == "u"
 
 
+def test_teams_scheduled_revoke_line_includes_mention_entity() -> None:
+    from entities.slack import User
+    from revoker import _teams_revoke_line_with_requester_mention
+
+    u = User(id="29:test", email="a@b.com", real_name="Ada")
+    text, ents = _teams_revoke_line_with_requester_mention(
+        prefix="Role X for user ",
+        suffix=" in account Y",
+        requester=u,
+    )
+    assert text == "Role X for user <at>Ada</at> in account Y"
+    assert ents is not None and len(ents) == 1
+    assert ents[0]["mentioned"]["id"] == "29:test"
+
+
+def test_teams_scheduled_revoke_line_plain_when_no_teams_id() -> None:
+    from entities.slack import User
+    from revoker import _teams_revoke_line_with_requester_mention
+
+    u = User(id="", email="a@b.com", real_name="Ada")
+    text, ents = _teams_revoke_line_with_requester_mention(
+        prefix="User ",
+        suffix=" done.",
+        requester=u,
+    )
+    assert text == "User Ada done."
+    assert ents is None
+
+
 def test_graph_filter_escapes_single_quotes() -> None:
     cfg = teams_users._build_user_filter_config("o'hara@example.com")
     if cfg is None:

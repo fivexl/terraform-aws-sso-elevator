@@ -402,15 +402,18 @@ def _build_slack_app(ctx: RequesterContext) -> App:
                     elevator_request_id=elevator_id,
                 )
 
+        auto_grant_without_parent_card_update = decision.reason in (
+            access_control.DecisionReason.ApprovalNotRequired,
+            access_control.DecisionReason.SelfApproval,
+        )
+
         match decision.reason:
             case access_control.DecisionReason.ApprovalNotRequired:
-                text = "Approval for this Permission Set & Account is not required. Request will be approved automatically."
-                dm_text = "Approval for this Permission Set & Account is not required. Your request will be approved automatically."
-                color_coding_emoji = cfg.good_result_emoji
+                text = "Approval for this Permission Set & Account is not required. Your request was approved automatically."
+                dm_text = "Approval for this Permission Set & Account is not required. Your request was approved automatically."
             case access_control.DecisionReason.SelfApproval:
-                text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
-                dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
-                color_coding_emoji = cfg.good_result_emoji
+                text = "Self approval is allowed and you are listed as an approver. Your request was approved automatically."
+                dm_text = "Self approval is allowed and you are listed as an approver. Your request was approved automatically."
             case access_control.DecisionReason.RequiresApproval:
                 approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(
                     client,
@@ -459,16 +462,17 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             """,
             )
 
-        blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-            blocks=slack_response["message"]["blocks"],
-            color_coding_emoji=color_coding_emoji,
-        )
-        client.chat_update(
-            channel=cfg.slack_channel_id,
-            ts=slack_response["ts"],
-            blocks=blocks,
-            text=text,
-        )
+        if not auto_grant_without_parent_card_update:
+            blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+                blocks=slack_response["message"]["blocks"],
+                color_coding_emoji=color_coding_emoji,
+            )
+            client.chat_update(
+                channel=cfg.slack_channel_id,
+                ts=slack_response["ts"],
+                blocks=blocks,
+                text=text,
+            )
 
         access_control.execute_decision(
             decision=decision,
@@ -484,16 +488,14 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
 
         if decision.grant:
+            grant_notice = f"Permissions have been granted by <@{requester.id}>."
             client.chat_postMessage(
                 channel=cfg.slack_channel_id,
-                text=f"Permissions granted to <@{requester.id}>",
+                text=grant_notice,
                 thread_ts=slack_response["ts"],
             )
             if not is_user_in_channel and cfg.send_dm_if_user_not_in_channel:
-                client.chat_postMessage(
-                    channel=requester.id,
-                    text="Your request was processed, permissions granted.",
-                )
+                client.chat_postMessage(channel=requester.id, text=grant_notice)
 
     app.view(slack_helpers.RequestForAccessView.CALLBACK_ID)(
         ack=acknowledge_request,

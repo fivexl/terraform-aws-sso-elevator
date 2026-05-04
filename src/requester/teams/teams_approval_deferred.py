@@ -111,7 +111,7 @@ def invoke_account_approval_post_async(
     )
 
 
-async def post_account_approval_to_teams_channel(
+async def post_account_approval_to_teams_channel(  # noqa: PLR0912
     deps: TeamsDependencies,
     elevator_id: str,
     requester_display_name: str,
@@ -148,7 +148,12 @@ async def post_account_approval_to_teams_channel(
         account = entities.aws.Account(id=rec.account_id or "", name=rec.account_id or "")
 
     show_buttons = bool(decision.approvers)
-    color_style = teams_cards.get_color_style(c.waiting_result_emoji)
+    color_style, header_subtitle = teams_cards.teams_access_request_card_style_and_subtitle(
+        decision,
+        c.waiting_result_emoji,
+        c.bad_result_emoji,
+        is_group=False,
+    )
     duration_str = str(timedelta(seconds=rec.permission_duration_seconds))
     request_data = {
         "account_id": rec.account_id or "",
@@ -169,6 +174,7 @@ async def post_account_approval_to_teams_channel(
         color_style=color_style,
         request_data=request_data,
         elevator_request_id=elevator_id,
+        header_subtitle=header_subtitle,
     )
 
     tpar = (teams_parent_activity_id or "").strip() or None
@@ -210,6 +216,21 @@ async def post_account_approval_to_teams_channel(
                 )
             except Exception as e:
                 log.exception("Failed to @mention approvers in Teams: %s", e)
+        auto_status = teams_cards.teams_access_auto_grant_thread_status_text(decision, is_group=False)
+        if act_id and decision.grant and auto_status:
+            try:
+                await teams_approver_ping.post_auto_grant_thread_follow_ups(
+                    c,
+                    get_teams_app,
+                    teams_conversation_id=teams_conversation_id,
+                    service_url=teams_service_url,
+                    card_activity_id=act_id,
+                    status_text=auto_status,
+                    requester_email=requester_email,
+                    requester_display_name=requester_display_name,
+                )
+            except Exception as e:
+                log.exception("Failed to post auto-grant Teams thread messages: %s", e)
         if show_buttons and act_id:
             schedule.schedule_discard_buttons_event(
                 schedule_client=schedule_client,
