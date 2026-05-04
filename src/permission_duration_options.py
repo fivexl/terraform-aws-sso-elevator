@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-import config
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import config
 
 # Slack StaticSelect allows at most 100 options; keep parity with slack_helpers.get_max_duration_block.
 _MAX_INCREMENTS = 99

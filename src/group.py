@@ -31,12 +31,40 @@ if TYPE_CHECKING:
 logger = config.get_logger(service="main")
 cfg = config.get_config()
 
-session = boto3._get_default_session()
-sso_client: SSOAdminClient = session.client("sso-admin")
-identity_store_client: IdentityStoreClient = session.client("identitystore")
-schedule_client: EventBridgeSchedulerClient = session.client("scheduler")
-sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-identity_store_id = sso_instance.identity_store_id
+# Lazy AWS clients — initialized on first use, not at import time.
+_sso_client: SSOAdminClient | None = None
+_identity_store_client: IdentityStoreClient | None = None
+_schedule_client: EventBridgeSchedulerClient | None = None
+_identity_store_id: str | None = None
+
+
+def _get_sso_client() -> SSOAdminClient:
+    global _sso_client  # noqa: PLW0603
+    if _sso_client is None:
+        _sso_client = boto3.client("sso-admin")  # type: ignore[assignment]
+    return _sso_client
+
+
+def _get_identity_store_client() -> IdentityStoreClient:
+    global _identity_store_client  # noqa: PLW0603
+    if _identity_store_client is None:
+        _identity_store_client = boto3.client("identitystore")  # type: ignore[assignment]
+    return _identity_store_client
+
+
+def _get_schedule_client() -> EventBridgeSchedulerClient:
+    global _schedule_client  # noqa: PLW0603
+    if _schedule_client is None:
+        _schedule_client = boto3.client("scheduler")  # type: ignore[assignment]
+    return _schedule_client
+
+
+def _get_identity_store_id() -> str:
+    global _identity_store_id  # noqa: PLW0603
+    if _identity_store_id is None:
+        sso_instance = sso.describe_sso_instance(_get_sso_client(), cfg.sso_instance_arn)
+        _identity_store_id = sso_instance.identity_store_id
+    return _identity_store_id
 
 
 @handle_errors
@@ -51,7 +79,7 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
     logger.info("View submitted", extra={"view": request})
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)
 
-    group = sso.describe_group(identity_store_id, request.group_id, identity_store_client)
+    group = sso.describe_group(_get_identity_store_id(), request.group_id, _get_identity_store_client())
 
     decision = access_control.make_decision_on_access_request(
         cfg.group_statements,
@@ -77,8 +105,8 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
     show_buttons = bool(decision.approvers)
     slack_response = client.chat_postMessage(
         blocks=slack_helpers.build_approval_request_message_blocks(
-            sso_client=sso_client,
-            identity_store_client=identity_store_client,
+            sso_client=_get_sso_client(),
+            identity_store_client=_get_identity_store_client(),
             slack_client=client,
             requester_slack_id=request.requester_slack_id,
             group=group,
@@ -98,13 +126,13 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
         ts = slack_response["ts"]
         if ts is not None:
             schedule.schedule_discard_buttons_event(
-                schedule_client=schedule_client,  # type: ignore # noqa: PGH003
+                schedule_client=_get_schedule_client(),  # type: ignore # noqa: PGH003
                 time_stamp=ts,
                 channel_id=cfg.slack_channel_id,
                 elevator_request_id=elevator_id,
             )
             schedule.schedule_approver_notification_event(
-                schedule_client=schedule_client,  # type: ignore # noqa: PGH003
+                schedule_client=_get_schedule_client(),  # type: ignore # noqa: PGH003
                 message_ts=ts,
                 channel_id=cfg.slack_channel_id,
                 time_to_wait=timedelta(
@@ -172,7 +200,7 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
         requester=requester,
         reason=request.reason,
         decision=decision,
-        identity_store_id=identity_store_id,
+        identity_store_id=_get_identity_store_id(),
         elevator_request_id=elevator_id,
     )
     if decision.grant and elevator_id:
@@ -286,12 +314,12 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 
     access_control.execute_decision_on_group_request(
         decision=decision,
-        group=sso.describe_group(identity_store_id, payload.request.group_id, identity_store_client),
+        group=sso.describe_group(_get_identity_store_id(), payload.request.group_id, _get_identity_store_client()),
         permission_duration=payload.request.permission_duration,
         approver=approver,
         requester=requester,
         reason=payload.request.reason,
-        identity_store_id=identity_store_id,
+        identity_store_id=_get_identity_store_id(),
         elevator_request_id=payload.elevator_request_id,
     )
     if payload.elevator_request_id:
@@ -371,7 +399,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
     )
 
     try:
-        sso_group = sso.describe_group(identity_store_id, group_id, identity_store_client)
+        sso_group = sso.describe_group(_get_identity_store_id(), group_id, _get_identity_store_client())
     except Exception:
         sso_group = entities.aws.SSOGroup(id=group_id, identity_store_id="", name=group_id)
 
@@ -412,23 +440,6 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
         posted_card_id = (activity_id or "").strip()
         if activity_id:
             request_store.update_teams_presentation(elevator_id, store_conv, activity_id, service_url=su_effective)
-        if posted_card_id and decision.grant and auto_status:
-            from requester.teams import teams_approver_ping
-            from requester.teams.teams_runtime import get_teams_app
-
-            try:
-                await teams_approver_ping.post_auto_grant_thread_follow_ups(
-                    cfg,
-                    get_teams_app,
-                    teams_conversation_id=store_conv,
-                    service_url=su_effective,
-                    card_activity_id=posted_card_id,
-                    status_text=auto_status,
-                    requester=user,
-                    include_grant_line=False,
-                )
-            except Exception as e:
-                logger.exception(f"Failed to post auto-grant status in Teams thread (group): {e}")
         if activity_id and show_buttons and decision.reason == access_control.DecisionReason.RequiresApproval and decision.approvers:
             from requester.teams import teams_approver_ping
             from requester.teams.teams_runtime import get_teams_app
@@ -447,13 +458,13 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
 
         if show_buttons and activity_id:
             schedule.schedule_discard_buttons_event(
-                schedule_client=schedule_client,  # type: ignore[union-attr]
+                schedule_client=_get_schedule_client(),  # type: ignore[union-attr]
                 time_stamp="",
                 channel_id="",
                 elevator_request_id=elevator_id,
             )
             schedule.schedule_approver_notification_event(
-                schedule_client=schedule_client,  # type: ignore[union-attr]
+                schedule_client=_get_schedule_client(),  # type: ignore[union-attr]
                 message_ts="",
                 channel_id="",
                 time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
@@ -469,7 +480,6 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
     except Exception as e:
         logger.exception(f"Failed to post approval card to Teams channel: {e}")
 
-    grant_executed_ok = False
     if decision.grant:
         try:
             access_control.execute_decision_on_group_request(
@@ -479,32 +489,28 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
                 approver=slack_user,
                 requester=slack_user,
                 reason=reason,
-                identity_store_id=identity_store_id,
+                identity_store_id=_get_identity_store_id(),
                 elevator_request_id=elevator_id,
             )
             request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
-            grant_executed_ok = True
+            if posted_card_id:
+                from requester.teams import teams_approver_ping
+                from requester.teams.teams_runtime import get_teams_app
+
+                try:
+                    await teams_approver_ping.post_auto_grant_thread_follow_ups(
+                        cfg,
+                        get_teams_app,
+                        teams_conversation_id=store_conv,
+                        service_url=su_effective,
+                        card_activity_id=posted_card_id,
+                        status_text=auto_status,
+                        requester=user,
+                    )
+                except Exception as e:
+                    logger.exception(f"Failed to post auto-grant status in Teams thread (group): {e}")
         except Exception as e:
             logger.exception(f"Failed to execute auto-approved group decision: {e}")
-
-    if posted_card_id and decision.grant and auto_status and grant_executed_ok:
-        from requester.teams import teams_approver_ping
-        from requester.teams.teams_runtime import get_teams_app
-
-        try:
-            await teams_approver_ping.post_auto_grant_thread_follow_ups(
-                cfg,
-                get_teams_app,
-                teams_conversation_id=store_conv,
-                service_url=su_effective,
-                card_activity_id=posted_card_id,
-                status_text="",
-                requester=user,
-                include_status=False,
-                include_grant_line=True,
-            )
-        except Exception as e:
-            logger.exception(f"Failed to post auto-grant grantor line in Teams thread (group): {e}")
 
     await teams_activity_helpers.update_teams_launcher_message_after_task_submit(turn_context, "group")
 
@@ -586,7 +592,7 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
     )
 
     try:
-        sso_group = sso.describe_group(identity_store_id, rec.group_id, identity_store_client)
+        sso_group = sso.describe_group(_get_identity_store_id(), rec.group_id, _get_identity_store_client())
         access_control.execute_decision_on_group_request(
             decision=decision,
             group=sso_group,
@@ -594,7 +600,7 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
             approver=approver.to_slack_user(),
             requester=requester_slack,
             reason=rec.reason,
-            identity_store_id=identity_store_id,
+            identity_store_id=_get_identity_store_id(),
             elevator_request_id=elevator_request_id,
         )
         request_store.update_request_status(elevator_request_id, ElevatorRequestStatus.completed)

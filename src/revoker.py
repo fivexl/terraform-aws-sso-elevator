@@ -206,7 +206,7 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
     cfg: config.Config,
     sso_client: SSOAdminClient,
     org_client: OrganizationsClient,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
     identitystore_client: IdentityStoreClient,
 ) -> SlackResponse | None:
     logger.info("Handling account assignment deletion", extra={"account_assignment": account_assignment})
@@ -240,6 +240,10 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
     )
 
     if cfg.post_update_to_slack:
+        if cfg.chat_platform == "teams":
+            logger.info("Skipping Slack account revoke notification in Teams mode")
+            return None
+        assert isinstance(slack_client, slack_sdk.WebClient)
         account = organizations.describe_account(org_client, account_assignment.account_id)
         return slack_notify_user_on_revoke(
             cfg=cfg,
@@ -435,10 +439,14 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
     org_client: OrganizationsClient,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
     identitystore_client: IdentityStoreClient,
     events_client: EventBridgeClient,
 ) -> None:
+    if cfg.chat_platform == "teams":
+        logger.info("Skipping inconsistency check notifications for Teams (Slack-only feature)")
+        return
+    assert isinstance(slack_client, slack_sdk.WebClient)
     account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     account_assignments_from_events = [
@@ -492,8 +500,12 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
     scheduler_client: EventBridgeSchedulerClient,
     events_client: EventBridgeClient,
     cfg: config.Config,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
 ) -> None:
+    if cfg.chat_platform == "teams":
+        logger.info("Skipping groups inconsistency check notifications for Teams (Slack-only feature)")
+        return
+    assert isinstance(slack_client, slack_sdk.WebClient)
     sso_instance_arn = cfg.sso_instance_arn
     sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
     identity_store_id = sso_instance.identity_store_id
@@ -545,7 +557,7 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
     sso_client: SSOAdminClient,
     scheduler_client: EventBridgeSchedulerClient,
     cfg: config.Config,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
 ) -> None:
     sso_instance_arn = cfg.sso_instance_arn
     sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
@@ -588,13 +600,17 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
                 ),
             )
             if cfg.post_update_to_slack:
-                slack_notify_user_on_group_access_revoke(
-                    cfg=cfg,
-                    group_assignment=group_assignment,
-                    sso_client=sso_client,
-                    identitystore_client=identitystore_client,
-                    slack_client=slack_client,
-                )
+                if cfg.chat_platform == "teams":
+                    logger.info("Skipping Slack group revoke notification in Teams mode")
+                else:
+                    assert isinstance(slack_client, slack_sdk.WebClient)
+                    slack_notify_user_on_group_access_revoke(
+                        cfg=cfg,
+                        group_assignment=group_assignment,
+                        sso_client=sso_client,
+                        identitystore_client=identitystore_client,
+                        slack_client=slack_client,
+                    )
 
 
 def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
@@ -602,7 +618,7 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
     org_client: OrganizationsClient,
-    slack_client: slack_sdk.WebClient,
+    slack_client: slack_sdk.WebClient | TeamsNotifier,
     identitystore_client: IdentityStoreClient,
 ) -> None:
     account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
