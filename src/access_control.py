@@ -236,6 +236,7 @@ def execute_decision(  # noqa: PLR0913
             permission_set_arn=permission_set.arn,
             user_principal_id=sso_user_principal_id,
         ),
+        elevator_request_id=elevator_request_id,
     )
     return True  # Temporary solution for testing
 
@@ -307,5 +308,6 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             user_principal_id=sso_user_principal_id,
             membership_id=membership_id,
         ),
+        elevator_request_id=elevator_request_id,
     )
     return  # type: ignore # noqa: PGH003

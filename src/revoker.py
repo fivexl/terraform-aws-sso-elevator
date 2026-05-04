@@ -79,6 +79,51 @@ def _teams_reply_parent_activity_candidates(tc: str, ta: str) -> list[str]:
     return thread_follow_up_reply_parent_candidates(tc, ta)
 
 
+async def _send_teams_revoke_text_in_request_thread_or_channel(
+    text: str,
+    elevator_request_id: str | None,
+    default_notifier: TeamsNotifier,
+) -> None:
+    """Post revocation text in the same Teams thread as the approval card (matches approver reminders)."""
+    eid = (elevator_request_id or "").strip()
+    if not eid:
+        await default_notifier.send_message(text)
+        return
+    tmeta = _teams_presentation_for_scheduled(None, None, eid)
+    if not tmeta:
+        await default_notifier.send_message(text)
+        return
+    tc, ta, tsu = tmeta
+    from requester.teams import teams_runtime
+
+    rn = TeamsNotifier(
+        cfg,
+        teams_runtime.get_teams_app,
+        conversation_id_override=tc,
+        service_url_override=tsu,
+    )
+    last: httpx.HTTPStatusError | None = None
+    for parent in _teams_reply_parent_activity_candidates(tc, ta):
+        try:
+            await rn.send_thread_text_with_transport_fallback(parent, text, None)
+            return
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == HTTPStatus.NOT_FOUND:
+                last = e
+                continue
+            logger.exception(f"Failed to send Teams revocation notification in thread: {e}")
+            break
+        except Exception as e:
+            logger.exception(f"Failed to send Teams revocation notification in thread: {e}")
+            break
+    if last is not None:
+        logger.exception(f"Failed to send Teams revocation notification in thread (exhausted parent ids): {last}")
+    try:
+        await default_notifier.send_message(text)
+    except Exception as e:
+        logger.exception(f"Failed to send Teams revocation notification fallback: {e}")
+
+
 def _get_notifier() -> slack_sdk.WebClient | TeamsNotifier:
     if _notifier[0] is None:
         if cfg.chat_platform == "teams":
@@ -331,7 +376,11 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
 
             async def _send_teams_revoke_notification() -> None:
                 try:
-                    await slack_client.send_message(text)
+                    await _send_teams_revoke_text_in_request_thread_or_channel(
+                        text,
+                        revoke_event.elevator_request_id,
+                        slack_client,
+                    )
                 except Exception as e:
                     logger.exception(f"Failed to send Teams revocation notification: {e}")
 
@@ -385,7 +434,11 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
 
             async def _send_teams_group_revoke_notification() -> None:
                 try:
-                    await slack_client.send_message(text)
+                    await _send_teams_revoke_text_in_request_thread_or_channel(
+                        text,
+                        group_revoke_event.elevator_request_id,
+                        slack_client,
+                    )
                 except Exception as e:
                     logger.exception(f"Failed to send Teams group revocation notification: {e}")
 
