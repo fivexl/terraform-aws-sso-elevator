@@ -360,7 +360,7 @@ def _find_user_principal_id_by_email(email: str, list_of_users: dict) -> str | N
         logger.info("User not found", extra={"email": email})
         return None
     except errors.SSOUserNotFound as e:
-        logger.error("Error while getting user principal id by email", extra={"error": e})
+        logger.exception("Error while getting user principal id by email", extra={"error": e})
         raise e
 
 
@@ -416,7 +416,7 @@ def get_user_principal_id_by_email(
         )
 
     except Exception as e:
-        logger.error("Error while getting user principal id by email", extra={"error": e})
+        logger.exception("Error while getting user principal id by email", extra={"error": e})
         raise
 
 
@@ -558,7 +558,7 @@ def get_groups_from_config(
         logger.debug("Groups", extra={"groups": groups})
         return groups
     except Exception as e:
-        logger.error("Error while getting groups from config", extra={"error": e})
+        logger.exception("Error while getting groups from config", extra={"error": e})
         raise e
 
 

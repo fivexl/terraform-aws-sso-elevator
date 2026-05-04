@@ -435,24 +435,20 @@ def get_user(client: WebClient, id: str) -> entities.slack.User:
 
 def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
     logger.info(f"Getting slack user by email: {email}")
-    start = datetime.datetime.now(timezone.utc)
     timeout_seconds = 30
-    try:
-        r = client.users_lookupByEmail(email=email)
-        logger.info(f"Slack user found: {r}")
-        return parse_user(r.data)  # type: ignore
-    except slack_sdk.errors.SlackApiError as e:
-        if e.response["error"] == "ratelimited":
-            if datetime.datetime.now(timezone.utc) - start >= datetime.timedelta(seconds=timeout_seconds):
-                raise e
-            logger.info(f"Rate limited when getting slack user by email. Sleeping for 3 seconds. {e}")
-            time.sleep(3)
-            return get_user_by_email(client, email)
-        else:
-            logger.error(f"Error when getting slack user by email. {e}")
-            raise e
-    except Exception as e:
-        raise e
+    deadline = datetime.datetime.now(timezone.utc) + datetime.timedelta(seconds=timeout_seconds)
+    while True:
+        try:
+            r = client.users_lookupByEmail(email=email)
+            logger.info(f"Slack user found: {r}")
+            return parse_user(r.data)  # type: ignore
+        except slack_sdk.errors.SlackApiError as e:
+            if e.response["error"] == "ratelimited" and datetime.datetime.now(timezone.utc) < deadline:
+                logger.info(f"Rate limited when getting slack user by email. Sleeping for 3 seconds. {e}")
+                time.sleep(3)
+                continue
+            logger.exception(f"Error when getting slack user by email. {e}")
+            raise
 
 
 def remove_buttons_from_message_blocks(
@@ -526,12 +522,6 @@ def find_approvers_in_slack(client: WebClient, approver_emails: list[str]) -> tu
 
 
 # Group
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
 
 
 class RequestForGroupAccess(entities.BaseModel):

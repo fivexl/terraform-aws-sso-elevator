@@ -1,6 +1,7 @@
-import datetime
+from __future__ import annotations
+
 from enum import Enum
-from typing import FrozenSet
+from typing import TYPE_CHECKING, Any, FrozenSet
 
 import boto3
 
@@ -12,14 +13,49 @@ import sso
 from entities import BaseModel
 from statement import GroupStatement, Statement, get_affected_group_statements, get_affected_statements
 
+if TYPE_CHECKING:
+    from datetime import timedelta
+    from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_organizations import OrganizationsClient
+    from mypy_boto3_scheduler import EventBridgeSchedulerClient
+    from mypy_boto3_sso_admin import SSOAdminClient
+
 logger = config.get_logger("access_control")
 cfg = config.get_config()
 
-session = boto3._get_default_session()
-org_client = session.client("organizations")
-sso_client = session.client("sso-admin")
-identitystore_client = session.client("identitystore")
-schedule_client = session.client("scheduler")
+# Lazy AWS clients — initialized on first use, not at import time.
+_org_client: Any = None
+_sso_client: Any = None
+_identitystore_client: Any = None
+_schedule_client: Any = None
+
+
+def _get_org_client() -> OrganizationsClient:
+    global _org_client  # noqa: PLW0603
+    if _org_client is None:
+        _org_client = boto3.client("organizations")  # type: ignore[assignment]
+    return _org_client
+
+
+def _get_sso_client() -> SSOAdminClient:
+    global _sso_client  # noqa: PLW0603
+    if _sso_client is None:
+        _sso_client = boto3.client("sso-admin")  # type: ignore[assignment]
+    return _sso_client
+
+
+def _get_identitystore_client() -> IdentityStoreClient:
+    global _identitystore_client  # noqa: PLW0603
+    if _identitystore_client is None:
+        _identitystore_client = boto3.client("identitystore")  # type: ignore[assignment]
+    return _identitystore_client
+
+
+def _get_schedule_client() -> EventBridgeSchedulerClient:
+    global _schedule_client  # noqa: PLW0603
+    if _schedule_client is None:
+        _schedule_client = boto3.client("scheduler")  # type: ignore[assignment]
+    return _schedule_client
 
 
 class DecisionReason(Enum):
@@ -182,7 +218,7 @@ def execute_decision(  # noqa: PLR0913
     decision: AccessRequestDecision | ApproveRequestDecision,
     permission_set_name: str,
     account_id: str,
-    permission_duration: datetime.timedelta,
+    permission_duration: timedelta,
     approver: entities.slack.User,
     requester: entities.slack.User,
     reason: str,
@@ -193,10 +229,10 @@ def execute_decision(  # noqa: PLR0913
         logger.info("Access request denied")
         return False  # Temporary solution for testing
 
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
+    sso_instance = sso.describe_sso_instance(_get_sso_client(), cfg.sso_instance_arn)
+    permission_set = sso.get_permission_set_by_name(_get_sso_client(), sso_instance.arn, permission_set_name)
     sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
+        identity_store_client=_get_identitystore_client(), identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
     )
 
     account_assignment = sso.UserAccountAssignment(
@@ -209,7 +245,7 @@ def execute_decision(  # noqa: PLR0913
     logger.info("Creating account assignment", extra={"account_assignment": account_assignment})
 
     account_assignment_status = sso.create_account_assignment_and_wait_for_result(
-        sso_client,
+        _get_sso_client(),
         account_assignment,
     )
 
@@ -234,7 +270,7 @@ def execute_decision(  # noqa: PLR0913
 
     schedule.schedule_revoke_event(
         permission_duration=permission_duration,
-        schedule_client=schedule_client,
+        schedule_client=_get_schedule_client(),
         approver=approver,
         requester=requester,
         user_account_assignment=sso.UserAccountAssignment(
@@ -251,7 +287,7 @@ def execute_decision(  # noqa: PLR0913
 def execute_decision_on_group_request(  # noqa: PLR0913
     decision: AccessRequestDecision | ApproveRequestDecision,
     group: entities.aws.SSOGroup,
-    permission_duration: datetime.timedelta,
+    permission_duration: timedelta,
     approver: entities.slack.User,
     requester: entities.slack.User,
     reason: str,
@@ -264,8 +300,8 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         return False  # Temporary solution for testing
 
     sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client=identitystore_client,
-        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+        identity_store_client=_get_identitystore_client(),
+        identity_store_id=sso.describe_sso_instance(_get_sso_client(), cfg.sso_instance_arn).identity_store_id,
         email=requester.email,
         cfg=cfg,
     )
@@ -274,13 +310,15 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         identity_store_id=identity_store_id,
         group_id=group.id,
         sso_user_id=sso_user_principal_id,
-        identity_store_client=identitystore_client,
+        identity_store_client=_get_identitystore_client(),
     ):
         logger.info(
             "User is already in the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
         )
     else:
-        membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, identitystore_client)["MembershipId"]
+        membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, _get_identitystore_client())[
+            "MembershipId"
+        ]
         logger.info(
             "User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
         )
@@ -305,7 +343,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
 
     schedule.schedule_group_revoke_event(
         permission_duration=permission_duration,
-        schedule_client=schedule_client,
+        schedule_client=_get_schedule_client(),
         approver=approver,
         requester=requester,
         group_assignment=sso.GroupAssignment(
@@ -317,4 +355,4 @@ def execute_decision_on_group_request(  # noqa: PLR0913
         ),
         elevator_request_id=elevator_request_id,
     )
-    return  # type: ignore # noqa: PGH003
+    return True  # type: ignore # noqa: PGH003

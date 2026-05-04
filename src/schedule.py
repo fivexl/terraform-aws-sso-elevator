@@ -31,11 +31,6 @@ def get_event_bridge_rule(event_bridge_client: EventBridgeClient, rule_name: str
     return event_bridge_client.describe_rule(Name=rule_name)
 
 
-# DEPRECATED: Use get_event_bridge_rule instead. This function contains a typo and will be removed in a future version.
-def get_event_brige_rule(event_brige_client: EventBridgeClient, rule_name: str) -> events_type_defs.DescribeRuleResponseTypeDef:
-    return get_event_bridge_rule(event_brige_client, rule_name)
-
-
 def get_next_cron_run_time(cron_expression: str, base_time: datetime) -> datetime:
     # Replace ? with * to comply with croniter
     cron_expression = cron_expression.replace("?", "*")
