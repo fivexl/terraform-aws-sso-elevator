@@ -338,6 +338,7 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
             permission_duration=revoke_event.permission_duration,
             sso_user_principal_id=user_account_assignment.user_principal_id,
             audit_entry_type="account",
+            elevator_request_id=revoke_event.elevator_request_id or "NA",
         ),
     )
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
@@ -400,6 +401,7 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
             permission_duration=group_revoke_event.permission_duration,
             sso_user_principal_id=group_assignment.user_principal_id,
             audit_entry_type="group",
+            elevator_request_id=group_revoke_event.elevator_request_id or "NA",
         ),
     )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
