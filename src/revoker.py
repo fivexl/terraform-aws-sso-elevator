@@ -434,6 +434,22 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
             )
 
 
+def _get_user_display(
+    sso_user_id: str,
+    sso_client: SSOAdminClient,
+    cfg: config.Config,
+    identitystore_client: IdentityStoreClient,
+) -> str:
+    """Resolve SSO principal ID to a display string (email). Works for both Slack and Teams."""
+    try:
+        sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+        emails = sso.get_user_emails(identitystore_client, sso_instance.identity_store_id, sso_user_id)
+        return emails[0] if emails else sso_user_id
+    except Exception as e:
+        logger.exception(f"Failed to resolve SSO user {sso_user_id}: {e}")
+        return sso_user_id
+
+
 def handle_check_on_inconsistency(  # noqa: PLR0913
     sso_client: SSOAdminClient,
     cfg: config.Config,
@@ -443,10 +459,6 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
     identitystore_client: IdentityStoreClient,
     events_client: EventBridgeClient,
 ) -> None:
-    if cfg.chat_platform == "teams":
-        logger.info("Skipping inconsistency check notifications for Teams (Slack-only feature)")
-        return
-    assert isinstance(slack_client, slack_sdk.WebClient)
     account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
     account_assignments_from_events = [
@@ -464,16 +476,10 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
         if account_assignment not in account_assignments_from_events:
             account = organizations.describe_account(org_client, account_assignment.account_id)
             logger.warning("Found an inconsistent account assignment", extra={"account_assignment": account_assignment})
-            mention = slack_helpers.create_slack_mention_by_principal_id(
-                sso_user_id=(
-                    account_assignment.principal_id
-                    if isinstance(account_assignment, sso.AccountAssignment)
-                    else account_assignment.user_principal_id
-                ),
-                sso_client=sso_client,
-                cfg=cfg,
-                identitystore_client=identitystore_client,
-                slack_client=slack_client,
+            sso_user_id = (
+                account_assignment.principal_id
+                if isinstance(account_assignment, sso.AccountAssignment)
+                else account_assignment.user_principal_id
             )
             rule = schedule.get_event_bridge_rule(
                 event_bridge_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
@@ -485,13 +491,35 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
             elif isinstance(next_run_time_or_expression, str):
                 time_notice = f" The revocation schedule is set as: {next_run_time_or_expression}."  # noqa: Q000
 
-            slack_client.chat_postMessage(
-                channel=cfg.slack_channel_id,
-                text=(
-                    f"Inconsistent account assignment detected in {account.name}-{account.id} for {mention}. "
+            if cfg.chat_platform == "teams":
+                import asyncio
+
+                assert isinstance(slack_client, TeamsNotifier)
+                user_display = _get_user_display(sso_user_id, sso_client, cfg, identitystore_client)
+                text = (
+                    f"Inconsistent account assignment detected in {account.name}-{account.id} for {user_display}. "
                     f"The unidentified assignment will be automatically revoked.{time_notice}"
-                ),
-            )
+                )
+                try:
+                    asyncio.run(slack_client.send_channel_text(text))
+                except Exception as e:
+                    logger.exception(f"Failed to send Teams inconsistency notification: {e}")
+            else:
+                assert isinstance(slack_client, slack_sdk.WebClient)
+                mention = slack_helpers.create_slack_mention_by_principal_id(
+                    sso_user_id=sso_user_id,
+                    sso_client=sso_client,
+                    cfg=cfg,
+                    identitystore_client=identitystore_client,
+                    slack_client=slack_client,
+                )
+                slack_client.chat_postMessage(
+                    channel=cfg.slack_channel_id,
+                    text=(
+                        f"Inconsistent account assignment detected in {account.name}-{account.id} for {mention}. "
+                        f"The unidentified assignment will be automatically revoked.{time_notice}"
+                    ),
+                )
 
 
 def check_on_groups_inconsistency(  # noqa: PLR0913
@@ -502,10 +530,6 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
     cfg: config.Config,
     slack_client: slack_sdk.WebClient | TeamsNotifier,
 ) -> None:
-    if cfg.chat_platform == "teams":
-        logger.info("Skipping groups inconsistency check notifications for Teams (Slack-only feature)")
-        return
-    assert isinstance(slack_client, slack_sdk.WebClient)
     sso_instance_arn = cfg.sso_instance_arn
     sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
     identity_store_id = sso_instance.identity_store_id
@@ -525,13 +549,6 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
     for group_assignment in group_assignments:
         if group_assignment not in group_assignments_from_events:
             logger.warning("Group assignment is not in the scheduled events", extra={"assignment": group_assignment})
-            mention = slack_helpers.create_slack_mention_by_principal_id(
-                sso_user_id=group_assignment.user_principal_id,
-                sso_client=sso_client,
-                cfg=cfg,
-                identitystore_client=identity_store_client,
-                slack_client=slack_client,
-            )
             rule = schedule.get_event_bridge_rule(
                 event_bridge_client=events_client, rule_name=cfg.sso_elevator_scheduled_revocation_rule_name
             )
@@ -541,15 +558,38 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
                 time_notice = f" The next scheduled revocation is set for {next_run_time_or_expression}."
             elif isinstance(next_run_time_or_expression, str):
                 time_notice = f" The revocation schedule is set as: {next_run_time_or_expression}."  # noqa: Q000
-            slack_client.chat_postMessage(
-                channel=cfg.slack_channel_id,
-                text=(
-                    f"""Inconsistent group assignment detected in {group_assignment.group_name}-{group_assignment.group_id} for user {
-                        mention
-                    }."""
+
+            if cfg.chat_platform == "teams":
+                import asyncio
+
+                assert isinstance(slack_client, TeamsNotifier)
+                user_display = _get_user_display(group_assignment.user_principal_id, sso_client, cfg, identity_store_client)
+                text = (
+                    f"Inconsistent group assignment detected in {group_assignment.group_name}-{group_assignment.group_id} "
+                    f"for user {user_display}. "
                     f"The unidentified assignment will be automatically revoked.{time_notice}"
-                ),
-            )
+                )
+                try:
+                    asyncio.run(slack_client.send_channel_text(text))
+                except Exception as e:
+                    logger.exception(f"Failed to send Teams group inconsistency notification: {e}")
+            else:
+                assert isinstance(slack_client, slack_sdk.WebClient)
+                mention = slack_helpers.create_slack_mention_by_principal_id(
+                    sso_user_id=group_assignment.user_principal_id,
+                    sso_client=sso_client,
+                    cfg=cfg,
+                    identitystore_client=identity_store_client,
+                    slack_client=slack_client,
+                )
+                slack_client.chat_postMessage(
+                    channel=cfg.slack_channel_id,
+                    text=(
+                        f"Inconsistent group assignment detected in "
+                        f"{group_assignment.group_name}-{group_assignment.group_id} for user {mention}."
+                        f"The unidentified assignment will be automatically revoked.{time_notice}"
+                    ),
+                )
 
 
 def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
