@@ -56,4 +56,4 @@ repos:
       exclude: ^(tests|src/tests)/
       args:
         # Dockerfile.layer uses FROM scratch for asset extraction only, not a runnable container
-        - --args=--severity HIGH,CRITICAL --skip-dirs .terraform,examples/complete/.terraform,tests --skip-files src/docker/Dockerfile.layer
+        - --args=--severity HIGH,CRITICAL --skip-dirs .terraform,examples/complete/.terraform,examples/teams/.terraform,tests --skip-files src/docker/Dockerfile.layer
