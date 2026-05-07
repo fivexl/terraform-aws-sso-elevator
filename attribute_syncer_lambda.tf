@@ -166,14 +166,9 @@ resource "aws_cloudwatch_event_target" "attribute_sync_schedule" {
 }
 
 # Terraform validation for attribute sync configuration
-resource "null_resource" "attribute_sync_validation" {
-  count = length(local.attribute_sync_validation_errors) > 0 ? 1 : 0
-
-  triggers = {
-    validation_errors = join(", ", local.attribute_sync_validation_errors)
-  }
-
-  provisioner "local-exec" {
-    command = "echo 'Attribute sync validation errors: ${join(", ", local.attribute_sync_validation_errors)}' && exit 1"
+check "attribute_sync_validation" {
+  assert {
+    condition     = length(local.attribute_sync_validation_errors) == 0
+    error_message = "Attribute sync validation errors: ${join(", ", local.attribute_sync_validation_errors)}"
   }
 }
