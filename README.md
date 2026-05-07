@@ -34,6 +34,7 @@
   - [Build Process](#build-process)
   - [Terraform deployment example](#terraform-deployment-example)
   - [Slack App creation](#slack-app-creation)
+  - [Microsoft Teams app creation](#microsoft-teams-app-creation)
 - [Terraform docs](#terraform-docs)
   - [Requirements](#requirements)
   - [Providers](#providers)
@@ -696,20 +697,177 @@ settings:
 9. Copy `Signing Secret` # for `slack_signing_secret` module input
 10. Copy `Bot User OAuth Token` # for `slack_bot_token` module input
 
-## Microsoft Teams bot setup (high-level)
-1. In Azure/Entra, create/register a **Bot Framework** app (App ID + client secret).
-2. Configure the bot’s **messaging endpoint** to the Terraform output `requester_api_endpoint_url` (HTTP API / Lambda endpoint).
-3. In Terraform, set:
-   - `chat_platform = "teams"`
-   - `teams_microsoft_app_id`
-   - `teams_microsoft_app_password`
-   - `teams_azure_tenant_id` (recommended for single-tenant org installs)
-   - `teams_approval_conversation_id` (the target Teams channel or group chat `conversation.id` where approval cards should be posted)
-4. Install the Teams app/bot into the target team/channel (and ensure the bot is allowed by org policy).
-5. Demo:
-   - Type `/access` (account) or `/group-access` (group) in Teams
-   - Open the form from the launcher card, submit
-   - Approvers click buttons on the posted approval card
+## Microsoft Teams app creation
+
+Same overall idea as Slack: deploy the module first so you have `requester_api_endpoint_url`, then point the Teams bot’s **Messaging endpoint** at that URL. You also need an approval **channel** (and its Bot Framework `conversation.id`) before Terraform apply, because `teams_approval_conversation_id` is required when `chat_platform = "teams"`.
+
+### 1. Tenant ID (Entra)
+
+1. Open the [Microsoft Entra admin center](https://entra.microsoft.com/#home).
+2. Go to **Overview** and copy **Tenant ID** (directory ID). Use it for Terraform `teams_azure_tenant_id`.
+
+### 2. Create the app and bot in Teams Developer Portal
+
+1. Open [Teams Developer Portal](https://dev.teams.microsoft.com/) and sign in.
+2. **Apps** → **New app**.
+3. Name the app **AWS SSO Access Elevator** (or your preferred name).
+4. Set **Manifest version** to **Latest Stable (v1.25)** (or the version you intend to ship).
+5. Open **App features** → **Bot** → **Create a new bot** (or equivalent) → create a bot named **AWS SSO Access Elevator**.
+6. Under the bot’s **Configure** (or messaging settings), set **Endpoint address** / **Messaging endpoint** to the Terraform output **`requester_api_endpoint_url`** (same HTTP API URL as Slack’s interactivity `request_url`). Save.
+   - Deploy the module first if you do not yet have that URL; after `terraform apply`, copy `requester_api_endpoint_url` into the bot configuration and save again if it changed.
+7. Under **Client secrets**, create a secret and copy its **value** (shown only once). Use it for Terraform `teams_microsoft_app_password`. Store it in a secret manager; do not commit it.
+8. Open the app **Dashboard** and copy **App ID**. This value maps to the Teams app package identifier used as `id` in `manifest.json`.
+
+### 3. Manifest (`id` vs `botId`)
+
+1. In **App features** → **Bot**, copy the **Bot ID** (Microsoft Application (client) ID for the bot registration — the portal may label it similarly to “Enter a bot ID”).
+2. Open **App package editor** → edit the manifest JSON.
+3. Paste the template below, replace the two `REPLACE_WITH_…` GUIDs, then **Save** / **Update** the manifest in Developer Portal:
+   - **`id`** → **App ID** from the app **Dashboard** (Teams app package ID).
+   - **`bots[0].botId`** → **Bot ID** from the Bot feature (same value as Terraform `teams_microsoft_app_id`).
+
+Keep `outline.png` and `color.png` in the app package (upload icons in Developer Portal if the editor expects files). If you do **not** use Group Assignments Mode, remove every **`group-access`** entry from each `commandLists[].commands` array (three copies — personal, team, groupChat).
+
+```json
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.25/MicrosoftTeams.schema.json",
+  "version": "1.0.0",
+  "manifestVersion": "1.25",
+  "supportsChannelFeatures": "tier1",
+  "id": "REPLACE_WITH_TEAMS_APP_ID_FROM_DEVELOPER_PORTAL_DASHBOARD",
+  "name": {
+    "short": "AWS SSO Access Elevator",
+    "full": "AWS SSO Access Elevator"
+  },
+  "developer": {
+    "name": "fivexl.io",
+    "websiteUrl": "https://fivexl.io/",
+    "privacyUrl": "https://github.com/fivexl/terraform-aws-sso-elevator",
+    "termsOfUseUrl": "https://github.com/fivexl/terraform-aws-sso-elevator"
+  },
+  "description": {
+    "short": "Request temporary AWS IAM Identity Center (SSO) elevated access from Microsoft Teams",
+    "full": "Request temporary AWS IAM Identity Center (SSO) elevated access from Microsoft Teams"
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#FFFFFF",
+  "bots": [
+    {
+      "botId": "REPLACE_WITH_BOT_APPLICATION_CLIENT_ID_SAME_AS_TERRAFORM_teams_microsoft_app_id",
+      "scopes": ["team", "personal", "groupChat"],
+      "commandLists": [
+        {
+          "commands": [
+            {
+              "title": "access",
+              "description": "Request access to Permission Set in AWS Account"
+            },
+            {
+              "title": "group-access",
+              "description": "Request access to SSO Group"
+            }
+          ],
+          "scopes": ["personal"]
+        },
+        {
+          "commands": [
+            {
+              "title": "access",
+              "description": "Request access to Permission Set in AWS Account"
+            },
+            {
+              "title": "group-access",
+              "description": "Request access to SSO Group"
+            }
+          ],
+          "scopes": ["team"]
+        },
+        {
+          "commands": [
+            {
+              "title": "access",
+              "description": "Request access to Permission Set in AWS Account"
+            },
+            {
+              "title": "group-access",
+              "description": "Request access to SSO Group"
+            }
+          ],
+          "scopes": ["groupChat"]
+        }
+      ],
+      "isNotificationOnly": false,
+      "supportsCalling": false,
+      "supportsVideo": false,
+      "supportsFiles": false
+    }
+  ],
+  "validDomains": []
+}
+```
+
+A filled-in example also lives in [`appteams.md`](appteams.md) in this repository (for local reference only — do not commit secrets).
+
+### 4. Microsoft Graph permission (Entra app registration)
+
+The bot’s Entra app needs directory read access for user resolution (e.g. matching approvers and requesters by email).
+
+1. Open [Microsoft Entra admin center](https://entra.microsoft.com/) → **Identity** → **Applications** → **App registrations** → **All applications**.
+2. Open the application created for your Teams bot.
+3. **API permissions** → **Add a permission** → **Microsoft Graph** → **Application permissions** → add **`User.Read.All`**.
+4. Click **Grant admin consent for …** so the permission shows **Granted** for your tenant. Without admin consent, Graph calls may fail at runtime.
+
+### 5. Publish and allow the app in your tenant
+
+1. Back in **Teams Developer Portal**, open your app → **Publish** → **Publish to your org** and complete the flow.
+2. As a Teams administrator, open [Manage apps](https://admin.teams.microsoft.com/policies/manage-apps), find the app, and use **Publish** / org-wide availability as required by your policy.
+3. In Microsoft Teams, install the app for the team where approvals will happen. Add it to the **approval channel** you intend to use (for channel posts and threaded replies, a standard team channel works; use the channel you chose when obtaining `teams_approval_conversation_id` below).
+
+### 6. Terraform variables for Teams
+
+When deploying with Teams:
+
+```hcl
+chat_platform                  = "teams"
+teams_microsoft_app_id         = "<Same value as manifest bots[].botId — bot Application (client) ID>"
+teams_microsoft_app_password   = "<client secret value>"
+teams_azure_tenant_id          = "<Tenant ID from Entra Overview>"
+teams_approval_conversation_id = "<Bot Framework conversation.id for the approval channel — see below>"
+```
+
+`teams_microsoft_app_id` is the **bot’s** Entra application ID (used as Bot Framework `MicrosoftAppId`), **not** the Teams app package **App ID** from Developer Portal Dashboard (that value belongs only in `manifest.json` → `id`). Use `slack_channel_id = ""` for Teams-only deployments. Keep using `requester_api_endpoint_url` as the bot messaging endpoint.
+
+### Obtaining `teams_approval_conversation_id`
+
+This must be the **Bot Framework `conversation.id`** for the **channel** (or group chat) where approval Adaptive Cards are posted — **not** the Entra tenant ID and not a placeholder string.
+
+**From a channel link (typical):**
+
+1. In Teams, open the **approval** channel.
+2. Use **Get link to channel** / copy the channel URL.
+
+Example shape (hosts vary; path is what matters):
+
+`https://teams.microsoft.com/l/channel/19%3A280e28c1c2e342dc8fff6d3a495e8d9a%40thread.tacv2/ChannelName?groupId=…&tenantId=…`
+
+3. Take the first path segment **after** `/channel/`: it is **URL-encoded** `conversation.id`. Decode it:
+   - `%3A` → `:`
+   - `%40` → `@`
+
+Example: `19%3A280e28c1c2e342dc8fff6d3a495e8d9a%40thread.tacv2` → **`19:280e28c1c2e342dc8fff6d3a495e8d9a@thread.tacv2`**
+
+Use that decoded string as `teams_approval_conversation_id`. It must match the channel where the bot is installed and where approvers will see requests.
+
+**Alternatives:** Inspect an incoming Bot Framework activity after `@mention`ing the bot in that channel (e.g. log `conversation.id` in your requester Lambda during testing), or use tooling such as Bot Framework Emulator against your endpoint — the README conceptually matches the `conversation.id` described in Terraform variable docs.
+
+### 7. Smoke test
+
+- In Teams, run **`/access`** (account access) or **`/group-access`** (if enabled).
+- Open the form from the launcher Adaptive Card, submit a request.
+- Confirm an approval card appears in the configured approval channel thread and that **Approve** / **Discard** work.
 
 # Terraform docs 
 
