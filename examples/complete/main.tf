@@ -29,6 +29,7 @@ module "aws_sso_elevator" {
   source                           = "../.."
   aws_sns_topic_subscription_email = "email@gmail.com"
 
+  chat_platform                                  = "slack"
   slack_signing_secret                           = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
   slack_bot_token                                = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
   slack_channel_id                               = "***********"
@@ -134,4 +135,9 @@ module "aws_sso_elevator" {
 output "requester_api_endpoint_url" {
   description = "The URL to invoke the Lambda function"
   value       = module.aws_sso_elevator.requester_api_endpoint_url
+}
+
+output "elevator_requests_table_name" {
+  description = "DynamoDB table holding access request state and ephemeral UI keys."
+  value       = module.aws_sso_elevator.elevator_requests_table_name
 }

@@ -109,7 +109,9 @@ sequenceDiagram
     AWS Lambda - Access Revoker->>Chat platform: sends notification about revocation
 ```
 
-The module deploys two AWS Lambda functions: access-requester and access-revoker. The access-requester handles requests from Slack, creating user-level permission set assignments and an Amazon EventBridge trigger that activates the access-revoker Lambda when it is time to revoke access. The access-revoker revokes user access when triggered by EventBridge and also runs daily to revoke any user-level permission set assignments without an associated EventBridge trigger. Group-level permission sets are not affected.
+The module deploys two AWS Lambda functions: access-requester and access-revoker. The access-requester handles requests from Slack or Teams, creating user-level permission set assignments and an Amazon EventBridge trigger that activates the access-revoker Lambda when it is time to revoke access. The access-revoker revokes user access when triggered by EventBridge and also runs daily to revoke any user-level permission set assignments without an associated EventBridge trigger. Group-level permission sets are not affected.
+
+A DynamoDB table (`elevator_requests`) is used to store access request state and ephemeral UI keys (e.g. Teams Adaptive Card conversation references), replacing the previous Lambda URL-based approach. This allows the requester Lambda to look up and update approval cards across restarts without relying on in-memory state.
 
 For auditing purposes, information about all access grants and revocations is stored in S3. See [documentation here](athena_query/) to find out how to configure AWS Athena to query audit logs.
 
@@ -499,58 +501,40 @@ Those regions are not enabled by default. If you need to use a region that is no
 
 ## Terraform deployment example
 
+See also the ready-to-use examples in the repository:
+- [examples/complete](examples/complete/) — Slack deployment
+- [examples/teams](examples/teams/) — Microsoft Teams deployment
+
+### Slack deployment
+
+Store Slack credentials in SSM Parameter Store before deploying. You can use dummy values initially and update after the Slack app is created.
+
 ```terraform
 
 data "aws_ssoadmin_instances" "this" {}
 
-# You will have to create /sso-elevator/slack-signing-secret AWS SSM Parameter
-# and store Slack app signing secret there, if you have not created app yet then
-# you can leave a dummy value there and update it after Slack app is ready
 data "aws_ssm_parameter" "sso_elevator_slack_signing_secret" {
   name = "/sso-elevator/slack-signing-secret"
 }
 
-# You will have to create /sso-elevator/slack-bot-token AWS SSM Parameter
-# and store Slack bot token there, if you have not created app yet then
-# you can leave a dummy value there and update it after Slack app is ready
 data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
   name = "/sso-elevator/slack-bot-token"
 }
 
 module "aws_sso_elevator" {
-  source                           = "github.com/fivexl/terraform-aws-sso-elevator.git"
   source  = "fivexl/sso-elevator/aws"
-  version = "2.0.2"
-  slack_signing_secret  = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
-  slack_bot_token       = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
-  slack_channel_id      = local.slack_channel_id
+  version = "4.2.0"
 
-  s3_logging = {
-    target_bucket = module.naming_conventions.s3_access_logs_bucket_name
-    target_prefix = "sso-elevator-logs/"
-  }
+  chat_platform        = "slack"
+  slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
+  slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
+  slack_channel_id     = "C0123456789"
 
-  s3_bucket_partition_prefix = "sso-elevator-logs"
+  sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
-  s3_object_lock = true
-  s3_object_lock_configuration = {
-    rule = {
-      default_retention = {
-        mode  = "GOVERNANCE"
-        years = 3
-      }
-    }
-  }
-  # The default object lock configuration is as follows:
-  # {
-  #  rule = {
-  #   default_retention = {
-  #      mode  = "GOVERNANCE"
-  #      years = 2
-  #    }
-  #  }
-  #}
-  # You can specify a different configuration here:
+  s3_bucket_partition_prefix     = "logs"
+  s3_bucket_name_for_audit_entry = "my-sso-elevator-audit"
+  s3_object_lock                 = true
   s3_object_lock_configuration = {
     rule = {
       default_retention = {
@@ -559,24 +543,13 @@ module "aws_sso_elevator" {
       }
     }
   }
-
-  # s3_name_of_the_existing_bucket = "sso_elevator_audit_logs_bucket-<some_sha>"
-  # If you want to use your own bucket for storing SSO Elevator audit logs (logs about access requests), use the `s3_name_of_the_existing_bucket` variable.
-  # If `s3_name_of_the_existing_bucket` is left empty, the module creates a new bucket name based on `s3_bucket_name_for_audit_entry`.
-  # In that case, remember to specify `s3_logging` with at least the `target_bucket` key to enable access logging, otherwise, module deployment will fail.
   s3_logging = {
-    target_bucket = "some_access_logging_bucket"
-    target_prefix = "some_prefix_for_access_logs"
+    target_bucket = "my-access-logs-bucket"
+    target_prefix = "sso-elevator/"
   }
 
   config = [
-    # This could be a config for dev/stage account where developers can self-serve
-    # permissions
-    # Allows Bob and Alice to approve requests for all
-    # PermissionSets in accounts dev_account_id and stage_account_id as
-    # well as approve its own requests
-    # You have to specify at AllowSelfApproval: true or specify two approvers
-    # so you do not lock out approver
+    # Dev/stage: Bob and Alice can approve all permission sets; self-approval allowed
     {
       "ResourceType" : "Account",
       "Resource" : ["dev_account_id", "stage_account_id"],
@@ -584,9 +557,7 @@ module "aws_sso_elevator" {
       "Approvers" : ["bob@corp.com", "alice@corp.com"],
       "AllowSelfApproval" : true,
     },
-    # This could be an option for a financial person
-    # allows self approval for Billing PermissionSet
-    # for account_id for user finances@corp.com
+    # Finance: self-approval for Billing in a specific account
     {
       "ResourceType" : "Account",
       "Resource" : "account_id",
@@ -594,12 +565,7 @@ module "aws_sso_elevator" {
       "Approvers" : "finances@corp.com",
       "AllowSelfApproval" : true,
     },
-    # Your typical CTO - can approve all accounts and all permissions
-    # as well as his/hers own requests to avoid lock out
-    # Careful withi Resource * since it will cause revocation of all
-    # non-module-created user-level permission set assignments in all
-    # accounts, add this one later when you are done with single account
-    # testing
+    # CTO: can approve everything including own requests
     {
       "ResourceType" : "Account",
       "Resource" : "*",
@@ -607,15 +573,14 @@ module "aws_sso_elevator" {
       "Approvers" : "cto@corp.com",
       "AllowSelfApproval" : true,
     },
-    # Read only config for production accounts so developers
-    # can check prod when needed
+    # Prod read-only: no approval required
     {
       "ResourceType" : "Account",
       "Resource" : ["prod_account_id", "prod_account_id2"],
       "PermissionSet" : "ReadOnly",
       "AllowSelfApproval" : true,
     },
-    # Prod access
+    # Prod admin: requires two approvers, no self-approval
     {
       "ResourceType" : "Account",
       "Resource" : ["prod_account_id", "prod_account_id2"],
@@ -624,45 +589,123 @@ module "aws_sso_elevator" {
       "ApprovalIsNotRequired" : false,
       "AllowSelfApproval" : false,
     },
-    # example of list being used for permissions sets
-    {
-      "ResourceType" : "Account",
-      "Resource" : "account_id",
-      "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
-      "Approvers" : ["ciso@corp.com"], 
-      "AllowSelfApproval" : true,
-    },
-
   ]
-group_config = [
-    {              
-      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "ApprovalIsNotRequired": true
+
+  group_config = [
+    {
+      "Resource" : ["99999999-8888-7777-6666-555555555555"], # ManagementAccountAdmins
+      "Approvers" : ["admin@corp.com"],
+      "ApprovalIsNotRequired" : true,
     },
-    {              
-      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
-      "Approvers" : [
-        "email@gmail.com"
-      ]
+    {
+      "Resource" : ["11111111-2222-3333-4444-555555555555"], # prod read only
+      "Approvers" : ["manager@corp.com"],
       "AllowSelfApproval" : true,
     },
     {
-      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
-      "Approvers" : [
-        "email@gmail.com"
-      ]
+      "Resource" : ["44445555-3333-2222-1111-555557777777"], # ProdAdminAccess
+      "Approvers" : ["ciso@corp.com"],
     },
-]
+  ]
 }
 
 output "requester_api_endpoint_url" {
-  value = module.aws_sso_elevator.requester_api_endpoint_url
+  description = "Set this URL as the Request URL in the Slack app manifest"
+  value       = module.aws_sso_elevator.requester_api_endpoint_url
+}
+
+output "elevator_requests_table_name" {
+  description = "DynamoDB table holding access request state"
+  value       = module.aws_sso_elevator.elevator_requests_table_name
 }
 ```
 
+### Microsoft Teams deployment
+
+Store Teams credentials in SSM Parameter Store (or Secrets Manager) before deploying. You can use dummy values initially and update after the Teams app is created.
+
+```terraform
+
+data "aws_ssoadmin_instances" "this" {}
+
+data "aws_ssm_parameter" "teams_app_id" {
+  name = "/sso-elevator/teams-app-id"
+}
+
+data "aws_ssm_parameter" "teams_app_password" {
+  name            = "/sso-elevator/teams-app-password"
+  with_decryption = true
+}
+
+module "aws_sso_elevator" {
+  source  = "fivexl/sso-elevator/aws"
+  version = "4.2.0"
+
+  chat_platform = "teams"
+
+  # Teams bot credentials — see "Microsoft Teams app creation" section below
+  teams_microsoft_app_id         = data.aws_ssm_parameter.teams_app_id.value
+  teams_microsoft_app_password   = data.aws_ssm_parameter.teams_app_password.value
+  teams_azure_tenant_id          = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" # Entra tenant ID
+  teams_approval_conversation_id = "19:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@thread.tacv2" # approval channel conversation ID
+
+  sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
+
+  s3_bucket_partition_prefix     = "logs"
+  s3_bucket_name_for_audit_entry = "my-sso-elevator-audit"
+  s3_object_lock                 = true
+  s3_object_lock_configuration = {
+    rule = {
+      default_retention = {
+        mode  = "GOVERNANCE"
+        years = 1
+      }
+    }
+  }
+  s3_logging = {
+    target_bucket = "my-access-logs-bucket"
+    target_prefix = "sso-elevator/"
+  }
+
+  config = [
+    # Dev/stage: self-approval allowed
+    {
+      "ResourceType" : "Account",
+      "Resource" : ["dev_account_id", "stage_account_id"],
+      "PermissionSet" : "*",
+      "Approvers" : ["bob@corp.com", "alice@corp.com"],
+      "AllowSelfApproval" : true,
+    },
+    # Prod admin: requires two approvers, no self-approval
+    {
+      "ResourceType" : "Account",
+      "Resource" : ["prod_account_id"],
+      "PermissionSet" : "AdministratorAccess",
+      "Approvers" : ["manager@corp.com", "ciso@corp.com"],
+      "ApprovalIsNotRequired" : false,
+      "AllowSelfApproval" : false,
+    },
+  ]
+
+  group_config = [
+    {
+      "Resource" : ["99999999-8888-7777-6666-555555555555"], # ManagementAccountAdmins
+      "Approvers" : ["admin@corp.com"],
+      "ApprovalIsNotRequired" : true,
+    },
+  ]
+}
+
+output "requester_api_endpoint_url" {
+  description = "Set this URL as the bot messaging endpoint in Teams Developer Portal"
+  value       = module.aws_sso_elevator.requester_api_endpoint_url
+}
+
+output "elevator_requests_table_name" {
+  description = "DynamoDB table holding access request state"
+  value       = module.aws_sso_elevator.elevator_requests_table_name
+}
+```
 ## Slack App creation
 1. Go to https://api.slack.com/
 2. Click `create an app`
