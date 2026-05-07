@@ -763,7 +763,7 @@ Keep `outline.png` and `color.png` in the app package (upload icons in Developer
     "termsOfUseUrl": "https://github.com/fivexl/terraform-aws-sso-elevator"
   },
   "description": {
-    "short": "Request temporary AWS IAM Identity Center (SSO) elevated access from Microsoft Teams",
+    "short": "Request temporary AWS IAM Identity Center (SSO) elevated access",
     "full": "Request temporary AWS IAM Identity Center (SSO) elevated access from Microsoft Teams"
   },
   "icons": {
