@@ -16,8 +16,19 @@
 - [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack or Microsoft Teams](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack-or-microsoft-teams)
 - [Introduction](#introduction)
 - [Functionality](#functionality)
+    - [Demo scenarios (Teams)](#demo-scenarios-teams)
   - [Group Assignments Mode](#group-assignments-mode)
   - [Attribute-Based Group Sync](#attribute-based-group-sync)
+    - [How It Works](#how-it-works)
+    - [Configuration](#configuration)
+    - [Configuration Options](#configuration-options)
+    - [Attribute Mapping Rules](#attribute-mapping-rules)
+    - [Manual Assignment Policy](#manual-assignment-policy)
+    - [Audit Logging](#audit-logging)
+    - [Slack Notifications](#slack-notifications)
+    - [Migration Guide for Existing Deployments](#migration-guide-for-existing-deployments)
+    - [Rollback Strategy](#rollback-strategy)
+    - [Important Considerations](#important-considerations)
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
 - [Module configuration, and features](#module-configuration-and-features)
   - [Configuration structure](#configuration-structure)
@@ -35,6 +46,14 @@
   - [Terraform deployment example](#terraform-deployment-example)
   - [Slack App creation](#slack-app-creation)
   - [Microsoft Teams app creation](#microsoft-teams-app-creation)
+    - [1. Tenant ID (Entra)](#1-tenant-id-entra)
+    - [2. Create the app and bot in Teams Developer Portal](#2-create-the-app-and-bot-in-teams-developer-portal)
+    - [3. Manifest (`id` vs `botId`)](#3-manifest-id-vs-botid)
+    - [4. Microsoft Graph permission (Entra app registration)](#4-microsoft-graph-permission-entra-app-registration)
+    - [5. Publish and allow the app in your tenant](#5-publish-and-allow-the-app-in-your-tenant)
+    - [6. Terraform variables for Teams](#6-terraform-variables-for-teams)
+    - [Obtaining `teams_approval_conversation_id`](#obtaining-teams_approval_conversation_id)
+    - [7. Smoke test](#7-smoke-test)
 - [Terraform docs](#terraform-docs)
   - [Requirements](#requirements)
   - [Providers](#providers)
@@ -699,8 +718,6 @@ settings:
 
 ## Microsoft Teams app creation
 
-Same overall idea as Slack: deploy the module first so you have `requester_api_endpoint_url`, then point the Teams bot’s **Messaging endpoint** at that URL. You also need an approval **channel** (and its Bot Framework `conversation.id`) before Terraform apply, because `teams_approval_conversation_id` is required when `chat_platform = "teams"`.
-
 ### 1. Tenant ID (Entra)
 
 1. Open the [Microsoft Entra admin center](https://entra.microsoft.com/#home).
@@ -713,7 +730,7 @@ Same overall idea as Slack: deploy the module first so you have `requester_api_e
 3. Name the app **AWS SSO Access Elevator** (or your preferred name).
 4. Set **Manifest version** to **Latest Stable (v1.25)** (or the version you intend to ship).
 5. Open **App features** → **Bot** → **Create a new bot** (or equivalent) → create a bot named **AWS SSO Access Elevator**.
-6. Under the bot’s **Configure** (or messaging settings), set **Endpoint address** / **Messaging endpoint** to the Terraform output **`requester_api_endpoint_url`** (same HTTP API URL as Slack’s interactivity `request_url`). Save.
+6. Under the bot’s **Configure** (or messaging settings), set **Endpoint address** / **Messaging endpoint** to the Terraform output **`requester_api_endpoint_url`** Save.
    - Deploy the module first if you do not yet have that URL; after `terraform apply`, copy `requester_api_endpoint_url` into the bot configuration and save again if it changed.
 7. Under **Client secrets**, create a secret and copy its **value** (shown only once). Use it for Terraform `teams_microsoft_app_password`. Store it in a secret manager; do not commit it.
 8. Open the app **Dashboard** and copy **App ID**. This value maps to the Teams app package identifier used as `id` in `manifest.json`.
@@ -809,8 +826,6 @@ Keep `outline.png` and `color.png` in the app package (upload icons in Developer
 }
 ```
 
-A filled-in example also lives in [`appteams.md`](appteams.md) in this repository (for local reference only — do not commit secrets).
-
 ### 4. Microsoft Graph permission (Entra app registration)
 
 The bot’s Entra app needs directory read access for user resolution (e.g. matching approvers and requesters by email).
@@ -860,8 +875,6 @@ Example shape (hosts vary; path is what matters):
 Example: `19%3A280e28c1c2e342dc8fff6d3a495e8d9a%40thread.tacv2` → **`19:280e28c1c2e342dc8fff6d3a495e8d9a@thread.tacv2`**
 
 Use that decoded string as `teams_approval_conversation_id`. It must match the channel where the bot is installed and where approvers will see requests.
-
-**Alternatives:** Inspect an incoming Bot Framework activity after `@mention`ing the bot in that channel (e.g. log `conversation.id` in your requester Lambda during testing), or use tooling such as Bot Framework Emulator against your endpoint — the README conceptually matches the `conversation.id` described in Terraform variable docs.
 
 ### 7. Smoke test
 
