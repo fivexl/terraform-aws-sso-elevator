@@ -520,7 +520,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             )
 
         if is_group:
-            gret = await group.handle_teams_group_task_submit(ctx, data, user, _notifier)
+            gret = await group.handle_teams_group_task_submit(ctx, data, user)
             t = (gret.get("task") or {}) if isinstance(gret, dict) else {}
             val = t.get("value", "Your request has been submitted.")
             if isinstance(val, str):

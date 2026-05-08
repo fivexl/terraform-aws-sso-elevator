@@ -1,7 +1,12 @@
 import asyncio
 
 from requester.common.context import get_requester_context
-from requester.teams.teams_approval_deferred import ACCOUNT_APPROVAL_INTERNAL_ACTION, run_post_account_approval_worker
+from requester.teams.teams_approval_deferred import (
+    ACCOUNT_APPROVAL_INTERNAL_ACTION,
+    GROUP_APPROVAL_INTERNAL_ACTION,
+    run_post_account_approval_worker,
+    run_post_group_approval_worker,
+)
 from requester.teams.teams_deps import TeamsDependencies
 
 # Mutable flag avoids ``global`` for one-time ``configure_teams_dependencies`` (PLW0603).
@@ -12,6 +17,8 @@ def lambda_handler(event: str, context: object) -> object:  # noqa: ANN001
     """Handle API Gateway (Slack or Teams) events; load only the selected chat stack."""
     if isinstance(event, dict) and event.get("internal_action") == ACCOUNT_APPROVAL_INTERNAL_ACTION:
         return asyncio.run(run_post_account_approval_worker(event))
+    if isinstance(event, dict) and event.get("internal_action") == GROUP_APPROVAL_INTERNAL_ACTION:
+        return asyncio.run(run_post_group_approval_worker(event))
     ctx = get_requester_context()
     if ctx.cfg.chat_platform == "teams":
         from requester.teams import teams_runtime

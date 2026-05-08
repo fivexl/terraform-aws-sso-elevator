@@ -1,8 +1,6 @@
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
-from typing import TYPE_CHECKING
-
 import boto3
 from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_sso_admin import SSOAdminClient
@@ -24,9 +22,6 @@ from errors import handle_errors
 from requester.slack import slack_helpers
 from requester.teams import teams_activity_helpers, teams_cards
 from requester.teams.teams_threading import ChannelThreadContext
-
-if TYPE_CHECKING:
-    from requester.teams.teams_notifier import TeamsNotifier
 
 logger = config.get_logger(service="main")
 cfg = config.get_config()
@@ -395,7 +390,6 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
     turn_context,  # noqa: ANN001
     data: dict,
     user: TeamsUser,
-    notifier_factory: Callable[[], "TeamsNotifier"] | None = None,
 ) -> dict:
     """Parse group task/submit, run access control, post approval card, auto-execute if grant."""
     _thr = ChannelThreadContext.from_activity(turn_context.activity)
@@ -403,25 +397,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
     su_from_act = str(getattr(turn_context.activity, "service_url", None) or "").strip() or None
     su_effective = (t_su or "").strip() or su_from_act
     store_conv = (t_conv or "").strip() or cfg.teams_approval_conversation_id
-
-    if notifier_factory is None:
-        from requester.teams.teams_notifier import TeamsNotifier
-        from requester.teams.teams_runtime import get_teams_app
-
-        def _default_teams_notifier() -> "TeamsNotifier":
-            if (t_conv or "").strip():
-                return TeamsNotifier(
-                    config.get_config(),
-                    get_teams_app,
-                    conversation_id_override=(t_conv or "").strip(),
-                    service_url_override=(su_effective or None),
-                    reply_parent_activity_id_override=(t_par or "").strip() or None,
-                )
-            return TeamsNotifier(config.get_config(), get_teams_app)
-
-        nf: Callable[[], "TeamsNotifier"] = _default_teams_notifier
-    else:
-        nf = notifier_factory
+    launcher_activity_id = teams_activity_helpers.launcher_activity_id_for_task_submit(turn_context)
 
     permission_duration = teams_cards.parse_duration_choice(str(data.get("duration", "1:00:00")))
     reason = str(data.get("reason", ""))
@@ -449,93 +425,11 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
         )
     )
 
-    try:
-        sso_group = sso.describe_group(_get_identity_store_id(), group_id, _get_identity_store_client())
-    except Exception:
-        sso_group = entities.aws.SSOGroup(id=group_id, identity_store_id="", name=group_id)
-
-    show_buttons = bool(decision.approvers)
-    color_style, header_subtitle = teams_cards.teams_access_request_card_style_and_subtitle(
-        decision,
-        cfg.waiting_result_emoji,
-        cfg.bad_result_emoji,
-        is_group=True,
-    )
-    duration_str = str(data.get("duration", "1:00:00"))
-    request_data = {
-        "group_id": group_id,
-        "duration": duration_str,
-        "reason": reason,
-        "requester_id": user.id,
-    }
-    card = teams_cards.build_approval_card(
-        requester_name=user.display_name,
-        account=None,
-        group=sso_group,
-        role_name=None,
-        reason=reason,
-        permission_duration=duration_str,
-        show_buttons=show_buttons,
-        color_style=color_style,
-        request_data=request_data,
-        elevator_request_id=elevator_id,
-        header_subtitle=header_subtitle,
-    )
-
-    auto_status = teams_cards.teams_access_auto_grant_thread_status_text(decision, is_group=True)
-    posted_card_id = ""
-
-    try:
-        notifier = nf()
-        activity_id = await notifier.send_message(text="New access request", card=card)
-        posted_card_id = (activity_id or "").strip()
-        if activity_id:
-            request_store.update_teams_presentation(elevator_id, store_conv, activity_id, service_url=su_effective)
-        if activity_id and show_buttons and decision.reason == access_control.DecisionReason.RequiresApproval and decision.approvers:
-            from requester.teams import teams_approver_ping
-            from requester.teams.teams_runtime import get_teams_app
-
-            try:
-                await teams_approver_ping.send_approvers_waiting_ping_in_thread(
-                    cfg,
-                    get_teams_app,
-                    teams_conversation_id=store_conv,
-                    service_url=su_effective,
-                    card_activity_id=activity_id,
-                    approver_emails=decision.approvers,
-                )
-            except Exception as e:
-                logger.exception(f"Failed to @mention approvers in Teams (group): {e}")
-
-        if show_buttons and activity_id:
-            schedule.schedule_discard_buttons_event(
-                schedule_client=_get_schedule_client(),  # type: ignore[union-attr]
-                time_stamp="",
-                channel_id="",
-                elevator_request_id=elevator_id,
-            )
-            schedule.schedule_approver_notification_event(
-                schedule_client=_get_schedule_client(),  # type: ignore[union-attr]
-                message_ts="",
-                channel_id="",
-                time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
-                elevator_request_id=elevator_id,
-                teams_conversation_id=store_conv,
-                teams_activity_id=activity_id,
-            )
-        elif show_buttons and not activity_id:
-            logger.warning(
-                "Teams group request: no activity id from send; cannot persist presentation or schedule discard/renotification",
-                extra={"elevator_request_id": elevator_id},
-            )
-    except Exception as e:
-        logger.exception(f"Failed to post approval card to Teams channel: {e}")
-
     if decision.grant:
         try:
             access_control.execute_decision_on_group_request(
                 decision=decision,
-                group=sso_group,
+                group=sso.describe_group(_get_identity_store_id(), group_id, _get_identity_store_client()),
                 permission_duration=permission_duration,
                 approver=slack_user,
                 requester=slack_user,
@@ -544,24 +438,51 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
                 elevator_request_id=elevator_id,
             )
             request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
-            if posted_card_id:
-                from requester.teams import teams_approver_ping
-                from requester.teams.teams_runtime import get_teams_app
-
-                try:
-                    await teams_approver_ping.post_auto_grant_thread_follow_ups(
-                        cfg,
-                        get_teams_app,
-                        teams_conversation_id=store_conv,
-                        service_url=su_effective,
-                        card_activity_id=posted_card_id,
-                        status_text=auto_status,
-                        requester=user,
-                    )
-                except Exception as e:
-                    logger.exception(f"Failed to post auto-grant status in Teams thread (group): {e}")
         except Exception as e:
             logger.exception(f"Failed to execute auto-approved group decision: {e}")
+
+    # Posting to the approval channel is deferred (async self-invoke) so task/submit returns under Teams'
+    # client timeout (~15s). Local/tests without AWS_LAMBDA_FUNCTION_NAME run the post in-process.
+    if not (t_conv or "").strip() and not (store_conv or "").strip():
+        logger.warning("Group task submit: no conversation id on activity; skip posting approval card to Teams")
+    else:
+        from requester.teams.teams_approval_deferred import AccountApprovalTeamsThread
+        from requester.teams.teams_approval_deferred import invoke_group_approval_post_async, post_group_approval_to_teams_channel
+        from requester.teams.teams_deps import TeamsDependencies
+        from requester.common.context import get_requester_context
+        import os
+
+        # Best-effort: use deps from runtime context for local in-process posts.
+        tthr = AccountApprovalTeamsThread(
+            conversation_id=(t_conv or "").strip() or (store_conv or "").strip(),
+            service_url=(su_effective or "").strip() if su_effective else "",
+            parent_activity_id=(t_par or "").strip(),
+            launcher_activity_id=(launcher_activity_id or "").strip(),
+        )
+        if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+            try:
+                invoke_group_approval_post_async(
+                    elevator_id,
+                    user.display_name,
+                    user.email,
+                    tthr,
+                )
+            except Exception as e:
+                logger.exception(f"Failed to schedule Teams group approval post: {e}")
+        else:
+            try:
+                ctx = get_requester_context()
+                deps = TeamsDependencies(
+                    cfg=ctx.cfg,
+                    org_client=ctx.org_client,
+                    s3_client=ctx.s3_client,
+                    sso_client=ctx.sso_client,
+                    identity_store_client=ctx.identity_store_client,
+                    schedule_client=ctx.schedule_client,
+                )
+                await post_group_approval_to_teams_channel(deps, elevator_id, user.display_name, user.email, tthr)
+            except Exception as e:
+                logger.exception(f"Failed to post approval card to Teams channel (group deferred inline): {e}")
 
     await teams_activity_helpers.update_teams_launcher_message_after_task_submit(turn_context, "group")
 
