@@ -141,11 +141,6 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
                 elevator_request_id=elevator_id,
             )
 
-    auto_grant_without_parent_card_update = decision.reason in (
-        access_control.DecisionReason.ApprovalNotRequired,
-        access_control.DecisionReason.SelfApproval,
-    )
-
     match decision.reason:
         case access_control.DecisionReason.ApprovalNotRequired:
             text = "Approval for this Group is not required. Your request was approved automatically."
@@ -201,7 +196,11 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
             """,
         )
 
-    if not auto_grant_without_parent_card_update:
+    is_auto_grant = decision.reason in (
+        access_control.DecisionReason.ApprovalNotRequired,
+        access_control.DecisionReason.SelfApproval,
+    )
+    if not is_auto_grant:
         blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
             blocks=slack_response["message"]["blocks"],
             color_coding_emoji=color_coding_emoji,
@@ -213,16 +212,48 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
             text=text,
         )
 
-    access_control.execute_decision_on_group_request(
-        group=group,
-        permission_duration=request.permission_duration,
-        approver=requester,
-        requester=requester,
-        reason=request.reason,
-        decision=decision,
-        identity_store_id=_get_identity_store_id(),
-        elevator_request_id=elevator_id,
-    )
+    try:
+        access_control.execute_decision_on_group_request(
+            group=group,
+            permission_duration=request.permission_duration,
+            approver=requester,
+            requester=requester,
+            reason=request.reason,
+            decision=decision,
+            identity_store_id=_get_identity_store_id(),
+            elevator_request_id=elevator_id,
+        )
+    except Exception as e:
+        if is_auto_grant:
+            try:
+                blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+                    blocks=slack_response["message"]["blocks"],
+                    color_coding_emoji=cfg.bad_result_emoji,
+                )
+                client.chat_update(
+                    channel=cfg.slack_channel_id,
+                    ts=slack_response["ts"],
+                    blocks=blocks,
+                    text="Request processing failed. Please check logs for details.",
+                )
+            except Exception as update_err:
+                logger.exception(f"Failed to update Slack message after auto-grant failure: {update_err}")
+        raise e
+
+    if is_auto_grant and decision.grant:
+        try:
+            blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+                blocks=slack_response["message"]["blocks"],
+                color_coding_emoji=cfg.good_result_emoji,
+            )
+            client.chat_update(
+                channel=cfg.slack_channel_id,
+                ts=slack_response["ts"],
+                blocks=blocks,
+                text=text,
+            )
+        except Exception as update_err:
+            logger.exception(f"Failed to update Slack message after successful auto-grant: {update_err}")
     if decision.grant and elevator_id:
         request_store.update_request_status(elevator_id, ElevatorRequestStatus.completed)
 
