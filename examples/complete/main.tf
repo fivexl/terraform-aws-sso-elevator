@@ -136,8 +136,3 @@ output "requester_api_endpoint_url" {
   description = "The URL to invoke the Lambda function"
   value       = module.aws_sso_elevator.requester_api_endpoint_url
 }
-
-output "elevator_requests_table_name" {
-  description = "DynamoDB table holding access request state and ephemeral UI keys."
-  value       = module.aws_sso_elevator.elevator_requests_table_name
-}

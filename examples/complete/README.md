@@ -42,6 +42,5 @@ No inputs.
 
 | Name | Description |
 | ---- | ----------- |
-| <a name="output_elevator_requests_table_name"></a> [elevator\_requests\_table\_name](#output\_elevator\_requests\_table\_name) | DynamoDB table holding access request state and ephemeral UI keys. |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The URL to invoke the Lambda function |
 <!-- END_TF_DOCS -->

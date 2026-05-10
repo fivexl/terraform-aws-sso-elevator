@@ -125,8 +125,3 @@ output "requester_api_endpoint_url" {
   description = "Set this URL as the bot messaging endpoint in Teams Developer Portal."
   value       = module.aws_sso_elevator.requester_api_endpoint_url
 }
-
-output "elevator_requests_table_name" {
-  description = "DynamoDB table holding access request state and ephemeral UI keys."
-  value       = module.aws_sso_elevator.elevator_requests_table_name
-}

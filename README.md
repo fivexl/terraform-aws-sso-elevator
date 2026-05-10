@@ -14,6 +14,9 @@
 # Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack or Microsoft Teams
 
 - [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack or Microsoft Teams](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack-or-microsoft-teams)
+- [Upgrading from 4.x to 5.0](#upgrading-from-4x-to-50)
+  - [Breaking Changes](#breaking-changes)
+  - [New Features](#new-features)
 - [Introduction](#introduction)
 - [Functionality](#functionality)
     - [Demo scenarios (Teams)](#demo-scenarios-teams)
@@ -65,6 +68,40 @@
 - [Development](#development)
   - [Post review](#post-review)
 
+
+# Upgrading from 4.x to 5.0
+
+## Breaking Changes
+
+### Removed: `create_lambda_url` variable and `lambda_function_url` output
+
+Lambda URL support has been removed in favour of API Gateway (which has been the default since 4.x).
+
+**What to do:**
+
+1. Remove `create_lambda_url` from your module configuration:
+   ```hcl
+   # Remove this line
+   create_lambda_url = true
+   ```
+
+2. If you reference the `lambda_function_url` output anywhere, replace it with `requester_api_endpoint_url`:
+   ```hcl
+   # Before
+   module.aws_sso_elevator.lambda_function_url
+
+   # After
+   module.aws_sso_elevator.requester_api_endpoint_url
+   ```
+
+3. Make sure `create_api_gateway = true` (this is the default, so no change needed unless you explicitly set it to `false`).
+
+## New Features
+
+- **Microsoft Teams support** — set `chat_platform = "teams"` and provide the Teams-specific variables (`teams_microsoft_app_id`, `teams_microsoft_app_password`, `teams_azure_tenant_id`, `teams_approval_conversation_id`). Slack remains the default.
+- **New DynamoDB table** for access-request state — created automatically. Optionally set `elevator_requests_table_name` to control the table name.
+
+---
 
 # Introduction
 Currently, AWS IAM Identity Center does not support the temporary assignment of permission sets to users. As a result, teams using AWS IAM Identity Center are forced to either create highly restricted permission sets or rely on AWS IAM role chaining. Both approaches have significant drawbacks and result in an overly complex security model. The desired solution is one where AWS operators are granted access only when necessary and for the exact duration needed, with a default state of no access or read-only access.
@@ -1061,10 +1098,8 @@ Use that decoded string as `teams_approval_conversation_id`. It must match the c
 | <a name="output_attribute_sync_schedule_rule_arn"></a> [attribute\_sync\_schedule\_rule\_arn](#output\_attribute\_sync\_schedule\_rule\_arn) | The ARN of the EventBridge rule that triggers the attribute syncer. |
 | <a name="output_attribute_syncer_lambda_arn"></a> [attribute\_syncer\_lambda\_arn](#output\_attribute\_syncer\_lambda\_arn) | The ARN of the attribute syncer Lambda function. |
 | <a name="output_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#output\_attribute\_syncer\_lambda\_name) | The name of the attribute syncer Lambda function. |
-| <a name="output_chat_platform"></a> [chat\_platform](#output\_chat\_platform) | The configured chat integration: slack or teams. |
 | <a name="output_config_s3_bucket_arn"></a> [config\_s3\_bucket\_arn](#output\_config\_s3\_bucket\_arn) | The ARN of the S3 bucket for storing configuration and cache data. |
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
-| <a name="output_elevator_requests_table_name"></a> [elevator\_requests\_table\_name](#output\_elevator\_requests\_table\_name) | DynamoDB table name holding access request state and ephemeral UI keys. |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. For Slack, set it as the Request URL in the app manifest. For Teams / Bot Framework, set it as the bot messaging endpoint where applicable. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END_TF_DOCS -->
