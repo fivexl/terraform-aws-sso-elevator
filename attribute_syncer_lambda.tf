@@ -51,8 +51,15 @@ module "attribute_syncer" {
   environment_variables = {
     LOG_LEVEL = var.log_level
 
+    CHAT_PLATFORM = var.chat_platform
+
     SLACK_BOT_TOKEN  = var.slack_bot_token
     SLACK_CHANNEL_ID = var.slack_channel_id
+
+    TEAMS_MICROSOFT_APP_ID         = var.teams_microsoft_app_id
+    TEAMS_MICROSOFT_APP_PASSWORD   = var.teams_microsoft_app_password
+    TEAMS_AZURE_TENANT_ID          = var.teams_azure_tenant_id
+    TEAMS_APPROVAL_CONVERSATION_ID = var.teams_approval_conversation_id
 
     SSO_INSTANCE_ARN            = local.sso_instance_arn
     IDENTITY_STORE_ID           = local.identity_store_id
@@ -159,14 +166,9 @@ resource "aws_cloudwatch_event_target" "attribute_sync_schedule" {
 }
 
 # Terraform validation for attribute sync configuration
-resource "null_resource" "attribute_sync_validation" {
-  count = length(local.attribute_sync_validation_errors) > 0 ? 1 : 0
-
-  triggers = {
-    validation_errors = join(", ", local.attribute_sync_validation_errors)
-  }
-
-  provisioner "local-exec" {
-    command = "echo 'Attribute sync validation errors: ${join(", ", local.attribute_sync_validation_errors)}' && exit 1"
+check "attribute_sync_validation" {
+  assert {
+    condition     = length(local.attribute_sync_validation_errors) == 0
+    error_message = "Attribute sync validation errors: ${join(", ", local.attribute_sync_validation_errors)}"
   }
 }

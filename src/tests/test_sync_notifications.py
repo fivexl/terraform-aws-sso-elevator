@@ -310,8 +310,8 @@ class TestManualAssignmentNotification:
         call_kwargs = mock_client.chat_postMessage.call_args[1]
         message_text = call_kwargs["text"]
 
-        # Should contain warning emoji or text
-        assert ":warning:" in message_text or "Warning" in message_text
+        # Should contain warning text
+        assert "Manual Assignment Detected" in message_text
 
     @settings(max_examples=100)
     @given(action=remove_action_strategy())
@@ -429,9 +429,9 @@ class TestSyncSummaryNotification:
         message_text = call_kwargs["text"]
 
         if summary.errors:
-            assert ":warning:" in message_text or "Error" in message_text
+            assert "Error" in message_text
         else:
-            assert ":white_check_mark:" in message_text or "Successfully" in message_text
+            assert "Successfully" in message_text
 
 
 class TestSendNotificationForAction:
