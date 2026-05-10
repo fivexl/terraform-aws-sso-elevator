@@ -7,10 +7,14 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "boto3-stubs[identitystore,organizations,s3,scheduler,sso-admin,events]>=1.26.134",
+    "azure-identity>=1.15.0",
+    "boto3-stubs[identitystore,organizations,s3,scheduler,sso-admin,events,dynamodb]>=1.26.134",
+    "msgraph-sdk>=1.0.0",
     "pydantic[email]>=1.10.13",
     "pydantic-settings>=2.0.0",
     "croniter>=1.3.14",
+    "microsoft-teams-apps>=2.0.0a58",
+    "microsoft-teams-api>=2.0.0a58",
 ]
 
 [project.optional-dependencies]
@@ -115,7 +119,13 @@ max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
 # Ignore annotation requirements and magic values in test files
-"tests/*.py" = ["ANN", "PLR2004"]
+"tests/*.py" = ["ANN", "PLR2004", "PLR0913"]
+# Teams SDK + Slack Bolt app: TCH/statement-count/globals and flexible activity typing
+"requester/teams/*.py" = ["TCH", "PLR0915", "PLW0603", "ANN401"]
+# Monkeypatch wrappers match upstream SDK signatures loosely
+"requester/teams/teams_bot_framework_path_encoding.py" = ["ANN"]
+"requester/slack/*.py" = ["TCH", "PLR0915", "PLW0603", "ANN401"]
+"requester/common/context.py" = ["PLW0603"]
 
 [tool.pyright]
 reportGeneralTypeIssues = true

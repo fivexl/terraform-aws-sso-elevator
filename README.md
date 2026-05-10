@@ -11,13 +11,27 @@
 
 =========================================================================
 
-# Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack
+# Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack or Microsoft Teams
 
-- [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack)
+- [Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack or Microsoft Teams](#terraform-module-for-implementing-temporary-elevated-access-via-aws-iam-identity-center-successor-to-aws-single-sign-on-and-slack-or-microsoft-teams)
+- [Upgrading from 4.x to 5.0](#upgrading-from-4x-to-50)
+  - [Breaking Changes](#breaking-changes)
+  - [New Features](#new-features)
 - [Introduction](#introduction)
 - [Functionality](#functionality)
+    - [Demo scenarios (Teams)](#demo-scenarios-teams)
   - [Group Assignments Mode](#group-assignments-mode)
   - [Attribute-Based Group Sync](#attribute-based-group-sync)
+    - [How It Works](#how-it-works)
+    - [Configuration](#configuration)
+    - [Configuration Options](#configuration-options)
+    - [Attribute Mapping Rules](#attribute-mapping-rules)
+    - [Manual Assignment Policy](#manual-assignment-policy)
+    - [Audit Logging](#audit-logging)
+    - [Slack Notifications](#slack-notifications)
+    - [Migration Guide for Existing Deployments](#migration-guide-for-existing-deployments)
+    - [Rollback Strategy](#rollback-strategy)
+    - [Important Considerations](#important-considerations)
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
 - [Module configuration, and features](#module-configuration-and-features)
   - [Configuration structure](#configuration-structure)
@@ -34,6 +48,15 @@
   - [Build Process](#build-process)
   - [Terraform deployment example](#terraform-deployment-example)
   - [Slack App creation](#slack-app-creation)
+  - [Microsoft Teams app creation](#microsoft-teams-app-creation)
+    - [1. Tenant ID (Entra)](#1-tenant-id-entra)
+    - [2. Create the app and bot in Teams Developer Portal](#2-create-the-app-and-bot-in-teams-developer-portal)
+    - [3. Manifest (`id` vs `botId`)](#3-manifest-id-vs-botid)
+    - [4. Microsoft Graph permission (Entra app registration)](#4-microsoft-graph-permission-entra-app-registration)
+    - [5. Publish and allow the app in your tenant](#5-publish-and-allow-the-app-in-your-tenant)
+    - [6. Terraform variables for Teams](#6-terraform-variables-for-teams)
+    - [Obtaining `teams_approval_conversation_id`](#obtaining-teams_approval_conversation_id)
+    - [7. Smoke test](#7-smoke-test)
 - [Terraform docs](#terraform-docs)
   - [Requirements](#requirements)
   - [Providers](#providers)
@@ -46,6 +69,40 @@
   - [Post review](#post-review)
 
 
+# Upgrading from 4.x to 5.0
+
+## Breaking Changes
+
+### Removed: `create_lambda_url` variable and `lambda_function_url` output
+
+Lambda URL support has been removed in favour of API Gateway (which has been the default since 4.x).
+
+**What to do:**
+
+1. Remove `create_lambda_url` from your module configuration:
+   ```hcl
+   # Remove this line
+   create_lambda_url = true
+   ```
+
+2. If you reference the `lambda_function_url` output anywhere, replace it with `requester_api_endpoint_url`:
+   ```hcl
+   # Before
+   module.aws_sso_elevator.lambda_function_url
+
+   # After
+   module.aws_sso_elevator.requester_api_endpoint_url
+   ```
+
+3. Make sure `create_api_gateway = true` (this is the default, so no change needed unless you explicitly set it to `false`).
+
+## New Features
+
+- **Microsoft Teams support** — set `chat_platform = "teams"` and provide the Teams-specific variables (`teams_microsoft_app_id`, `teams_microsoft_app_password`, `teams_azure_tenant_id`, `teams_approval_conversation_id`). Slack remains the default.
+- **New DynamoDB table** for access-request state — created automatically. Optionally set `elevator_requests_table_name` to control the table name.
+
+---
+
 # Introduction
 Currently, AWS IAM Identity Center does not support the temporary assignment of permission sets to users. As a result, teams using AWS IAM Identity Center are forced to either create highly restricted permission sets or rely on AWS IAM role chaining. Both approaches have significant drawbacks and result in an overly complex security model. The desired solution is one where AWS operators are granted access only when necessary and for the exact duration needed, with a default state of no access or read-only access.
 
@@ -53,7 +110,7 @@ The terraform-aws-sso-elevator module addresses this issue by allowing the imple
 
 For more information on temporary elevated access for AWS and the AWS-provided solution, visit [Managing temporary elevated access to your AWS environment](https://aws.amazon.com/blogs/security/managing-temporary-elevated-access-to-your-aws-environment/).
 
-The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a Slack form. We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
+The key difference between the terraform-aws-sso-elevator module and the option described in the blog post above is that the module enables requesting access elevation via a chat form (Slack or Microsoft Teams). We hope that this implementation may inspire AWS to incorporate native support for temporary access elevation in AWS IAM Identity Center.
 
 AWS announced that [Customers of AWS IAM Identity Center (successor to AWS Single Sign-On) can use CyberArk Secure Cloud Access, Ermetic, and Okta Access Requests for temporary elevated access](https://aws.amazon.com/about-aws/whats-new/2023/05/aws-partners-temporary-elevated-access-capabilities-iam-identity-center/). So if you are already using one of those vendors we recommend checking their offering first.
 
@@ -62,32 +119,48 @@ Watch demo
 
 # Functionality
 
+SSO Elevator supports two chat platforms:
+
+- **Slack**: modal form via global shortcut and Slack app interactions.
+- **Microsoft Teams**: bot commands `/access` and `/group-access` (same names as Slack global shortcuts) that post a launcher Adaptive Card; the button opens a Task Module (`task/fetch`) with the form. Approvals use Adaptive Card buttons and in-thread updates.
+
+### Demo scenarios (Teams)
+- **Request account access**: in Teams, type `/access`, open the form, select account + permission set + duration + reason, submit.
+- **Request group membership**: in Teams, type `/group-access`, open the form, select group + duration + reason, submit.
+- **Approve / discard**: approvers click **Approve** / **Discard** on the approval Adaptive Card; the card is updated in-place with the outcome.
+- **Expiration & reminders**: if enabled, the revoker removes buttons on expiry and can post reminder replies in the same thread.
+
 ```mermaid
 sequenceDiagram
-    Requester->>Slack: submits form in Slack - CMD+K, search access or /access command
-    Slack->>AWS Lambda - Access Requester: sends request to access-requester
-    AWS Lambda - Access Requester->>Slack: sends a message to Slack channel with approve/deny buttons and tags approvers
-    Approver->>Slack: pressed approve button in Slack message
-    Slack->>AWS Lambda - Access Requester: Send approved request to access-requester
+    Requester->>Chat platform: opens request form (Slack shortcut / Teams /access or /group-access)
+    Chat platform->>AWS Lambda - Access Requester: sends request to access-requester
+    AWS Lambda - Access Requester->>Chat platform: posts approval card/message in approval channel thread
+    Approver->>Chat platform: clicks approve/discard on the approval card/message
+    Chat platform->>AWS Lambda - Access Requester: sends decision to access-requester
     AWS Lambda - Access Requester->>AWS IAM Identity Center(SSO): creates user-level permission set assignment based on approved request
     AWS Lambda - Access Requester->>AWS EventBridge: creates revocation schedule
     AWS Lambda - Access Requester->>AWS S3: logs audit record
     AWS EventBridge->>AWS Lambda - Access Revoker: sends revocation event when times come
     AWS Lambda - Access Revoker->>AWS IAM Identity Center(SSO): revokes user-level permission set assignment
     AWS Lambda - Access Revoker->>AWS S3: logs audit record
-    AWS Lambda - Access Revoker->>Slack:  send notification about revocation
+    AWS Lambda - Access Revoker->>Chat platform: sends notification about revocation
 ```
 
-The module deploys two AWS Lambda functions: access-requester and access-revoker. The access-requester handles requests from Slack, creating user-level permission set assignments and an Amazon EventBridge trigger that activates the access-revoker Lambda when it is time to revoke access. The access-revoker revokes user access when triggered by EventBridge and also runs daily to revoke any user-level permission set assignments without an associated EventBridge trigger. Group-level permission sets are not affected.
+The module deploys two AWS Lambda functions: access-requester and access-revoker. The access-requester handles requests from Slack or Teams, creating user-level permission set assignments and an Amazon EventBridge trigger that activates the access-revoker Lambda when it is time to revoke access. The access-revoker revokes user access when triggered by EventBridge and also runs daily to revoke any user-level permission set assignments without an associated EventBridge trigger. Group-level permission sets are not affected.
+
+A DynamoDB table (`elevator_requests`) is used to store access request state and ephemeral UI keys (e.g. Teams Adaptive Card conversation references), replacing the previous Lambda URL-based approach. This allows the requester Lambda to look up and update approval cards across restarts without relying on in-memory state.
 
 For auditing purposes, information about all access grants and revocations is stored in S3. See [documentation here](athena_query/) to find out how to configure AWS Athena to query audit logs.
 
 Additionally, the Access-Revoker continuously reconciles the revocation schedule with all user-level permission set assignments and issues warnings if it detects assignments without a revocation schedule (presumably created by someone manually). By default, the Access-Revoker will automatically revoke all unknown user-level permission set assignments daily. However, you can configure it to operate more or less frequently.
 
 ## Group Assignments Mode
-Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access. SSO elevator now can add users to a groups, to do so, you will need to use /group-access command, which, instead of showing the form for account assignments, will present a Slack form where the user can select a group they want access to, specify a reason, and define the duration for which access is required.
+Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access (temporary group membership with scheduled revocation).
 
-The basic logic for access, configuration, and Slack integration remains the same as before. To enable the new Group Assignments Mode, you need to provide the module with a new group_config Terraform variable:
+- **Slack**: use the global shortcut **`group-access`** (configured in the Slack app manifest with callback `request_for_group_membership`) to open the group request form.
+- **Microsoft Teams**: use the bot command **`/group-access`** to post a launcher card, then open the group request form in a Task Module.
+
+To enable Group Assignments Mode, provide the module with the `group_config` Terraform variable:
 ```hcl
 group_config = [
     {              
@@ -118,7 +191,7 @@ There are two key differences compared to the standard Elevator configuration:
 
 The Elevator will only work with groups specified in the configuration.
 
-If you were using Terraform AWS SSO Elevator before version 2.0.0, you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
+If you were using Terraform AWS SSO Elevator before version 2.0.0 (Slack), you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
 {
     "name": "group-access",
     "type": "global",
@@ -416,15 +489,7 @@ Notes:
 SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one except them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
 
 ## API gateway feature
-To address the [lambda-1](https://docs.aws.amazon.com/securityhub/latest/userguide/lambda-controls.html#lambda-1) SecurityHub control alert triggered by the default creation of a FunctionURLAllowPublicAccess resource-based policy for lambda, in 1.4.0 release module will eventually migrate to the usage of API Gateway by default. You still can use lambda URL to seamlessly migrate to the API Gateway url, but it is deprecated and will be removed in future releases. You can use the following variables to control the behavior:
-
-```hcl
-create_api_gateway = true # This will create an API Gateway for the requester lambda
-create_lambda_url = false # This will delete lambda url
-```
-
-To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.
-**After updating the module, you can find the API URL in the output of the module. Please don't forget to update the Slack App manifest with the new URL.**
+This module exposes the requester Lambda via **API Gateway HTTP API**. The full invoke URL is available as the Terraform output `requester_api_endpoint_url`.
 
 # Deployment and Usage
 
@@ -473,58 +538,40 @@ Those regions are not enabled by default. If you need to use a region that is no
 
 ## Terraform deployment example
 
+See also the ready-to-use examples in the repository:
+- [examples/complete](examples/complete/) — Slack deployment
+- [examples/teams](examples/teams/) — Microsoft Teams deployment
+
+### Slack deployment
+
+Store Slack credentials in SSM Parameter Store before deploying. You can use dummy values initially and update after the Slack app is created.
+
 ```terraform
 
 data "aws_ssoadmin_instances" "this" {}
 
-# You will have to create /sso-elevator/slack-signing-secret AWS SSM Parameter
-# and store Slack app signing secret there, if you have not created app yet then
-# you can leave a dummy value there and update it after Slack app is ready
 data "aws_ssm_parameter" "sso_elevator_slack_signing_secret" {
   name = "/sso-elevator/slack-signing-secret"
 }
 
-# You will have to create /sso-elevator/slack-bot-token AWS SSM Parameter
-# and store Slack bot token there, if you have not created app yet then
-# you can leave a dummy value there and update it after Slack app is ready
 data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
   name = "/sso-elevator/slack-bot-token"
 }
 
 module "aws_sso_elevator" {
-  source                           = "github.com/fivexl/terraform-aws-sso-elevator.git"
   source  = "fivexl/sso-elevator/aws"
-  version = "2.0.2"
-  slack_signing_secret  = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
-  slack_bot_token       = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
-  slack_channel_id      = local.slack_channel_id
+  version = "4.2.0"
 
-  s3_logging = {
-    target_bucket = module.naming_conventions.s3_access_logs_bucket_name
-    target_prefix = "sso-elevator-logs/"
-  }
+  chat_platform        = "slack"
+  slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
+  slack_bot_token      = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
+  slack_channel_id     = "C0123456789"
 
-  s3_bucket_partition_prefix = "sso-elevator-logs"
+  sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
-  s3_object_lock = true
-  s3_object_lock_configuration = {
-    rule = {
-      default_retention = {
-        mode  = "GOVERNANCE"
-        years = 3
-      }
-    }
-  }
-  # The default object lock configuration is as follows:
-  # {
-  #  rule = {
-  #   default_retention = {
-  #      mode  = "GOVERNANCE"
-  #      years = 2
-  #    }
-  #  }
-  #}
-  # You can specify a different configuration here:
+  s3_bucket_partition_prefix     = "logs"
+  s3_bucket_name_for_audit_entry = "my-sso-elevator-audit"
+  s3_object_lock                 = true
   s3_object_lock_configuration = {
     rule = {
       default_retention = {
@@ -533,24 +580,13 @@ module "aws_sso_elevator" {
       }
     }
   }
-
-  # s3_name_of_the_existing_bucket = "sso_elevator_audit_logs_bucket-<some_sha>"
-  # If you want to use your own bucket for storing SSO Elevator audit logs (logs about access requests), use the `s3_name_of_the_existing_bucket` variable.
-  # If `s3_name_of_the_existing_bucket` is left empty, the module creates a new bucket name based on `s3_bucket_name_for_audit_entry`.
-  # In that case, remember to specify `s3_logging` with at least the `target_bucket` key to enable access logging, otherwise, module deployment will fail.
   s3_logging = {
-    target_bucket = "some_access_logging_bucket"
-    target_prefix = "some_prefix_for_access_logs"
+    target_bucket = "my-access-logs-bucket"
+    target_prefix = "sso-elevator/"
   }
 
   config = [
-    # This could be a config for dev/stage account where developers can self-serve
-    # permissions
-    # Allows Bob and Alice to approve requests for all
-    # PermissionSets in accounts dev_account_id and stage_account_id as
-    # well as approve its own requests
-    # You have to specify at AllowSelfApproval: true or specify two approvers
-    # so you do not lock out approver
+    # Dev/stage: Bob and Alice can approve all permission sets; self-approval allowed
     {
       "ResourceType" : "Account",
       "Resource" : ["dev_account_id", "stage_account_id"],
@@ -558,9 +594,7 @@ module "aws_sso_elevator" {
       "Approvers" : ["bob@corp.com", "alice@corp.com"],
       "AllowSelfApproval" : true,
     },
-    # This could be an option for a financial person
-    # allows self approval for Billing PermissionSet
-    # for account_id for user finances@corp.com
+    # Finance: self-approval for Billing in a specific account
     {
       "ResourceType" : "Account",
       "Resource" : "account_id",
@@ -568,12 +602,7 @@ module "aws_sso_elevator" {
       "Approvers" : "finances@corp.com",
       "AllowSelfApproval" : true,
     },
-    # Your typical CTO - can approve all accounts and all permissions
-    # as well as his/hers own requests to avoid lock out
-    # Careful withi Resource * since it will cause revocation of all
-    # non-module-created user-level permission set assignments in all
-    # accounts, add this one later when you are done with single account
-    # testing
+    # CTO: can approve everything including own requests
     {
       "ResourceType" : "Account",
       "Resource" : "*",
@@ -581,15 +610,14 @@ module "aws_sso_elevator" {
       "Approvers" : "cto@corp.com",
       "AllowSelfApproval" : true,
     },
-    # Read only config for production accounts so developers
-    # can check prod when needed
+    # Prod read-only: no approval required
     {
       "ResourceType" : "Account",
       "Resource" : ["prod_account_id", "prod_account_id2"],
       "PermissionSet" : "ReadOnly",
       "AllowSelfApproval" : true,
     },
-    # Prod access
+    # Prod admin: requires two approvers, no self-approval
     {
       "ResourceType" : "Account",
       "Resource" : ["prod_account_id", "prod_account_id2"],
@@ -598,52 +626,130 @@ module "aws_sso_elevator" {
       "ApprovalIsNotRequired" : false,
       "AllowSelfApproval" : false,
     },
-    # example of list being used for permissions sets
-    {
-      "ResourceType" : "Account",
-      "Resource" : "account_id",
-      "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
-      "Approvers" : ["ciso@corp.com"], 
-      "AllowSelfApproval" : true,
-    },
-
   ]
-group_config = [
-    {              
-      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "ApprovalIsNotRequired": true
+
+  group_config = [
+    {
+      "Resource" : ["99999999-8888-7777-6666-555555555555"], # ManagementAccountAdmins
+      "Approvers" : ["admin@corp.com"],
+      "ApprovalIsNotRequired" : true,
     },
-    {              
-      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
-      "Approvers" : [
-        "email@gmail.com"
-      ]
+    {
+      "Resource" : ["11111111-2222-3333-4444-555555555555"], # prod read only
+      "Approvers" : ["manager@corp.com"],
       "AllowSelfApproval" : true,
     },
     {
-      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
-      "Approvers" : [
-        "email@gmail.com"
-      ]
+      "Resource" : ["44445555-3333-2222-1111-555557777777"], # ProdAdminAccess
+      "Approvers" : ["ciso@corp.com"],
     },
-]
+  ]
 }
 
-output "aws_sso_elevator_lambda_function_url" {
-  value = module.aws_sso_elevator.lambda_function_url
+output "requester_api_endpoint_url" {
+  description = "Set this URL as the Request URL in the Slack app manifest"
+  value       = module.aws_sso_elevator.requester_api_endpoint_url
+}
+
+output "elevator_requests_table_name" {
+  description = "DynamoDB table holding access request state"
+  value       = module.aws_sso_elevator.elevator_requests_table_name
 }
 ```
 
+### Microsoft Teams deployment
+
+Store Teams credentials in SSM Parameter Store (or Secrets Manager) before deploying. You can use dummy values initially and update after the Teams app is created.
+
+```terraform
+
+data "aws_ssoadmin_instances" "this" {}
+
+data "aws_ssm_parameter" "teams_app_id" {
+  name = "/sso-elevator/teams-app-id"
+}
+
+data "aws_ssm_parameter" "teams_app_password" {
+  name            = "/sso-elevator/teams-app-password"
+  with_decryption = true
+}
+
+module "aws_sso_elevator" {
+  source  = "fivexl/sso-elevator/aws"
+  version = "4.2.0"
+
+  chat_platform = "teams"
+
+  # Teams bot credentials — see "Microsoft Teams app creation" section below
+  teams_microsoft_app_id         = data.aws_ssm_parameter.teams_app_id.value
+  teams_microsoft_app_password   = data.aws_ssm_parameter.teams_app_password.value
+  teams_azure_tenant_id          = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" # Entra tenant ID
+  teams_approval_conversation_id = "19:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@thread.tacv2" # approval channel conversation ID
+
+  sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
+
+  s3_bucket_partition_prefix     = "logs"
+  s3_bucket_name_for_audit_entry = "my-sso-elevator-audit"
+  s3_object_lock                 = true
+  s3_object_lock_configuration = {
+    rule = {
+      default_retention = {
+        mode  = "GOVERNANCE"
+        years = 1
+      }
+    }
+  }
+  s3_logging = {
+    target_bucket = "my-access-logs-bucket"
+    target_prefix = "sso-elevator/"
+  }
+
+  config = [
+    # Dev/stage: self-approval allowed
+    {
+      "ResourceType" : "Account",
+      "Resource" : ["dev_account_id", "stage_account_id"],
+      "PermissionSet" : "*",
+      "Approvers" : ["bob@corp.com", "alice@corp.com"],
+      "AllowSelfApproval" : true,
+    },
+    # Prod admin: requires two approvers, no self-approval
+    {
+      "ResourceType" : "Account",
+      "Resource" : ["prod_account_id"],
+      "PermissionSet" : "AdministratorAccess",
+      "Approvers" : ["manager@corp.com", "ciso@corp.com"],
+      "ApprovalIsNotRequired" : false,
+      "AllowSelfApproval" : false,
+    },
+  ]
+
+  group_config = [
+    {
+      "Resource" : ["99999999-8888-7777-6666-555555555555"], # ManagementAccountAdmins
+      "Approvers" : ["admin@corp.com"],
+      "ApprovalIsNotRequired" : true,
+    },
+  ]
+}
+
+output "requester_api_endpoint_url" {
+  description = "Set this URL as the bot messaging endpoint in Teams Developer Portal"
+  value       = module.aws_sso_elevator.requester_api_endpoint_url
+}
+
+output "elevator_requests_table_name" {
+  description = "DynamoDB table holding access request state"
+  value       = module.aws_sso_elevator.elevator_requests_table_name
+}
+```
 ## Slack App creation
 1. Go to https://api.slack.com/
 2. Click `create an app`
 3. Click `From an app manifest`
 4. Select workspace, click `next`
 5. Choose `yaml` for app manifest format
-6. Update lambda url (from output `aws_sso_elevator_lambda_function_url`) to `request_url` field and paste the following into the text box: 
+6. Update API Gateway URL (from output `requester_api_endpoint_url`) to `request_url` field and paste the following into the text box: 
 ```yaml
 display_information:
   name: AWS SSO Access Elevator
@@ -680,7 +786,7 @@ oauth_config:
 settings:
   interactivity:
     is_enabled: true
-    request_url: <LAMBDA URL GOES HERE - CHECK LAMBDA CONFIGURATION IN AWS CONSOLE OR GET IT FORM TERRAFORM OUTPUT> 
+    request_url: <API GATEWAY URL GOES HERE - GET IT FROM TERRAFORM OUTPUT requester_api_endpoint_url>
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
@@ -690,6 +796,172 @@ settings:
 9. Copy `Signing Secret` # for `slack_signing_secret` module input
 10. Copy `Bot User OAuth Token` # for `slack_bot_token` module input
 
+## Microsoft Teams app creation
+
+### 1. Tenant ID (Entra)
+
+1. Open the [Microsoft Entra admin center](https://entra.microsoft.com/#home).
+2. Go to **Overview** and copy **Tenant ID** (directory ID). Use it for Terraform `teams_azure_tenant_id`.
+
+### 2. Create the app and bot in Teams Developer Portal
+
+1. Open [Teams Developer Portal](https://dev.teams.microsoft.com/) and sign in.
+2. **Apps** → **New app**.
+3. Name the app **AWS SSO Access Elevator** (or your preferred name).
+4. Set **Manifest version** to **Latest Stable (v1.25)** (or the version you intend to ship).
+5. Open **App features** → **Bot** → **Create a new bot** (or equivalent) → create a bot named **AWS SSO Access Elevator**.
+6. Under the bot’s **Configure** (or messaging settings), set **Endpoint address** / **Messaging endpoint** to the Terraform output **`requester_api_endpoint_url`** Save.
+   - Deploy the module first if you do not yet have that URL; after `terraform apply`, copy `requester_api_endpoint_url` into the bot configuration and save again if it changed.
+7. Under **Client secrets**, create a secret and copy its **value** (shown only once). Use it for Terraform `teams_microsoft_app_password`. Store it in a secret manager; do not commit it.
+8. Open the app **Dashboard** and copy **App ID**. This value maps to the Teams app package identifier used as `id` in `manifest.json`.
+
+### 3. Manifest (`id` vs `botId`)
+
+1. In **App features** → **Bot**, copy the **Bot ID** (Microsoft Application (client) ID for the bot registration — the portal may label it similarly to “Enter a bot ID”).
+2. Open **App package editor** → edit the manifest JSON.
+3. Paste the template below, replace the two `REPLACE_WITH_…` GUIDs, then **Save** / **Update** the manifest in Developer Portal:
+   - **`id`** → **App ID** from the app **Dashboard** (Teams app package ID).
+   - **`bots[0].botId`** → **Bot ID** from the Bot feature (same value as Terraform `teams_microsoft_app_id`).
+
+Keep `outline.png` and `color.png` in the app package (upload icons in Developer Portal if the editor expects files). If you do **not** use Group Assignments Mode, remove every **`group-access`** entry from each `commandLists[].commands` array (three copies — personal, team, groupChat).
+
+```json
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.25/MicrosoftTeams.schema.json",
+  "version": "1.0.0",
+  "manifestVersion": "1.25",
+  "supportsChannelFeatures": "tier1",
+  "id": "REPLACE_WITH_TEAMS_APP_ID_FROM_DEVELOPER_PORTAL_DASHBOARD",
+  "name": {
+    "short": "AWS SSO Access Elevator",
+    "full": "AWS SSO Access Elevator"
+  },
+  "developer": {
+    "name": "fivexl.io",
+    "websiteUrl": "https://fivexl.io/",
+    "privacyUrl": "https://github.com/fivexl/terraform-aws-sso-elevator",
+    "termsOfUseUrl": "https://github.com/fivexl/terraform-aws-sso-elevator"
+  },
+  "description": {
+    "short": "Request temporary AWS IAM Identity Center (SSO) elevated access",
+    "full": "Request temporary AWS IAM Identity Center (SSO) elevated access from Microsoft Teams"
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#FFFFFF",
+  "bots": [
+    {
+      "botId": "REPLACE_WITH_BOT_APPLICATION_CLIENT_ID_SAME_AS_TERRAFORM_teams_microsoft_app_id",
+      "scopes": ["team", "personal", "groupChat"],
+      "commandLists": [
+        {
+          "commands": [
+            {
+              "title": "access",
+              "description": "Request access to Permission Set in AWS Account"
+            },
+            {
+              "title": "group-access",
+              "description": "Request access to SSO Group"
+            }
+          ],
+          "scopes": ["personal"]
+        },
+        {
+          "commands": [
+            {
+              "title": "access",
+              "description": "Request access to Permission Set in AWS Account"
+            },
+            {
+              "title": "group-access",
+              "description": "Request access to SSO Group"
+            }
+          ],
+          "scopes": ["team"]
+        },
+        {
+          "commands": [
+            {
+              "title": "access",
+              "description": "Request access to Permission Set in AWS Account"
+            },
+            {
+              "title": "group-access",
+              "description": "Request access to SSO Group"
+            }
+          ],
+          "scopes": ["groupChat"]
+        }
+      ],
+      "isNotificationOnly": false,
+      "supportsCalling": false,
+      "supportsVideo": false,
+      "supportsFiles": false
+    }
+  ],
+  "validDomains": []
+}
+```
+
+### 4. Microsoft Graph permission (Entra app registration)
+
+The bot’s Entra app needs directory read access for user resolution (e.g. matching approvers and requesters by email).
+
+1. Open [Microsoft Entra admin center](https://entra.microsoft.com/) → **Identity** → **Applications** → **App registrations** → **All applications**.
+2. Open the application created for your Teams bot.
+3. **API permissions** → **Add a permission** → **Microsoft Graph** → **Application permissions** → add **`User.Read.All`**.
+4. Click **Grant admin consent for …** so the permission shows **Granted** for your tenant. Without admin consent, Graph calls may fail at runtime.
+
+### 5. Publish and allow the app in your tenant
+
+1. Back in **Teams Developer Portal**, open your app → **Publish** → **Publish to your org** and complete the flow.
+2. As a Teams administrator, open [Manage apps](https://admin.teams.microsoft.com/policies/manage-apps), find the app, and use **Publish** / org-wide availability as required by your policy.
+3. In Microsoft Teams, install the app for the team where approvals will happen. Add it to the **approval channel** you intend to use (for channel posts and threaded replies, a standard team channel works; use the channel you chose when obtaining `teams_approval_conversation_id` below).
+
+### 6. Terraform variables for Teams
+
+When deploying with Teams:
+
+```hcl
+chat_platform                  = "teams"
+teams_microsoft_app_id         = "<Same value as manifest bots[].botId — bot Application (client) ID>"
+teams_microsoft_app_password   = "<client secret value>"
+teams_azure_tenant_id          = "<Tenant ID from Entra Overview>"
+teams_approval_conversation_id = "<Bot Framework conversation.id for the approval channel — see below>"
+```
+
+`teams_microsoft_app_id` is the **bot’s** Entra application ID (used as Bot Framework `MicrosoftAppId`), **not** the Teams app package **App ID** from Developer Portal Dashboard (that value belongs only in `manifest.json` → `id`). Use `slack_channel_id = ""` for Teams-only deployments. Keep using `requester_api_endpoint_url` as the bot messaging endpoint.
+
+### Obtaining `teams_approval_conversation_id`
+
+This must be the **Bot Framework `conversation.id`** for the **channel** (or group chat) where approval Adaptive Cards are posted — **not** the Entra tenant ID and not a placeholder string.
+
+**From a channel link (typical):**
+
+1. In Teams, open the **approval** channel.
+2. Use **Get link to channel** / copy the channel URL.
+
+Example shape (hosts vary; path is what matters):
+
+`https://teams.microsoft.com/l/channel/19%3A280e28c1c2e342dc8fff6d3a495e8d9a%40thread.tacv2/ChannelName?groupId=…&tenantId=…`
+
+3. Take the first path segment **after** `/channel/`: it is **URL-encoded** `conversation.id`. Decode it:
+   - `%3A` → `:`
+   - `%40` → `@`
+
+Example: `19%3A280e28c1c2e342dc8fff6d3a495e8d9a%40thread.tacv2` → **`19:280e28c1c2e342dc8fff6d3a495e8d9a@thread.tacv2`**
+
+Use that decoded string as `teams_approval_conversation_id`. It must match the channel where the bot is installed and where approvers will see requests.
+
+### 7. Smoke test
+
+- In Teams, run **`/access`** (account access) or **`/group-access`** (if enabled).
+- Open the form from the launcher Adaptive Card, submit a request.
+- Confirm an approval card appears in the configured approval channel thread and that **Approve** / **Discard** work.
+
 # Terraform docs 
 
 <!-- BEGIN_TF_DOCS -->
@@ -697,11 +969,10 @@ settings:
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.0 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.5 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 4.64 |
 | <a name="requirement_external"></a> [external](#requirement\_external) | >= 1.0 |
 | <a name="requirement_local"></a> [local](#requirement\_local) | >= 1.0 |
-| <a name="requirement_null"></a> [null](#requirement\_null) | >= 2.0 |
 | <a name="requirement_random"></a> [random](#requirement\_random) | >= 3.0 |
 
 ## Providers
@@ -709,7 +980,6 @@ settings:
 | Name | Version |
 | ---- | ------- |
 | <a name="provider_aws"></a> [aws](#provider\_aws) | >= 4.64 |
-| <a name="provider_null"></a> [null](#provider\_null) | >= 2.0 |
 | <a name="provider_random"></a> [random](#provider\_random) | >= 3.0 |
 
 ## Modules
@@ -734,15 +1004,14 @@ settings:
 | [aws_cloudwatch_event_target.attribute_sync_schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_cloudwatch_event_target.check_inconsistency](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_cloudwatch_event_target.sso_elevator_scheduled_revocation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
+| [aws_dynamodb_table.elevator_requests](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table) | resource |
 | [aws_iam_role.eventbridge_role](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy.eventbridge_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_lambda_permission.eventbridge](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
-| [aws_lambda_permission.url](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
 | [aws_s3_object.approval_config](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_object) | resource |
 | [aws_scheduler_schedule_group.one_time_schedule_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule_group) | resource |
 | [aws_sns_topic.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
 | [aws_sns_topic_subscription.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
-| [null_resource.attribute_sync_validation](https://registry.terraform.io/providers/hashicorp/null/latest/docs/resources/resource) | resource |
 | [random_string.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 | [aws_iam_policy_document.attribute_syncer](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
@@ -771,14 +1040,15 @@ settings:
 | <a name="input_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#input\_attribute\_syncer\_lambda\_name) | Name for the attribute syncer Lambda function. | `string` | `"attribute-syncer"` | no |
 | <a name="input_aws_sns_topic_subscription_email"></a> [aws\_sns\_topic\_subscription\_email](#input\_aws\_sns\_topic\_subscription\_email) | value for the email address to subscribe to the SNS topic | `string` | `""` | no |
 | <a name="input_cache_enabled"></a> [cache\_enabled](#input\_cache\_enabled) | Enable caching of AWS accounts and permission sets in S3. If set to false, caching is disabled but the S3 bucket will still be created for future config storage. | `bool` | `true` | no |
+| <a name="input_chat_platform"></a> [chat\_platform](#input\_chat\_platform) | Which chat integration to use: `slack` (default) or `teams`. Required non-default credentials for the chosen platform are enforced via module preconditions. | `string` | `"slack"` | no |
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | `[]` | no |
 | <a name="input_config_bucket_kms_key_arn"></a> [config\_bucket\_kms\_key\_arn](#input\_config\_bucket\_kms\_key\_arn) | ARN of the KMS key to use for config S3 bucket encryption. If not provided, uses AES256 encryption. | `string` | `null` | no |
 | <a name="input_config_bucket_name"></a> [config\_bucket\_name](#input\_config\_bucket\_name) | Name of the S3 bucket for storing configuration and cache data (accounts, permission sets, and future config files) | `string` | `"sso-elevator-config"` | no |
 | <a name="input_create_api_gateway"></a> [create\_api\_gateway](#input\_create\_api\_gateway) | If true, module will create & configure API Gateway for the Lambda function | `bool` | `true` | no |
-| <a name="input_create_lambda_url"></a> [create\_lambda\_url](#input\_create\_lambda\_url) | If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future<br/>If false, Lambda url will be deleted. | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
 | <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.2.0"` | no |
+| <a name="input_elevator_requests_table_name"></a> [elevator\_requests\_table\_name](#input\_elevator\_requests\_table\_name) | DynamoDB table name for access-request state. If empty, a unique name is generated (sso-elevator-requests-<suffix>). | `string` | `""` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |
 | <a name="input_event_brige_check_on_inconsistency_rule_name"></a> [event\_brige\_check\_on\_inconsistency\_rule\_name](#input\_event\_brige\_check\_on\_inconsistency\_rule\_name) | DEPRECATED: Use event\_bridge\_check\_on\_inconsistency\_rule\_name instead. This variable contains a typo and will be removed in a future version. | `string` | `"sso-elevator-check-on-inconsistency"` | no |
@@ -793,9 +1063,10 @@ settings:
 | <a name="input_max_permissions_duration_time"></a> [max\_permissions\_duration\_time](#input\_max\_permissions\_duration\_time) | Maximum duration (in hours) for permissions granted by Elevator. Max number - 48 hours.<br/>  Due to Slack's dropdown limit of 100 items, anything above 48 hours will cause issues when generating half-hour increments<br/>  and Elevator will not display more then 48 hours in the dropdown. | `number` | `24` | no |
 | <a name="input_permission_duration_list_override"></a> [permission\_duration\_list\_override](#input\_permission\_duration\_list\_override) | An explicit list of duration values to appear in the drop-down menu users use to select how long to request permissions for.<br/>  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes<br/>  must be between 0-59, the number of hours can be any number.<br/>  If this variable is set, the max\_permission\_duration\_time is ignored. | `list(string)` | `[]` | no |
 | <a name="input_request_expiration_hours"></a> [request\_expiration\_hours](#input\_request\_expiration\_hours) | After how many hours should the request expire? If set to 0, the request will never expire. | `number` | `8` | no |
+| <a name="input_requester_cors_allow_origins"></a> [requester\_cors\_allow\_origins](#input\_requester\_cors\_allow\_origins) | CORS allow\_origins for the access-requester HTTP API. If null, defaults to Slack or Bot Framework / Teams hostnames from locals. | `list(string)` | `null` | no |
 | <a name="input_requester_lambda_name"></a> [requester\_lambda\_name](#input\_requester\_lambda\_name) | value for the requester lambda name | `string` | `"access-requester"` | no |
 | <a name="input_revoker_lambda_name"></a> [revoker\_lambda\_name](#input\_revoker\_lambda\_name) | value for the revoker lambda name | `string` | `"access-revoker"` | no |
-| <a name="input_revoker_post_update_to_slack"></a> [revoker\_post\_update\_to\_slack](#input\_revoker\_post\_update\_to\_slack) | Should revoker send a confirmation of the revocation to Slack? | `bool` | `true` | no |
+| <a name="input_revoker_post_update_to_slack"></a> [revoker\_post\_update\_to\_slack](#input\_revoker\_post\_update\_to\_slack) | If true, revoker posts revocation confirmations to the configured chat (Slack or Teams) depending on chat\_platform. | `bool` | `true` | no |
 | <a name="input_s3_bucket_name_for_audit_entry"></a> [s3\_bucket\_name\_for\_audit\_entry](#input\_s3\_bucket\_name\_for\_audit\_entry) | The name of the S3 bucket that will be used by the module to store logs about every access request.<br/>  If s3\_name\_of\_the\_existing\_bucket is not provided, the module will create a new bucket with this name. | `string` | `"sso-elevator-audit-entry"` | no |
 | <a name="input_s3_bucket_partition_prefix"></a> [s3\_bucket\_partition\_prefix](#input\_s3\_bucket\_partition\_prefix) | The prefix for the S3 audit bucket object partitions.<br/>  Don't use slashes (/) in the prefix, as it will be added automatically, e.g. "logs" will be transformed to "logs/".<br/>  If you want to use the root of the bucket, leave this empty. | `string` | `"logs"` | no |
 | <a name="input_s3_logging"></a> [s3\_logging](#input\_s3\_logging) | Map containing access bucket logging configuration.<br/>  If you are not providing s3\_name\_of\_the\_existing\_bucket variable, then module will create bucket for you.<br/>  If the module is creating an audit bucket for you, then you must provide a logging configuration via this input variable, with at least the target\_bucket key specified. | `map(string)` | `{}` | no |
@@ -809,11 +1080,15 @@ settings:
 | <a name="input_schedule_role_name"></a> [schedule\_role\_name](#input\_schedule\_role\_name) | value for the schedule role name | `string` | `"sso-elevator-event-bridge-role"` | no |
 | <a name="input_secondary_fallback_email_domains"></a> [secondary\_fallback\_email\_domains](#input\_secondary\_fallback\_email\_domains) | Value example: ["@new.domain", "@second.domain"], every domain name should start with "@".<br/>WARNING: <br/>This feature is STRONGLY DISCOURAGED because it can introduce security risks and open up potential avenues for abuse.<br/><br/>SSO Elevator uses Slack email addresses to find users in AWS SSO. In some cases, the domain of a Slack user's email <br/>(e.g., "john.doe@old.domain") differs from the domain defined in AWS SSO (e.g., "john.doe@new.domain"). By setting <br/>these fallback domains, SSO Elevator will attempt to replace the original domain from Slack with each secondary domain <br/>in order to locate a matching AWS SSO user. <br/> <br/>Use Cases:<br/>- This mechanism should only be used in rare or critical situations where you cannot align Slack and AWS SSO domains.<br/><br/>Use Case Example:<br/>- Slack email: john.doe@old.domain<br/>- AWS SSO email: john.doe@new.domain<br/><br/>Without fallback domains, SSO Elevator cannot find the SSO user due to the domain mismatch. By setting <br/>secondary\_fallback\_email\_domains = ["@new.domain"], SSO Elevator will swap out "@old.domain" for "@new.domain"<br/>(and any other domain in the list) and attempt to locate "john.doe@new.domain" in AWS SSO.<br/><br/>Security Risks & Recommendations:<br/>- If multiple SSO users share the same local-part (before the "@") across different domains, SSO Elevator may <br/>  grant permissions to the wrong user.<br/>- Disable or remove entries in this variable as soon as you no longer need domain fallback functionality <br/>  to restore a more secure configuration.<br/><br/>IN SUMMARY:<br/>Use "secondary\_fallback\_email\_domains" ONLY if absolutely necessary. It is best practice to maintain <br/>consistent, verified email domains in Slack and AWS SSO. Remove these fallback entries as soon as you <br/>resolve the underlying domain mismatch to minimize security exposure.<br/><br/>Notes:<br/>- SSO Elevator always prioritizes the primary domain from Slack (the Slack user's email) when searching for a user in AWS SSO.<br/>- SSO Elevator adds a large warning message in Slack if it uses a secondary fallback domain to find a user in AWS SSO.<br/>- The secondary domain feature works **ONLY** for the requester, approvers in the configuration must have the same email domain as in Slack. | `list(string)` | `[]` | no |
 | <a name="input_send_dm_if_user_not_in_channel"></a> [send\_dm\_if\_user\_not\_in\_channel](#input\_send\_dm\_if\_user\_not\_in\_channel) | If the user is not in the SSO Elevator channel, Elevator will send them a direct message with the request status <br/>(waiting for approval, declined, approved, etc.) and the result of the request.<br/>Using this feature requires the following Slack app permissions: "channels:read", "groups:read", and "im:write". <br/>Please ensure these permissions are enabled in the Slack app configuration. | `bool` | `true` | no |
-| <a name="input_slack_bot_token"></a> [slack\_bot\_token](#input\_slack\_bot\_token) | value for the Slack bot token | `string` | n/a | yes |
-| <a name="input_slack_channel_id"></a> [slack\_channel\_id](#input\_slack\_channel\_id) | value for the Slack channel ID | `string` | n/a | yes |
-| <a name="input_slack_signing_secret"></a> [slack\_signing\_secret](#input\_slack\_signing\_secret) | value for the Slack signing secret | `string` | n/a | yes |
+| <a name="input_slack_bot_token"></a> [slack\_bot\_token](#input\_slack\_bot\_token) | Slack bot token. Required when chat\_platform is slack; leave empty for teams-only deployments. | `string` | `""` | no |
+| <a name="input_slack_channel_id"></a> [slack\_channel\_id](#input\_slack\_channel\_id) | Slack channel ID (e.g. C…) for approval threads. Required when chat\_platform is slack; leave empty for teams-only deployments. | `string` | `""` | no |
+| <a name="input_slack_signing_secret"></a> [slack\_signing\_secret](#input\_slack\_signing\_secret) | Slack app signing secret (xoxb-… verification). Required when chat\_platform is slack; leave empty for teams-only deployments. | `string` | `""` | no |
 | <a name="input_sso_instance_arn"></a> [sso\_instance\_arn](#input\_sso\_instance\_arn) | value for the SSO instance ARN | `string` | `""` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | A map of tags to assign to resources. | `map(string)` | `{}` | no |
+| <a name="input_teams_approval_conversation_id"></a> [teams\_approval\_conversation\_id](#input\_teams\_approval\_conversation\_id) | Teams **conversation** ID for the channel (or group chat) where approval Adaptive Cards are posted. Must be the `conversation.id` for that chat as used by the Bot Framework (e.g. from an incoming `activity` after you @mention the bot in the channel, or from Bot Framework Emulator / logging). Do not use placeholder strings such as `REPLACE_WITH_...`. | `string` | `""` | no |
+| <a name="input_teams_azure_tenant_id"></a> [teams\_azure\_tenant\_id](#input\_teams\_azure\_tenant\_id) | Azure AD / Entra tenant (directory) ID. For a single-tenant app or Graph calls scoped to your org; can be left empty for multi-tenant if your bot allows it. | `string` | `""` | no |
+| <a name="input_teams_microsoft_app_id"></a> [teams\_microsoft\_app\_id](#input\_teams\_microsoft\_app\_id) | Microsoft Entra (Azure AD) / Bot Framework application (client) ID for the Teams bot. Required when chat\_platform is teams. | `string` | `""` | no |
+| <a name="input_teams_microsoft_app_password"></a> [teams\_microsoft\_app\_password](#input\_teams\_microsoft\_app\_password) | Bot client secret (Microsoft app password) for the Teams bot. Store in a secret manager; required when chat\_platform is teams. | `string` | `""` | no |
 | <a name="input_use_pre_created_image"></a> [use\_pre\_created\_image](#input\_use\_pre\_created\_image) | If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code. | `bool` | `true` | no |
 
 ## Outputs
@@ -825,8 +1100,7 @@ settings:
 | <a name="output_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#output\_attribute\_syncer\_lambda\_name) | The name of the attribute syncer Lambda function. |
 | <a name="output_config_s3_bucket_arn"></a> [config\_s3\_bucket\_arn](#output\_config\_s3\_bucket\_arn) | The ARN of the S3 bucket for storing configuration and cache data. |
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
-| <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
-| <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
+| <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. For Slack, set it as the Request URL in the app manifest. For Teams / Bot Framework, set it as the bot messaging endpoint where applicable. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END_TF_DOCS -->
 

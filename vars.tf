@@ -4,15 +4,6 @@ variable "create_api_gateway" {
   default     = true
 }
 
-variable "create_lambda_url" {
-  description = <<-EOT
-  If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future
-  If false, Lambda url will be deleted.
-  EOT
-  type        = bool
-  default     = true
-}
-
 variable "ecr_repo_name" {
   description = "The name of the ECR repository."
   type        = string
@@ -43,20 +34,41 @@ variable "tags" {
   default     = {}
 }
 
+variable "elevator_requests_table_name" {
+  description = "DynamoDB table name for access-request state. If empty, a unique name is generated (sso-elevator-requests-<suffix>)."
+  type        = string
+  default     = ""
+}
+
 variable "aws_sns_topic_subscription_email" {
   description = "value for the email address to subscribe to the SNS topic"
   type        = string
   default     = ""
 }
 
-variable "slack_signing_secret" {
-  description = "value for the Slack signing secret"
+variable "chat_platform" {
+  description = "Which chat integration to use: `slack` (default) or `teams`. Required non-default credentials for the chosen platform are enforced via module preconditions."
   type        = string
+  default     = "slack"
+
+  validation {
+    condition     = contains(["slack", "teams"], var.chat_platform)
+    error_message = "chat_platform must be either \"slack\" or \"teams\"."
+  }
+}
+
+variable "slack_signing_secret" {
+  description = "Slack app signing secret (xoxb-… verification). Required when chat_platform is slack; leave empty for teams-only deployments."
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 variable "slack_bot_token" {
-  description = "value for the Slack bot token"
+  description = "Slack bot token. Required when chat_platform is slack; leave empty for teams-only deployments."
   type        = string
+  default     = ""
+  sensitive   = true
 }
 
 variable "log_level" {
@@ -66,8 +78,40 @@ variable "log_level" {
 }
 
 variable "slack_channel_id" {
-  description = "value for the Slack channel ID"
+  description = "Slack channel ID (e.g. C…) for approval threads. Required when chat_platform is slack; leave empty for teams-only deployments."
   type        = string
+  default     = ""
+}
+
+variable "teams_microsoft_app_id" {
+  description = "Microsoft Entra (Azure AD) / Bot Framework application (client) ID for the Teams bot. Required when chat_platform is teams."
+  type        = string
+  default     = ""
+}
+
+variable "teams_microsoft_app_password" {
+  description = "Bot client secret (Microsoft app password) for the Teams bot. Store in a secret manager; required when chat_platform is teams."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "teams_azure_tenant_id" {
+  description = "Azure AD / Entra tenant (directory) ID. For a single-tenant app or Graph calls scoped to your org; can be left empty for multi-tenant if your bot allows it."
+  type        = string
+  default     = ""
+}
+
+variable "teams_approval_conversation_id" {
+  description = "Teams **conversation** ID for the channel (or group chat) where approval Adaptive Cards are posted. Must be the `conversation.id` for that chat as used by the Bot Framework (e.g. from an incoming `activity` after you @mention the bot in the channel, or from Bot Framework Emulator / logging). Do not use placeholder strings such as `REPLACE_WITH_...`."
+  type        = string
+  default     = ""
+}
+
+variable "requester_cors_allow_origins" {
+  description = "CORS allow_origins for the access-requester HTTP API. If null, defaults to Slack or Bot Framework / Teams hostnames from locals."
+  type        = list(string)
+  default     = null
 }
 
 variable "schedule_expression" {
@@ -149,7 +193,7 @@ variable "schedule_role_name" {
 }
 
 variable "revoker_post_update_to_slack" {
-  description = "Should revoker send a confirmation of the revocation to Slack?"
+  description = "If true, revoker posts revocation confirmations to the configured chat (Slack or Teams) depending on chat_platform."
   type        = bool
   default     = true
 }
