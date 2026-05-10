@@ -560,7 +560,7 @@ data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
 
 module "aws_sso_elevator" {
   source  = "fivexl/sso-elevator/aws"
-  version = "4.2.0"
+  version = "5.0.0"
 
   chat_platform        = "slack"
   slack_signing_secret = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
@@ -676,7 +676,7 @@ data "aws_ssm_parameter" "teams_app_password" {
 
 module "aws_sso_elevator" {
   source  = "fivexl/sso-elevator/aws"
-  version = "4.2.0"
+  version = "5.0.0"
 
   chat_platform = "teams"
 
@@ -1047,7 +1047,7 @@ Use that decoded string as `teams_approval_conversation_id`. It must match the c
 | <a name="input_create_api_gateway"></a> [create\_api\_gateway](#input\_create\_api\_gateway) | If true, module will create & configure API Gateway for the Lambda function | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
-| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.2.0"` | no |
+| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"5.0.0"` | no |
 | <a name="input_elevator_requests_table_name"></a> [elevator\_requests\_table\_name](#input\_elevator\_requests\_table\_name) | DynamoDB table name for access-request state. If empty, a unique name is generated (sso-elevator-requests-<suffix>). | `string` | `""` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |
