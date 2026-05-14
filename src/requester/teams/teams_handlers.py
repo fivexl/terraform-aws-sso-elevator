@@ -88,7 +88,12 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
         if kind == "account":
             accounts = organizations.get_accounts_from_config_with_cache(org_client=org_client, s3_client=s3_client, cfg=c)
             permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=c)
-            return teams_cards.build_account_access_form(accounts, permission_sets, duration_options)
+            return teams_cards.build_account_access_form(
+                accounts,
+                permission_sets,
+                duration_options,
+                account_warning_messages=c.account_warning_messages,
+            )
         sso_instance = sso.describe_sso_instance(sso_client, c.sso_instance_arn)
         groups = sso.get_groups_from_config(sso_instance.identity_store_id, identity_store_client, c)
         return teams_cards.build_group_access_form(groups, duration_options)
@@ -178,6 +183,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             color_style=waiting_style,
             request_data=request_data_acc,
             elevator_request_id=eid,
+            account_warning_messages=c.account_warning_messages,
         )
 
     async def _update_approval_card(  # noqa: PLR0913

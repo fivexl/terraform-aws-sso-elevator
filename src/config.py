@@ -1,10 +1,11 @@
 import json
 import os
+from collections.abc import Mapping
 from typing import Literal, Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import entities
@@ -55,15 +56,14 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
         return config_data
 
     except s3_client.exceptions.NoSuchKey:
-        logger.error(f"S3 object not found: s3://{bucket_name}/{s3_key}")
+        logger.exception(f"S3 object not found: s3://{bucket_name}/{s3_key}")
         raise
     except s3_client.exceptions.NoSuchBucket:
-        logger.error(f"S3 bucket not found: {bucket_name}")
+        logger.exception(f"S3 bucket not found: {bucket_name}")
         raise
     except Exception as e:
-        logger.error(
+        logger.exception(
             f"Failed to load approval config from S3: {e}",
-            exc_info=True,
         )
         raise
 
@@ -104,6 +104,35 @@ def parse_group_statement(_dict: dict) -> GroupStatement:
 
 def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str]:
     return frozenset(group for statement in statements for group in statement.resource)
+
+
+def parse_account_warning_messages_raw(raw: object) -> dict[str, str]:
+    """Normalize Terraform/json-encoded ``account_warning_messages`` to stripped account ID keys."""
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, str):
+        if not raw.strip():
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(f"account_warning_messages: invalid JSON, treated as empty: {e}")
+            return {}
+        if not isinstance(data, dict):
+            return {}
+    elif isinstance(raw, dict):
+        data = raw
+    else:
+        return {}
+    return {str(k).strip(): str(v) for k, v in data.items() if str(k).strip()}
+
+
+def account_warning_message(account_id: str, messages: Mapping[str, str]) -> str | None:
+    """Return the configured warning for ``account_id``, or ``None`` if unlisted."""
+    aid = (account_id or "").strip()
+    if not aid:
+        return None
+    return messages.get(aid)
 
 
 class Config(BaseSettings):
@@ -151,6 +180,9 @@ class Config(BaseSettings):
 
     max_permissions_duration_time: int
     permission_duration_list_override: list
+
+    #: Map of AWS account ID to warning text (from Terraform / env JSON). Keys are stripped at load.
+    account_warning_messages: dict[str, str] = Field(default_factory=dict)
 
     config_bucket_name: str = "sso-elevator-config"
     config_s3_key: str = ""
@@ -210,6 +242,7 @@ class Config(BaseSettings):
             permission_sets.update(statement.permission_set)
             if statement.resource_type == "Account":
                 accounts.update(statement.resource)
+        account_warning_messages = parse_account_warning_messages_raw(values.get("account_warning_messages"))
         return values | {
             "accounts": accounts,
             "permission_sets": permission_sets,
@@ -217,6 +250,7 @@ class Config(BaseSettings):
             "group_statements": frozenset(group_statements),
             "groups": groups,
             "s3_bucket_prefix_for_partitions": s3_bucket_prefix_for_partitions,
+            "account_warning_messages": account_warning_messages,
         }
 
     @model_validator(mode="after")

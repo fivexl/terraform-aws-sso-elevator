@@ -788,6 +788,7 @@ def _build_teams_approval_card_for_expiry(
         color_style=waiting_style,
         request_data=req_data2,
         elevator_request_id=elevator_request_id,
+        account_warning_messages=cfg.account_warning_messages,
     )
 
 
@@ -981,8 +982,7 @@ def handle_discard_buttons_event(
             slack_client.chat_postMessage(
                 channel=event.channel_id,
                 thread_ts=message["ts"],
-                text="This request expired due to no action being taken in time and was automatically discarded. "
-                "No further action is required.",
+                text=_expiry_notification_text(),
             )
             logger.info("Buttons were removed", extra={"event": event})
             if event.elevator_request_id:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import time
+from collections.abc import Mapping
 from datetime import timedelta, timezone
 from typing import Optional, TypeVar, Union
 
@@ -65,6 +66,7 @@ class RequestForAccessView:
     DURATION_ACTION_ID = "duration_picker_action"
 
     LOADING_BLOCK_ID = "loading"
+    ACCOUNT_WARNING_BLOCK_ID = "account_access_warning"
 
     @classmethod
     def build(cls) -> View:
@@ -119,9 +121,11 @@ class RequestForAccessView:
         if len(accounts) > 99:  # noqa: PLR2004
             accounts = accounts[:99]
         sorted_accounts = sorted(accounts, key=lambda account: account.name)
+
         return InputBlock(
             block_id=cls.ACCOUNT_BLOCK_ID,
             label=PlainTextObject(text="Select account"),
+            dispatch_action=True,
             element=StaticSelectElement(
                 action_id=cls.ACCOUNT_ACTION_ID,
                 placeholder=PlainTextObject(text="Select account"),
@@ -149,7 +153,9 @@ class RequestForAccessView:
 
     @classmethod
     def update_with_accounts_and_permission_sets(
-        cls, accounts: list[entities.aws.Account], permission_sets: list[entities.aws.PermissionSet]
+        cls,
+        accounts: list[entities.aws.Account],
+        permission_sets: list[entities.aws.PermissionSet],
     ) -> View:
         view = cls.build()
         view.blocks = remove_blocks(view.blocks, block_ids=[cls.LOADING_BLOCK_ID])
@@ -198,6 +204,44 @@ def insert_blocks(blocks: list[T], blocks_to_insert: list[Block], after_block_id
     return blocks[: index + 1] + blocks_to_insert + blocks[index + 1 :]  # type: ignore
 
 
+def apply_account_warning_to_view_blocks(
+    blocks: list[dict],
+    *,
+    selected_account_id: str | None,
+    messages: Mapping[str, str],
+) -> list[dict]:
+    """Insert or remove the modal warning section above the account select without rebuilding the whole view."""
+    bid_warn = RequestForAccessView.ACCOUNT_WARNING_BLOCK_ID
+    bid_acc = RequestForAccessView.ACCOUNT_BLOCK_ID
+    out = [b for b in blocks if b.get("block_id") != bid_warn]
+    acc_idx = next((i for i, b in enumerate(out) if b.get("block_id") == bid_acc), None)
+    if acc_idx is None:
+        return out
+    msg = config.account_warning_message(selected_account_id or "", messages) if selected_account_id else None
+    if msg:
+        section = {
+            "type": "section",
+            "block_id": bid_warn,
+            "text": {"type": "mrkdwn", "text": msg},
+        }
+        return out[:acc_idx] + [section] + out[acc_idx:]
+    return out
+
+
+def view_payload_for_modal_update(view: dict, blocks: list[dict]) -> dict:
+    """Subset of view fields required by ``views.update`` (Slack rejects unknown keys)."""
+    payload: dict = {
+        "type": view["type"],
+        "callback_id": view["callback_id"],
+        "title": view["title"],
+        "blocks": blocks,
+    }
+    for key in ("submit", "close", "private_metadata", "clear_on_close", "notify_on_close", "external_id"):
+        if key in view and view[key] is not None:
+            payload[key] = view[key]
+    return payload
+
+
 def humanize_timedelta(td: timedelta) -> str:
     # 1d 12h 0m
     total_hours = td.days * 24 + td.seconds // 3600
@@ -240,12 +284,19 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
     role_name: Optional[str] = None,
     show_buttons: bool = True,
     elevator_request_id: str | None = None,
+    account_access_warning_message: str | None = None,
 ) -> list[Block]:
-    fields = [
-        MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
-        MarkdownTextObject(text=f"Reason: {reason}"),
-        MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
-    ]
+    fields: list[MarkdownTextObject] = [MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>")]
+    if group:
+        fields.append(MarkdownTextObject(text=f"Group: {group.name} #{group.id}"))
+    elif account and role_name:
+        fields.append(MarkdownTextObject(text=f"Account name: {account.name}"))
+        fields.append(MarkdownTextObject(text=f"Account ID: {account.id}"))
+        fields.append(MarkdownTextObject(text=f"Role name: {role_name}"))
+
+    fields.append(MarkdownTextObject(text=f"Reason: {reason}"))
+    fields.append(MarkdownTextObject(text=f"Duration: {humanize_timedelta(permission_duration)}"))
+
     _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identity_store_client,
         identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
@@ -265,16 +316,16 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
                 )
             )
         )
-    if group:
-        fields.insert(1, MarkdownTextObject(text=f"Group: {group.name} #{group.id}"))
-    elif account and role_name:
-        fields.insert(1, MarkdownTextObject(text=f"Account: {account.name} #{account.id}"))
-        fields.insert(2, MarkdownTextObject(text=f"Role name: {role_name}"))
 
-    blocks: list[Block] = [
-        HeaderSectionBlock.new(color_coding_emoji),
-        SectionBlock(block_id="content", fields=fields),
-    ]
+    blocks: list[Block] = [HeaderSectionBlock.new(color_coding_emoji)]
+    if account_access_warning_message and account and role_name:
+        blocks.append(
+            SectionBlock(
+                block_id=RequestForAccessView.ACCOUNT_WARNING_BLOCK_ID,
+                text=MarkdownTextObject(text=account_access_warning_message),
+            )
+        )
+    blocks.append(SectionBlock(block_id="content", fields=fields))
     if show_buttons:
         ap, dp = entities.ApproverAction.Approve.value, entities.ApproverAction.Discard.value
         approve_val = f"{ap}::{elevator_request_id}" if elevator_request_id else ap

@@ -393,6 +393,7 @@ async def post_account_approval_to_teams_channel(  # noqa: PLR0912
         request_data=request_data,
         elevator_request_id=elevator_id,
         header_subtitle=header_subtitle,
+        account_warning_messages=c.account_warning_messages,
     )
 
     tpar = (teams_parent_activity_id or "").strip() or None

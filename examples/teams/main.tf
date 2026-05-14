@@ -118,6 +118,13 @@ module "aws_sso_elevator" {
       "Approvers" : ["ciso@corp.com"],
     },
   ]
+
+  # Optional: warn requesters and approvers when a sensitive account is selected.
+  # If not set, the module works normally without any warnings.
+  # account_warning_messages = {
+  #   "123456789012" = "Production — all changes require a change-management ticket."
+  #   "210987654321" = "Billing account — read-only access only."
+  # }
 }
 
 

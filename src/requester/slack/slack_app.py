@@ -147,7 +147,8 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             # Fallback: open a new view with the data already loaded
             trigger_id = body["trigger_id"]
             view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(
-                accounts=accounts, permission_sets=permission_sets
+                accounts=accounts,
+                permission_sets=permission_sets,
             )
             return client.views_open(trigger_id=trigger_id, view=view)
 
@@ -326,6 +327,29 @@ def _build_slack_app(ctx: RequesterContext) -> App:
     )
 
     @handle_errors
+    def handle_account_select_dispatch(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # noqa: ARG001
+        view = body.get("view") or {}
+        if view.get("callback_id") != slack_helpers.RequestForAccessView.CALLBACK_ID:
+            return None
+        actions = body.get("actions") or []
+        if not actions:
+            return None
+        selected = (actions[0].get("selected_option") or {}).get("value")
+        blocks_dicts = [b for b in (view.get("blocks") or []) if isinstance(b, dict)]
+        new_blocks = slack_helpers.apply_account_warning_to_view_blocks(
+            blocks_dicts,
+            selected_account_id=str(selected) if selected else None,
+            messages=cfg.account_warning_messages,
+        )
+        view_update = slack_helpers.view_payload_for_modal_update(view, new_blocks)
+        return client.views_update(view_id=str(view["id"]), hash=str(view["hash"]), view=view_update)
+
+    app.action(slack_helpers.RequestForAccessView.ACCOUNT_ACTION_ID)(
+        ack=acknowledge_request,
+        lazy=[handle_account_select_dispatch],
+    )
+
+    @handle_errors
     def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         body: dict,
         ack: Ack,  # noqa: ARG001
@@ -345,6 +369,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
         logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
         account = organizations.describe_account(org_client, request.account_id)
+        access_warn = config.account_warning_message(request.account_id, cfg.account_warning_messages)
 
         elevator_id = str(uuid.uuid4())
         request_store.put_access_request(
@@ -376,6 +401,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
                 show_buttons=show_buttons,
                 color_coding_emoji=cfg.waiting_result_emoji,
                 elevator_request_id=elevator_id,
+                account_access_warning_message=access_warn,
             ),
             channel=cfg.slack_channel_id,
             text=f"Request for access to {account.name} account from {requester.real_name}",
