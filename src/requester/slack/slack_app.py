@@ -327,7 +327,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
     )
 
     @handle_errors
-    def handle_account_select_dispatch(body: dict, client: WebClient) -> SlackResponse | None:
+    def handle_account_select_dispatch(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # noqa: ARG001
         view = body.get("view") or {}
         if view.get("callback_id") != slack_helpers.RequestForAccessView.CALLBACK_ID:
             return None
@@ -335,17 +335,11 @@ def _build_slack_app(ctx: RequesterContext) -> App:
         if not actions:
             return None
         selected = (actions[0].get("selected_option") or {}).get("value")
-        blocks_in = view.get("blocks") or []
-        blocks_dicts: list[dict] = []
-        for b in blocks_in:
-            if isinstance(b, dict):
-                blocks_dicts.append(b)
-            elif hasattr(b, "to_dict"):
-                blocks_dicts.append(b.to_dict())  # type: ignore[union-attr]
+        blocks_dicts = [b for b in (view.get("blocks") or []) if isinstance(b, dict)]
         new_blocks = slack_helpers.apply_account_warning_to_view_blocks(
             blocks_dicts,
             selected_account_id=str(selected) if selected else None,
-            messages=dict(cfg.account_warning_messages),
+            messages=cfg.account_warning_messages,
         )
         view_update = slack_helpers.view_payload_for_modal_update(view, new_blocks)
         return client.views_update(view_id=str(view["id"]), hash=str(view["hash"]), view=view_update)

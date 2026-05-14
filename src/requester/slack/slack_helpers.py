@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import time
+from collections.abc import Mapping
 from datetime import timedelta, timezone
 from typing import Optional, TypeVar, Union
 
@@ -207,7 +208,7 @@ def apply_account_warning_to_view_blocks(
     blocks: list[dict],
     *,
     selected_account_id: str | None,
-    messages: dict[str, str],
+    messages: Mapping[str, str],
 ) -> list[dict]:
     """Insert or remove the modal warning section above the account select without rebuilding the whole view."""
     bid_warn = RequestForAccessView.ACCOUNT_WARNING_BLOCK_ID

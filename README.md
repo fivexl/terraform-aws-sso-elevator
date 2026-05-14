@@ -488,6 +488,36 @@ Notes:
 ## Sending direct messages to users feature
 SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one except them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
 
+## Per-account warning messages
+
+The `account_warning_messages` variable lets you attach a short warning to specific AWS accounts. The warning is shown to requesters and approvers to highlight accounts that require extra care (e.g. production, billing, or shared-services accounts).
+
+```hcl
+module "aws_sso_elevator" {
+  # ... other configuration ...
+
+  account_warning_messages = {
+    "123456789012" = "Production — all changes require a change-management ticket."
+    "210987654321" = "Billing account — read-only access only; write access requires VP approval."
+  }
+}
+```
+
+**Where the warning appears:**
+
+| Platform | Surface | Detail |
+|----------|---------|--------|
+| **Slack** | Request modal | Warning block is inserted above the account selector in real time when the user selects a flagged account. |
+| **Slack** | Approval message | Warning is included in the channel approval card visible to approvers. |
+| **Teams** | Account access form | A generic hint ("Some accounts are flagged for extra scrutiny…") is shown when any account in the list is flagged. Teams task module forms cannot update in real time on selection, so the per-account detail is not shown at this stage. |
+| **Teams** | Approval card | The exact warning text is shown in an `attention`-styled container visible to approvers. |
+
+**Notes:**
+- Keys must be 12-digit AWS account IDs. Keys that do not match any account are silently ignored.
+- Warning text is rendered as Slack `mrkdwn` / Teams Adaptive Card Markdown. Standard formatting (bold, links) is supported; use plain text if you want to avoid unintentional formatting.
+- Accounts not listed in the map behave normally — no warning is shown.
+- No AWS Organizations API calls are made for this feature.
+
 ## API gateway feature
 This module exposes the requester Lambda via **API Gateway HTTP API**. The full invoke URL is available as the Terraform output `requester_api_endpoint_url`.
 
@@ -644,6 +674,13 @@ module "aws_sso_elevator" {
       "Approvers" : ["ciso@corp.com"],
     },
   ]
+
+  # Optional: show a warning to requesters and approvers for specific accounts.
+  # Without this the module works normally — no warnings are shown.
+  # account_warning_messages = {
+  #   "123456789012" = "Production — all changes require a change-management ticket."
+  #   "210987654321" = "Billing account — read-only access only."
+  # }
 }
 
 output "requester_api_endpoint_url" {
@@ -731,6 +768,13 @@ module "aws_sso_elevator" {
       "ApprovalIsNotRequired" : true,
     },
   ]
+
+  # Optional: show a warning to requesters and approvers for specific accounts.
+  # Without this the module works normally — no warnings are shown.
+  # account_warning_messages = {
+  #   "123456789012" = "Production — all changes require a change-management ticket."
+  #   "210987654321" = "Billing account — read-only access only."
+  # }
 }
 
 output "requester_api_endpoint_url" {

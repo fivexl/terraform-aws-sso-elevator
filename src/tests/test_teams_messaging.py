@@ -101,6 +101,18 @@ def test_account_access_form_shows_hint_when_any_account_flagged() -> None:
     assert other_choice["title"] == f"{'4' * 12} - Other"
 
 
+def test_account_access_form_no_hint_when_no_accounts_flagged() -> None:
+    accounts = [aws.Account(id="5" * 12, name="Plain"), aws.Account(id="6" * 12, name="Normal")]
+    psets = [aws.PermissionSet(name="P1", arn="arn:aws:sso:::permissionSet/ssoins-xxx/ps-xxx", description=None)]
+    card = teams_cards.build_account_access_form(accounts, psets, ["1:00:00"], account_warning_messages={})
+    body_text = " ".join(x.get("text", "") for x in card["body"] if x.get("type") == "TextBlock")
+    assert "extra scrutiny" not in body_text
+
+    card_no_arg = teams_cards.build_account_access_form(accounts, psets, ["1:00:00"])
+    body_text_no_arg = " ".join(x.get("text", "") for x in card_no_arg["body"] if x.get("type") == "TextBlock")
+    assert "extra scrutiny" not in body_text_no_arg
+
+
 @settings(max_examples=30, suppress_health_check=(HealthCheck.too_slow,))
 @given(
     n_accounts=st.integers(min_value=1, max_value=5),

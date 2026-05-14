@@ -5,7 +5,7 @@ from typing import Literal, Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import entities
@@ -113,7 +113,11 @@ def parse_account_warning_messages_raw(raw: object) -> dict[str, str]:
     if isinstance(raw, str):
         if not raw.strip():
             return {}
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(f"account_warning_messages: invalid JSON, treated as empty: {e}")
+            return {}
         if not isinstance(data, dict):
             return {}
     elif isinstance(raw, dict):
@@ -178,7 +182,7 @@ class Config(BaseSettings):
     permission_duration_list_override: list
 
     #: Map of AWS account ID to warning text (from Terraform / env JSON). Keys are stripped at load.
-    account_warning_messages: dict[str, str]
+    account_warning_messages: dict[str, str] = Field(default_factory=dict)
 
     config_bucket_name: str = "sso-elevator-config"
     config_s3_key: str = ""
