@@ -7,8 +7,8 @@ Equivalent of the Block Kit building code in slack_helpers.py.
 from __future__ import annotations
 
 import copy
-from datetime import timedelta
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

@@ -320,7 +320,7 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
     if account_access_warning_message and account and role_name:
         blocks.append(
             SectionBlock(
-                block_id="account_access_warning",
+                block_id=RequestForAccessView.ACCOUNT_WARNING_BLOCK_ID,
                 text=MarkdownTextObject(text=account_access_warning_message),
             )
         )

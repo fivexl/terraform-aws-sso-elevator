@@ -56,15 +56,14 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
         return config_data
 
     except s3_client.exceptions.NoSuchKey:
-        logger.error(f"S3 object not found: s3://{bucket_name}/{s3_key}")
+        logger.exception(f"S3 object not found: s3://{bucket_name}/{s3_key}")
         raise
     except s3_client.exceptions.NoSuchBucket:
-        logger.error(f"S3 bucket not found: {bucket_name}")
+        logger.exception(f"S3 bucket not found: {bucket_name}")
         raise
     except Exception as e:
-        logger.error(
+        logger.exception(
             f"Failed to load approval config from S3: {e}",
-            exc_info=True,
         )
         raise
 
@@ -115,11 +114,11 @@ def parse_account_warning_messages_raw(raw: object) -> dict[str, str]:
         if not raw.strip():
             return {}
         data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}
     elif isinstance(raw, dict):
         data = raw
     else:
-        return {}
-    if not isinstance(data, dict):
         return {}
     return {str(k).strip(): str(v) for k, v in data.items() if str(k).strip()}
 
