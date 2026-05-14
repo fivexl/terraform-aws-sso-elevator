@@ -46,6 +46,58 @@ def _head_container_style(card: dict) -> str | None:
     return None
 
 
+def test_account_approval_card_management_warning_container() -> None:
+    mid = "1" * 12
+    acc = aws.Account(id=mid, name="MgmtRoot")
+    card = teams_cards.build_approval_card(
+        requester_name="RequesterOne",
+        account=acc,
+        group=None,
+        role_name="Admin",
+        reason="ops",
+        permission_duration="1:0:0",
+        show_buttons=True,
+        color_style="warning",
+        request_data={"x": 1},
+        elevator_request_id="e-mgmt",
+        management_account_id=mid,
+    )
+    attention_containers = [x for x in card.get("body", []) if x.get("type") == "Container" and x.get("style") == "attention"]
+    assert len(attention_containers) == 1
+    inner = attention_containers[0].get("items") or []
+    joined = " ".join((it.get("text") or "") for it in inner if it.get("type") == "TextBlock")
+    assert "management account" in joined.lower()
+
+
+def test_account_approval_card_member_has_no_attention_warning() -> None:
+    acc = aws.Account(id="2" * 12, name="Member")
+    card = teams_cards.build_approval_card(
+        requester_name="R",
+        account=acc,
+        group=None,
+        role_name="ReadOnly",
+        reason="x",
+        permission_duration="1:0:0",
+        show_buttons=False,
+        color_style="default",
+        request_data={},
+        management_account_id="1" * 12,
+    )
+    assert not any(x.get("type") == "Container" and x.get("style") == "attention" for x in card.get("body", []))
+
+
+def test_account_access_form_marks_management_choice() -> None:
+    mid = "3" * 12
+    accounts = [aws.Account(id=mid, name="Root"), aws.Account(id="4" * 12, name="Other")]
+    psets = [aws.PermissionSet(name="P1", arn="arn:aws:sso:::permissionSet/ssoins-xxx/ps-xxx", description=None)]
+    card = teams_cards.build_account_access_form(accounts, psets, ["1:00:00"], management_account_id=mid)
+    acc_choices = next(x for x in card["body"] if x.get("id") == "account_id")["choices"]
+    root_choice = next(c for c in acc_choices if c["value"] == mid)
+    other_choice = next(c for c in acc_choices if c["value"] == "4" * 12)
+    assert "(management account)" in root_choice["title"]
+    assert "(management account)" not in other_choice["title"]
+
+
 @settings(max_examples=30, suppress_health_check=(HealthCheck.too_slow,))
 @given(
     n_accounts=st.integers(min_value=1, max_value=5),
@@ -114,7 +166,9 @@ def test_property_approval_card_account_facts(requester: str, acc_id: str, role:
     assert fact_items
     facts = {f["title"]: f["value"] for f in fact_items[0].get("facts", [])}
     assert facts["Requester"] == requester
-    assert role in (facts.get("Role") or "")
+    assert facts.get("Account name") == "acctname"
+    assert facts.get("Account ID") == acc_digits
+    assert role in (facts.get("Role name") or "")
     assert facts.get("Reason") == reason
     assert facts.get("Duration") == duration
 

@@ -28,6 +28,7 @@ from slack_sdk.models.views import View
 
 import config
 import entities
+import organizations
 import permission_duration_options
 import sso
 from entities import BaseModel
@@ -112,22 +113,27 @@ class RequestForAccessView:
         )
 
     @classmethod
-    def build_select_account_input_block(cls, accounts: list[entities.aws.Account]) -> InputBlock:
+    def build_select_account_input_block(cls, accounts: list[entities.aws.Account], management_account_id: str | None = None) -> InputBlock:
         # TODO: handle case when there are more than 100 accounts
         # 99 is the limit for StaticSelectElement
         # https://slack.dev/python-slack-sdk/api-docs/slack_sdk/models/blocks/block_elements.html#:~:text=StaticSelectElement(InputInteractiveElement)%3A%0A%20%20%20%20type%20%3D%20%22static_select%22-,options_max_length%20%3D%20100,-option_groups_max_length%20%3D%20100%0A%0A%20%20%20%20%40property%0A%20%20%20%20def%20attributes(
         if len(accounts) > 99:  # noqa: PLR2004
             accounts = accounts[:99]
         sorted_accounts = sorted(accounts, key=lambda account: account.name)
+
+        def _option_label(account: entities.aws.Account) -> str:
+            base = f"{account.id} - {account.name}"
+            if organizations.is_management_account(account.id, management_account_id):
+                return f"{base} (management account)"
+            return base
+
         return InputBlock(
             block_id=cls.ACCOUNT_BLOCK_ID,
             label=PlainTextObject(text="Select account"),
             element=StaticSelectElement(
                 action_id=cls.ACCOUNT_ACTION_ID,
                 placeholder=PlainTextObject(text="Select account"),
-                options=[
-                    Option(text=PlainTextObject(text=f"{account.id} - {account.name}"), value=account.id) for account in sorted_accounts
-                ],
+                options=[Option(text=PlainTextObject(text=_option_label(account)), value=account.id) for account in sorted_accounts],
             ),
         )
 
@@ -149,14 +155,17 @@ class RequestForAccessView:
 
     @classmethod
     def update_with_accounts_and_permission_sets(
-        cls, accounts: list[entities.aws.Account], permission_sets: list[entities.aws.PermissionSet]
+        cls,
+        accounts: list[entities.aws.Account],
+        permission_sets: list[entities.aws.PermissionSet],
+        management_account_id: str | None = None,
     ) -> View:
         view = cls.build()
         view.blocks = remove_blocks(view.blocks, block_ids=[cls.LOADING_BLOCK_ID])
         view.blocks = insert_blocks(
             blocks=view.blocks,
             blocks_to_insert=[
-                cls.build_select_account_input_block(accounts),
+                cls.build_select_account_input_block(accounts, management_account_id=management_account_id),
                 cls.build_select_permission_set_input_block(permission_sets),
             ],
             after_block_id=cls.REASON_BLOCK_ID,
@@ -240,12 +249,19 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
     role_name: Optional[str] = None,
     show_buttons: bool = True,
     elevator_request_id: str | None = None,
+    management_account_id: str | None = None,
 ) -> list[Block]:
-    fields = [
-        MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
-        MarkdownTextObject(text=f"Reason: {reason}"),
-        MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
-    ]
+    fields: list[MarkdownTextObject] = [MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>")]
+    if group:
+        fields.append(MarkdownTextObject(text=f"Group: {group.name} #{group.id}"))
+    elif account and role_name:
+        fields.append(MarkdownTextObject(text=f"Account name: {account.name}"))
+        fields.append(MarkdownTextObject(text=f"Account ID: {account.id}"))
+        fields.append(MarkdownTextObject(text=f"Role name: {role_name}"))
+
+    fields.append(MarkdownTextObject(text=f"Reason: {reason}"))
+    fields.append(MarkdownTextObject(text=f"Duration: {humanize_timedelta(permission_duration)}"))
+
     _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identity_store_client,
         identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
@@ -265,16 +281,20 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
                 )
             )
         )
-    if group:
-        fields.insert(1, MarkdownTextObject(text=f"Group: {group.name} #{group.id}"))
-    elif account and role_name:
-        fields.insert(1, MarkdownTextObject(text=f"Account: {account.name} #{account.id}"))
-        fields.insert(2, MarkdownTextObject(text=f"Role name: {role_name}"))
 
     blocks: list[Block] = [
         HeaderSectionBlock.new(color_coding_emoji),
         SectionBlock(block_id="content", fields=fields),
     ]
+    if account and role_name and organizations.is_management_account(account.id, management_account_id):
+        blocks.append(
+            SectionBlock(
+                block_id="management_account_warning",
+                text=MarkdownTextObject(
+                    text=":warning: *Warning: this request is for the AWS management account.* :warning:",
+                ),
+            )
+        )
     if show_buttons:
         ap, dp = entities.ApproverAction.Approve.value, entities.ApproverAction.Discard.value
         approve_val = f"{ap}::{elevator_request_id}" if elevator_request_id else ap

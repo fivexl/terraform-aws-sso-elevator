@@ -133,6 +133,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
 
         accounts = organizations.get_accounts_from_config_with_cache(org_client=org_client, s3_client=s3_client, cfg=cfg)
         permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
+        management_account_id = organizations.get_management_account_id(org_client)
 
         user_id = body.get("user", {}).get("id")
         callback_id = slack_helpers.RequestForAccessView.CALLBACK_ID
@@ -147,13 +148,16 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             # Fallback: open a new view with the data already loaded
             trigger_id = body["trigger_id"]
             view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(
-                accounts=accounts, permission_sets=permission_sets
+                accounts=accounts,
+                permission_sets=permission_sets,
+                management_account_id=management_account_id,
             )
             return client.views_open(trigger_id=trigger_id, view=view)
 
         view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(
             accounts=accounts,
             permission_sets=permission_sets,
+            management_account_id=management_account_id,
         )
         return client.views_update(view_id=view_id, view=view)
 
@@ -345,6 +349,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
         logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
         account = organizations.describe_account(org_client, request.account_id)
+        management_account_id = organizations.get_management_account_id(org_client)
 
         elevator_id = str(uuid.uuid4())
         request_store.put_access_request(
@@ -376,6 +381,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
                 show_buttons=show_buttons,
                 color_coding_emoji=cfg.waiting_result_emoji,
                 elevator_request_id=elevator_id,
+                management_account_id=management_account_id,
             ),
             channel=cfg.slack_channel_id,
             text=f"Request for access to {account.name} account from {requester.real_name}",

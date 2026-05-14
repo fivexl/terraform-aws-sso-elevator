@@ -143,6 +143,7 @@ data "aws_iam_policy_document" "revoker" {
   statement {
     effect = "Allow"
     actions = [
+      "organizations:DescribeOrganization",
       "organizations:ListAccounts",
       "organizations:DescribeAccount",
       "sso:ListPermissionSets",

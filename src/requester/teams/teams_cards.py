@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     import access_control
     import entities.aws
 
+import organizations
+
 _DURATION_PARTS_HMS = 3
 _DURATION_PARTS_HM = 2
 
@@ -163,9 +165,18 @@ def build_account_access_form(
     accounts: list[entities.aws.Account],
     permission_sets: list[entities.aws.PermissionSet],
     duration_options: list[str],
+    management_account_id: str | None = None,
 ) -> dict:
     """Build Adaptive Card for account access request Task Module."""
-    account_choices = [{"title": f"{a.name} ({a.id})", "value": a.id} for a in accounts]
+    account_choices: list[dict[str, str]] = [
+        {
+            "title": f"{a.name} (management account) ({a.id})"
+            if organizations.is_management_account(a.id, management_account_id)
+            else f"{a.name} ({a.id})",
+            "value": a.id,
+        }
+        for a in accounts
+    ]
     permission_set_choices = [{"title": ps.name, "value": ps.name} for ps in permission_sets]
     duration_choices = [{"title": d, "value": d} for d in duration_options]
 
@@ -282,14 +293,16 @@ def build_approval_card(  # noqa: PLR0913
     request_data: dict,
     elevator_request_id: str | None = None,
     header_subtitle: str | None = None,
+    management_account_id: str | None = None,
 ) -> dict:
     """Build Adaptive Card for approval request message in channel."""
     if account is not None:
         title = "AWS Account Access Request"
         facts = [
             {"title": "Requester", "value": requester_name},
-            {"title": "Account", "value": f"{account.name} ({account.id})"},
-            {"title": "Role", "value": role_name or ""},
+            {"title": "Account name", "value": account.name},
+            {"title": "Account ID", "value": account.id},
+            {"title": "Role name", "value": role_name or ""},
             {"title": "Reason", "value": reason},
             {"title": "Duration", "value": permission_duration},
         ]
@@ -331,6 +344,21 @@ def build_approval_card(  # noqa: PLR0913
             "facts": facts,
         },
     ]
+    if account is not None and organizations.is_management_account(account.id, management_account_id):
+        body.append(
+            {
+                "type": "Container",
+                "style": "attention",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "⚠️ Warning: this request is for the AWS management account. ⚠️",
+                        "wrap": True,
+                        "weight": "bolder",
+                    }
+                ],
+            }
+        )
 
     card: dict = {
         "type": "AdaptiveCard",
