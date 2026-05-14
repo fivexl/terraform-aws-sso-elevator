@@ -72,6 +72,7 @@ module "access_revoker" {
     REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
     MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
     PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
+    ACCOUNT_WARNING_MESSAGES                    = jsonencode(var.account_warning_messages)
     CONFIG_BUCKET_NAME                          = local.config_bucket_name
     CONFIG_S3_KEY                               = "config/approval-config.json"
 
@@ -143,7 +144,6 @@ data "aws_iam_policy_document" "revoker" {
   statement {
     effect = "Allow"
     actions = [
-      "organizations:DescribeOrganization",
       "organizations:ListAccounts",
       "organizations:DescribeAccount",
       "sso:ListPermissionSets",

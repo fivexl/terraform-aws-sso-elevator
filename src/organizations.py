@@ -12,25 +12,6 @@ def parse_account(td: type_defs.AccountTypeDef) -> Account:
     return Account.model_validate({"id": td.get("Id"), "name": td.get("Name")})
 
 
-def is_management_account(account_id: str, management_account_id: str | None) -> bool:
-    """True if ``account_id`` is the org management account (matches API ``MasterAccountId``)."""
-    if not management_account_id or not account_id:
-        return False
-    return account_id.strip() == management_account_id.strip()
-
-
-def get_management_account_id(client: OrganizationsClient) -> str | None:
-    """Return the management account ID via ``DescribeOrganization`` (``MasterAccountId`` field)."""
-    try:
-        resp = client.describe_organization()
-        mid = (resp.get("Organization") or {}).get("MasterAccountId")
-        if mid and isinstance(mid, str) and mid.strip():
-            return mid.strip()
-    except Exception as e:
-        logger.exception(f"Failed to describe organization: {e}")
-    return None
-
-
 def list_accounts(client: OrganizationsClient) -> list[Account]:
     accounts = []
     paginator = client.get_paginator("list_accounts")

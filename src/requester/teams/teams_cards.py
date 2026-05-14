@@ -8,16 +8,26 @@ from __future__ import annotations
 
 import copy
 from datetime import timedelta
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import access_control
     import entities.aws
 
-import organizations
+import config
 
 _DURATION_PARTS_HMS = 3
 _DURATION_PARTS_HM = 2
+
+_FLAGGED_ACCOUNTS_FORM_HINT = (
+    "Some accounts in this list are flagged in SSO Elevator configuration for extra scrutiny; "
+    "approvers will see the exact warning when you submit a request for one of those accounts."
+)
+
+
+def _any_account_has_configured_warning(accounts: list[entities.aws.Account], messages: Mapping[str, str]) -> bool:
+    return any(config.account_warning_message(a.id, messages) for a in accounts)
 
 
 def parse_duration_choice(duration_str: str) -> timedelta:
@@ -165,32 +175,33 @@ def build_account_access_form(
     accounts: list[entities.aws.Account],
     permission_sets: list[entities.aws.PermissionSet],
     duration_options: list[str],
-    management_account_id: str | None = None,
+    account_warning_messages: Mapping[str, str] | None = None,
 ) -> dict:
     """Build Adaptive Card for account access request Task Module."""
-    account_choices: list[dict[str, str]] = [
-        {
-            "title": f"{a.name} (management account) ({a.id})"
-            if organizations.is_management_account(a.id, management_account_id)
-            else f"{a.name} ({a.id})",
-            "value": a.id,
-        }
-        for a in accounts
-    ]
+    msgs = account_warning_messages or {}
+    account_choices: list[dict[str, str]] = [{"title": f"{a.id} - {a.name}", "value": a.id} for a in accounts]
     permission_set_choices = [{"title": ps.name, "value": ps.name} for ps in permission_sets]
     duration_choices = [{"title": d, "value": d} for d in duration_options]
 
-    return {
-        "type": "AdaptiveCard",
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.5",
-        "body": [
+    body: list[dict] = [
+        {
+            "type": "TextBlock",
+            "text": "Request AWS Account Access",
+            "size": "large",
+            "weight": "bolder",
+        },
+    ]
+    if _any_account_has_configured_warning(accounts, msgs):
+        body.append(
             {
                 "type": "TextBlock",
-                "text": "Request AWS Account Access",
-                "size": "large",
+                "text": _FLAGGED_ACCOUNTS_FORM_HINT,
+                "wrap": True,
                 "weight": "bolder",
-            },
+            }
+        )
+    body.extend(
+        [
             {
                 "type": "Input.ChoiceSet",
                 "id": "account_id",
@@ -226,7 +237,14 @@ def build_account_access_form(
                 "isRequired": True,
                 "errorMessage": "Please provide a reason",
             },
-        ],
+        ]
+    )
+
+    return {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.5",
+        "body": body,
         "actions": [{"type": "Action.Submit", "title": "Request"}],
     }
 
@@ -293,9 +311,10 @@ def build_approval_card(  # noqa: PLR0913
     request_data: dict,
     elevator_request_id: str | None = None,
     header_subtitle: str | None = None,
-    management_account_id: str | None = None,
+    account_warning_messages: Mapping[str, str] | None = None,
 ) -> dict:
     """Build Adaptive Card for approval request message in channel."""
+    warn_msgs = account_warning_messages or {}
     if account is not None:
         title = "AWS Account Access Request"
         facts = [
@@ -344,7 +363,8 @@ def build_approval_card(  # noqa: PLR0913
             "facts": facts,
         },
     ]
-    if account is not None and organizations.is_management_account(account.id, management_account_id):
+    warn_text = config.account_warning_message(account.id, warn_msgs) if account is not None else None
+    if warn_text:
         body.append(
             {
                 "type": "Container",
@@ -352,7 +372,7 @@ def build_approval_card(  # noqa: PLR0913
                 "items": [
                     {
                         "type": "TextBlock",
-                        "text": "⚠️ Warning: this request is for the AWS management account. ⚠️",
+                        "text": warn_text,
                         "wrap": True,
                         "weight": "bolder",
                     }

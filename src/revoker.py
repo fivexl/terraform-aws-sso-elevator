@@ -764,10 +764,7 @@ def _build_teams_approval_card_for_expiry(
             color_style=waiting_style,
             request_data=req_data,
             elevator_request_id=elevator_request_id,
-            management_account_id=None,
         )
-
-    management_account_id = organizations.get_management_account_id(org_client)
 
     try:
         account = organizations.describe_account(org_client, rec.account_id or "")
@@ -791,7 +788,7 @@ def _build_teams_approval_card_for_expiry(
         color_style=waiting_style,
         request_data=req_data2,
         elevator_request_id=elevator_request_id,
-        management_account_id=management_account_id,
+        account_warning_messages=cfg.account_warning_messages,
     )
 
 

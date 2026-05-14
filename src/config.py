@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Mapping
 from typing import Literal, Optional
 
 from aws_lambda_powertools import Logger
@@ -106,6 +107,31 @@ def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str
     return frozenset(group for statement in statements for group in statement.resource)
 
 
+def parse_account_warning_messages_raw(raw: object) -> dict[str, str]:
+    """Normalize Terraform/json-encoded ``account_warning_messages`` to stripped account ID keys."""
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, str):
+        if not raw.strip():
+            return {}
+        data = json.loads(raw)
+    elif isinstance(raw, dict):
+        data = raw
+    else:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k).strip(): str(v) for k, v in data.items() if str(k).strip()}
+
+
+def account_warning_message(account_id: str, messages: Mapping[str, str]) -> str | None:
+    """Return the configured warning for ``account_id``, or ``None`` if unlisted."""
+    aid = (account_id or "").strip()
+    if not aid:
+        return None
+    return messages.get(aid)
+
+
 class Config(BaseSettings):
     model_config = SettingsConfigDict(frozen=True)
 
@@ -151,6 +177,9 @@ class Config(BaseSettings):
 
     max_permissions_duration_time: int
     permission_duration_list_override: list
+
+    #: Map of AWS account ID to warning text (from Terraform / env JSON). Keys are stripped at load.
+    account_warning_messages: dict[str, str]
 
     config_bucket_name: str = "sso-elevator-config"
     config_s3_key: str = ""
@@ -210,6 +239,7 @@ class Config(BaseSettings):
             permission_sets.update(statement.permission_set)
             if statement.resource_type == "Account":
                 accounts.update(statement.resource)
+        account_warning_messages = parse_account_warning_messages_raw(values.get("account_warning_messages"))
         return values | {
             "accounts": accounts,
             "permission_sets": permission_sets,
@@ -217,6 +247,7 @@ class Config(BaseSettings):
             "group_statements": frozenset(group_statements),
             "groups": groups,
             "s3_bucket_prefix_for_partitions": s3_bucket_prefix_for_partitions,
+            "account_warning_messages": account_warning_messages,
         }
 
     @model_validator(mode="after")

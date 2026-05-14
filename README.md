@@ -1024,6 +1024,7 @@ Use that decoded string as `teams_approval_conversation_id`. It must match the c
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| <a name="input_account_warning_messages"></a> [account\_warning\_messages](#input\_account\_warning\_messages) | Map of AWS account ID (12 digits) to a short warning string shown to requesters (Slack modal) and approvers (Slack / Teams)<br/>  when that account is selected or requested. Accounts not in the map behave normally. No Organizations API is used. | `map(string)` | `{}` | no |
 | <a name="input_api_gateway_name"></a> [api\_gateway\_name](#input\_api\_gateway\_name) | The name of the API Gateway for SSO Elevator's access-requester Lambda | `string` | `"sso-elevator-access-requster"` | no |
 | <a name="input_api_gateway_throttling_burst_limit"></a> [api\_gateway\_throttling\_burst\_limit](#input\_api\_gateway\_throttling\_burst\_limit) | The maximum number of requests that API Gateway allows in a burst. | `number` | `5` | no |
 | <a name="input_api_gateway_throttling_rate_limit"></a> [api\_gateway\_throttling\_rate\_limit](#input\_api\_gateway\_throttling\_rate\_limit) | The maximum number of requests that API Gateway allows per second. | `number` | `1` | no |

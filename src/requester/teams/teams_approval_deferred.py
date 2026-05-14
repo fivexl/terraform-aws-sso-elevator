@@ -244,7 +244,6 @@ async def post_group_approval_to_teams_channel(  # noqa: PLR0912
         request_data=request_data,
         elevator_request_id=elevator_id,
         header_subtitle=header_subtitle,
-        management_account_id=None,
     )
 
     tpar = (teams_parent_activity_id or "").strip() or None
@@ -366,8 +365,6 @@ async def post_account_approval_to_teams_channel(  # noqa: PLR0912
     except Exception:
         account = entities.aws.Account(id=rec.account_id or "", name=rec.account_id or "")
 
-    management_account_id = organizations.get_management_account_id(org_client)
-
     show_buttons = bool(decision.approvers)
     color_style, header_subtitle = teams_cards.teams_access_request_card_style_and_subtitle(
         decision,
@@ -396,7 +393,7 @@ async def post_account_approval_to_teams_channel(  # noqa: PLR0912
         request_data=request_data,
         elevator_request_id=elevator_id,
         header_subtitle=header_subtitle,
-        management_account_id=management_account_id,
+        account_warning_messages=c.account_warning_messages,
     )
 
     tpar = (teams_parent_activity_id or "").strip() or None

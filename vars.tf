@@ -306,6 +306,15 @@ variable "permission_duration_list_override" {
   }
 }
 
+variable "account_warning_messages" {
+  description = <<EOT
+  Map of AWS account ID (12 digits) to a short warning string shown to requesters (Slack modal) and approvers (Slack / Teams)
+  when that account is selected or requested. Accounts not in the map behave normally. No Organizations API is used.
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 variable "logs_retention_in_days" {
   description = "The number of days you want to retain log events in the log group for both Lambda functions and API Gateway."
   type        = number

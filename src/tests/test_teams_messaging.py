@@ -46,9 +46,10 @@ def _head_container_style(card: dict) -> str | None:
     return None
 
 
-def test_account_approval_card_management_warning_container() -> None:
+def test_account_approval_card_configured_warning_container() -> None:
     mid = "1" * 12
-    acc = aws.Account(id=mid, name="MgmtRoot")
+    warn = "Custom scrutiny warning for this account"
+    acc = aws.Account(id=mid, name="Sensitive")
     card = teams_cards.build_approval_card(
         requester_name="RequesterOne",
         account=acc,
@@ -60,13 +61,13 @@ def test_account_approval_card_management_warning_container() -> None:
         color_style="warning",
         request_data={"x": 1},
         elevator_request_id="e-mgmt",
-        management_account_id=mid,
+        account_warning_messages={mid: warn},
     )
     attention_containers = [x for x in card.get("body", []) if x.get("type") == "Container" and x.get("style") == "attention"]
     assert len(attention_containers) == 1
     inner = attention_containers[0].get("items") or []
     joined = " ".join((it.get("text") or "") for it in inner if it.get("type") == "TextBlock")
-    assert "management account" in joined.lower()
+    assert warn in joined
 
 
 def test_account_approval_card_member_has_no_attention_warning() -> None:
@@ -81,21 +82,23 @@ def test_account_approval_card_member_has_no_attention_warning() -> None:
         show_buttons=False,
         color_style="default",
         request_data={},
-        management_account_id="1" * 12,
+        account_warning_messages={"1" * 12: "other only"},
     )
     assert not any(x.get("type") == "Container" and x.get("style") == "attention" for x in card.get("body", []))
 
 
-def test_account_access_form_marks_management_choice() -> None:
+def test_account_access_form_shows_hint_when_any_account_flagged() -> None:
     mid = "3" * 12
     accounts = [aws.Account(id=mid, name="Root"), aws.Account(id="4" * 12, name="Other")]
     psets = [aws.PermissionSet(name="P1", arn="arn:aws:sso:::permissionSet/ssoins-xxx/ps-xxx", description=None)]
-    card = teams_cards.build_account_access_form(accounts, psets, ["1:00:00"], management_account_id=mid)
+    card = teams_cards.build_account_access_form(accounts, psets, ["1:00:00"], account_warning_messages={mid: "flagged"})
+    body_text = " ".join(x.get("text", "") for x in card["body"] if x.get("type") == "TextBlock")
+    assert "SSO Elevator configuration" in body_text and "extra scrutiny" in body_text
     acc_choices = next(x for x in card["body"] if x.get("id") == "account_id")["choices"]
     root_choice = next(c for c in acc_choices if c["value"] == mid)
     other_choice = next(c for c in acc_choices if c["value"] == "4" * 12)
-    assert "(management account)" in root_choice["title"]
-    assert "(management account)" not in other_choice["title"]
+    assert root_choice["title"] == f"{mid} - Root"
+    assert other_choice["title"] == f"{'4' * 12} - Other"
 
 
 @settings(max_examples=30, suppress_health_check=(HealthCheck.too_slow,))

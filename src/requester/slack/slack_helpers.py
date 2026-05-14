@@ -28,7 +28,6 @@ from slack_sdk.models.views import View
 
 import config
 import entities
-import organizations
 import permission_duration_options
 import sso
 from entities import BaseModel
@@ -66,6 +65,7 @@ class RequestForAccessView:
     DURATION_ACTION_ID = "duration_picker_action"
 
     LOADING_BLOCK_ID = "loading"
+    ACCOUNT_WARNING_BLOCK_ID = "account_access_warning"
 
     @classmethod
     def build(cls) -> View:
@@ -113,7 +113,7 @@ class RequestForAccessView:
         )
 
     @classmethod
-    def build_select_account_input_block(cls, accounts: list[entities.aws.Account], management_account_id: str | None = None) -> InputBlock:
+    def build_select_account_input_block(cls, accounts: list[entities.aws.Account]) -> InputBlock:
         # TODO: handle case when there are more than 100 accounts
         # 99 is the limit for StaticSelectElement
         # https://slack.dev/python-slack-sdk/api-docs/slack_sdk/models/blocks/block_elements.html#:~:text=StaticSelectElement(InputInteractiveElement)%3A%0A%20%20%20%20type%20%3D%20%22static_select%22-,options_max_length%20%3D%20100,-option_groups_max_length%20%3D%20100%0A%0A%20%20%20%20%40property%0A%20%20%20%20def%20attributes(
@@ -121,19 +121,16 @@ class RequestForAccessView:
             accounts = accounts[:99]
         sorted_accounts = sorted(accounts, key=lambda account: account.name)
 
-        def _option_label(account: entities.aws.Account) -> str:
-            base = f"{account.id} - {account.name}"
-            if organizations.is_management_account(account.id, management_account_id):
-                return f"{base} (management account)"
-            return base
-
         return InputBlock(
             block_id=cls.ACCOUNT_BLOCK_ID,
             label=PlainTextObject(text="Select account"),
+            dispatch_action=True,
             element=StaticSelectElement(
                 action_id=cls.ACCOUNT_ACTION_ID,
                 placeholder=PlainTextObject(text="Select account"),
-                options=[Option(text=PlainTextObject(text=_option_label(account)), value=account.id) for account in sorted_accounts],
+                options=[
+                    Option(text=PlainTextObject(text=f"{account.id} - {account.name}"), value=account.id) for account in sorted_accounts
+                ],
             ),
         )
 
@@ -158,14 +155,13 @@ class RequestForAccessView:
         cls,
         accounts: list[entities.aws.Account],
         permission_sets: list[entities.aws.PermissionSet],
-        management_account_id: str | None = None,
     ) -> View:
         view = cls.build()
         view.blocks = remove_blocks(view.blocks, block_ids=[cls.LOADING_BLOCK_ID])
         view.blocks = insert_blocks(
             blocks=view.blocks,
             blocks_to_insert=[
-                cls.build_select_account_input_block(accounts, management_account_id=management_account_id),
+                cls.build_select_account_input_block(accounts),
                 cls.build_select_permission_set_input_block(permission_sets),
             ],
             after_block_id=cls.REASON_BLOCK_ID,
@@ -205,6 +201,44 @@ def remove_blocks(blocks: list[T], block_ids: list[str]) -> list[T]:
 def insert_blocks(blocks: list[T], blocks_to_insert: list[Block], after_block_id: str) -> list[T]:
     index = next(i for i, block in enumerate(blocks) if get_block_id(block) == after_block_id)
     return blocks[: index + 1] + blocks_to_insert + blocks[index + 1 :]  # type: ignore
+
+
+def apply_account_warning_to_view_blocks(
+    blocks: list[dict],
+    *,
+    selected_account_id: str | None,
+    messages: dict[str, str],
+) -> list[dict]:
+    """Insert or remove the modal warning section above the account select without rebuilding the whole view."""
+    bid_warn = RequestForAccessView.ACCOUNT_WARNING_BLOCK_ID
+    bid_acc = RequestForAccessView.ACCOUNT_BLOCK_ID
+    out = [b for b in blocks if b.get("block_id") != bid_warn]
+    acc_idx = next((i for i, b in enumerate(out) if b.get("block_id") == bid_acc), None)
+    if acc_idx is None:
+        return out
+    msg = config.account_warning_message(selected_account_id or "", messages) if selected_account_id else None
+    if msg:
+        section = {
+            "type": "section",
+            "block_id": bid_warn,
+            "text": {"type": "mrkdwn", "text": msg},
+        }
+        return out[:acc_idx] + [section] + out[acc_idx:]
+    return out
+
+
+def view_payload_for_modal_update(view: dict, blocks: list[dict]) -> dict:
+    """Subset of view fields required by ``views.update`` (Slack rejects unknown keys)."""
+    payload: dict = {
+        "type": view["type"],
+        "callback_id": view["callback_id"],
+        "title": view["title"],
+        "blocks": blocks,
+    }
+    for key in ("submit", "close", "private_metadata", "clear_on_close", "notify_on_close", "external_id"):
+        if key in view and view[key] is not None:
+            payload[key] = view[key]
+    return payload
 
 
 def humanize_timedelta(td: timedelta) -> str:
@@ -249,7 +283,7 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
     role_name: Optional[str] = None,
     show_buttons: bool = True,
     elevator_request_id: str | None = None,
-    management_account_id: str | None = None,
+    account_access_warning_message: str | None = None,
 ) -> list[Block]:
     fields: list[MarkdownTextObject] = [MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>")]
     if group:
@@ -282,19 +316,15 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
             )
         )
 
-    blocks: list[Block] = [
-        HeaderSectionBlock.new(color_coding_emoji),
-        SectionBlock(block_id="content", fields=fields),
-    ]
-    if account and role_name and organizations.is_management_account(account.id, management_account_id):
+    blocks: list[Block] = [HeaderSectionBlock.new(color_coding_emoji)]
+    if account_access_warning_message and account and role_name:
         blocks.append(
             SectionBlock(
-                block_id="management_account_warning",
-                text=MarkdownTextObject(
-                    text=":warning: *Warning: this request is for the AWS management account.* :warning:",
-                ),
+                block_id="account_access_warning",
+                text=MarkdownTextObject(text=account_access_warning_message),
             )
         )
+    blocks.append(SectionBlock(block_id="content", fields=fields))
     if show_buttons:
         ap, dp = entities.ApproverAction.Approve.value, entities.ApproverAction.Discard.value
         approve_val = f"{ap}::{elevator_request_id}" if elevator_request_id else ap
