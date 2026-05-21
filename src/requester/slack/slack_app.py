@@ -252,6 +252,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             permission_set_name=payload.request.permission_set_name,
             approver_email=approver.email,
             requester_email=requester.email,
+            requester_group_ids=access_control.get_requester_group_ids(requester.email),
         )
         logger.info("Decision on request was made", extra={"decision": decision.dict()})
 

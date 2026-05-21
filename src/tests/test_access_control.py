@@ -1207,3 +1207,43 @@ def test_empty_allowed_groups_is_unrestricted_and_backward_compatible():
     )
     assert decision.grant is True
     assert decision.reason == DecisionReason.ApprovalNotRequired
+
+
+def test_approve_blocked_when_requester_not_in_allowed_group():
+    """Defense in depth: at approval time a group-restricted statement does not apply to a
+    requester outside the group, so an approver cannot grant it."""
+    decision = make_decision_on_approve_request(
+        action=entities.ApproverAction.Approve,
+        statements=frozenset([_admin_statement_restricted_to(ADMIN_GROUP_ID)]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        approver_email="lead@example.com",
+        requester_email="developer@example.com",
+        requester_group_ids=frozenset({OTHER_GROUP_ID}),
+    )
+    assert decision.permit is False
+    assert decision.grant is False
+
+
+def test_approve_allowed_for_member_of_allowed_group():
+    """A member of the allowed group can be approved at approval time."""
+    st = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approvers": ["lead@example.com"],
+            "allowed_groups": [ADMIN_GROUP_ID],
+        }
+    )
+    decision = make_decision_on_approve_request(
+        action=entities.ApproverAction.Approve,
+        statements=frozenset([st]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        approver_email="lead@example.com",
+        requester_email="infra@example.com",
+        requester_group_ids=frozenset({ADMIN_GROUP_ID}),
+    )
+    assert decision.permit is True
+    assert decision.grant is True

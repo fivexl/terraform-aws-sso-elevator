@@ -356,6 +356,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             permission_set_name=rec.permission_set_name,
             approver_email=approver.email,
             requester_email=re_email,
+            requester_group_ids=access_control.get_requester_group_ids(re_email),
         )
 
         if not decision.permit:
