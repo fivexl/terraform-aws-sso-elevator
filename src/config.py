@@ -132,6 +132,11 @@ class Config(BaseSettings):
 
     send_dm_if_user_not_in_channel: bool = True
 
+    #: Show the "Secondary Domain Fallback Used" warning in the approval message when a
+    #: requester is resolved via secondary_fallback_email_domains. Set False where the
+    #: fallback is expected (e.g. a single chat identity spanning multiple SSO domains).
+    warn_on_secondary_domain_fallback: bool = True
+
     sso_instance_arn: str
 
     log_level: str = "INFO"
