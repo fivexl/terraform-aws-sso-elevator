@@ -384,6 +384,17 @@ Please ensure these permissions are enabled in the Slack app configuration.
 EOT
 }
 
+variable "warn_on_secondary_domain_fallback" {
+  type        = bool
+  default     = true
+  description = <<EOT
+Show the "Secondary Domain Fallback Used" warning in the approval message when a requester is resolved
+via secondary_fallback_email_domains. Defaults to true (the warning is shown). Set to false in deployments
+where the fallback is expected by design (e.g. a single chat identity that spans multiple SSO email domains),
+to avoid alarm fatigue.
+EOT
+}
+
 variable "lambda_timeout" {
   description = "The amount of time your Lambda Function has to run in seconds."
   type        = number
