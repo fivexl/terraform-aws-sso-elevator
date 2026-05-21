@@ -60,7 +60,7 @@ module "access_revoker" {
     SCHEDULE_GROUP_NAME = var.schedule_group_name
 
     SSO_INSTANCE_ARN            = local.sso_instance_arn
-    POWERTOOLS_LOGGER_LOG_EVENT = true
+    POWERTOOLS_LOGGER_LOG_EVENT = var.log_event
 
     POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
     SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn

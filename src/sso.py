@@ -355,7 +355,7 @@ def _find_user_principal_id_by_email(email: str, list_of_users: dict) -> str | N
         for user in list_of_users["Users"]:
             for user_email in user.get("Emails", []):
                 if user_email.get("Value", "").lower() == email.lower():
-                    logger.info("Found SSO user", extra={"user": user})
+                    logger.info("Found SSO user", extra={"user_id": user.get("UserId")})
                     return user["UserId"]
         logger.info("User not found", extra={"email": email})
         return None

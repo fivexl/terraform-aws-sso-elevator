@@ -63,7 +63,7 @@ module "attribute_syncer" {
 
     SSO_INSTANCE_ARN            = local.sso_instance_arn
     IDENTITY_STORE_ID           = local.identity_store_id
-    POWERTOOLS_LOGGER_LOG_EVENT = true
+    POWERTOOLS_LOGGER_LOG_EVENT = var.log_event
 
     S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
     S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix
