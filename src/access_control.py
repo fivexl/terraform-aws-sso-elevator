@@ -11,7 +11,7 @@ import s3
 import schedule
 import sso
 from entities import BaseModel
-from statement import GroupStatement, Statement, get_affected_group_statements, get_affected_statements
+from statement import GroupStatement, Statement, get_affected_group_statements, get_affected_statements, requester_allowed
 
 if TYPE_CHECKING:
     from datetime import timedelta
@@ -91,6 +91,35 @@ def _requester_is_same_user_as_approver(approver_email: str, requester_email: st
     return bool(sso.email_variants_with_secondary_domains(ae, cfg) & sso.email_variants_with_secondary_domains(re, cfg))
 
 
+def get_requester_group_ids(requester_email: str) -> FrozenSet[str]:
+    """Resolve the SSO group IDs the requester belongs to.
+
+    Used to evaluate the optional ``allowed_groups`` requester restriction. Returns an empty
+    set if the requester can't be resolved to an SSO user — restricted statements then deny
+    (fail closed) while unrestricted statements are unaffected.
+    """
+    try:
+        sso_instance = sso.describe_sso_instance(_get_sso_client(), cfg.sso_instance_arn)
+        user_principal_id, _ = sso.get_user_principal_id_by_email(
+            identity_store_client=_get_identitystore_client(),
+            identity_store_id=sso_instance.identity_store_id,
+            email=requester_email,
+            cfg=cfg,
+        )
+        return sso.list_groups_for_user(sso_instance.identity_store_id, user_principal_id, _get_identitystore_client())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not resolve requester group memberships; treating as no groups", extra={"error": str(e)})
+        return frozenset()
+
+
+def _filter_statements_by_requester_groups(
+    statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
+    requester_group_ids: FrozenSet[str],
+) -> FrozenSet[Statement] | FrozenSet[GroupStatement]:
+    """Drop statements the requester isn't eligible for, based on each statement's ``allowed_groups``."""
+    return frozenset(st for st in statements if requester_allowed(st.allowed_groups, requester_group_ids))  # type: ignore # noqa: PGH003
+
+
 def determine_affected_statements(
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     account_id: str | None = None,
@@ -109,14 +138,16 @@ def determine_affected_statements(
     raise TypeError("Statements contain mixed or unsupported types.")
 
 
-def make_decision_on_access_request(  # noqa: PLR0911
+def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     requester_email: str,
     permission_set_name: str | None = None,
     account_id: str | None = None,
     group_id: str | None = None,
+    requester_group_ids: FrozenSet[str] = frozenset(),
 ) -> AccessRequestDecision:
     affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
+    affected_statements = _filter_statements_by_requester_groups(affected_statements, requester_group_ids)
 
     decision_based_on_statements: set[Statement] | set[GroupStatement] = set()
     potential_approvers = set()
@@ -193,8 +224,10 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     permission_set_name: str | None = None,
     account_id: str | None = None,
     group_id: str | None = None,
+    requester_group_ids: FrozenSet[str] = frozenset(),
 ) -> ApproveRequestDecision:
     affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
+    affected_statements = _filter_statements_by_requester_groups(affected_statements, requester_group_ids)
 
     for statement in affected_statements:
         if not _approver_in_configured_approvers(approver_email, statement.approvers):

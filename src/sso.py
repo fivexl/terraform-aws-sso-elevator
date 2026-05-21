@@ -606,6 +606,18 @@ def list_group_memberships(
     return group_memberships
 
 
+def list_groups_for_user(identity_store_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> frozenset[str]:
+    """Return the set of SSO group IDs the given user is a member of."""
+    paginator = identity_store_client.get_paginator("list_group_memberships_for_member")
+    group_ids: set[str] = set()
+    for page in paginator.paginate(IdentityStoreId=identity_store_id, MemberId={"UserId": sso_user_id}):
+        for membership in page["GroupMemberships"]:
+            if group_id := membership.get("GroupId"):  # type: ignore # noqa: PGH003
+                group_ids.add(group_id)
+    logger.debug("Groups for user", extra={"sso_user_id": sso_user_id, "group_ids": group_ids})
+    return frozenset(group_ids)
+
+
 def is_user_in_group(identity_store_id: str, group_id: str, sso_user_id: str, identity_store_client: IdentityStoreClient) -> str | None:
     group_memberships = list_group_memberships(identity_store_id, group_id, identity_store_client)
     for member in group_memberships:

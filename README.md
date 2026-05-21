@@ -429,7 +429,8 @@ The fields in the configuration dictionary are:
 - **Approvers**: This field lists the potential approvers for the request. It accepts either a single string or a list of strings representing different approvers.
 - **AllowSelfApproval**: This field can be a boolean, indicating whether the requester, if present in the `Approvers` list, is permitted to approve their own request. It defaults to `None`.
 - **ApprovalIsNotRequired**: This field can also be a boolean, signifying whether the approval can be granted automatically, bypassing the approvers entirely. The default value is `None`.
-- 
+- **AllowedGroups**: Optional. A single string or list of SSO group IDs. When set, only requesters who are members of at least one of these groups may use this statement; the statement is ignored for everyone else (the request is denied as if no statement matched). When omitted or empty (the default), there is no requester restriction — current behavior is preserved. This applies to both account statements (`config`) and group statements (`group_config`). Requester group membership is resolved at request time via the Identity Store; if the requester can't be resolved to an SSO user, restricted statements deny (fail closed) while unrestricted statements are unaffected.
+
 ### Explicit Deny
 In the system, an explicit denial in any statement overrides any approvals. For instance, if one statement designates an individual as an approver for all accounts, but another statement specifies that the same individual is not allowed to self-approve or to bypass the approval process for a particular account and permission set (by setting "allow_self_approval" and "approval_is_not_required" to `False`), then that individual will not be able to approve requests for that specific account, thereby enforcing a stricter control.
 

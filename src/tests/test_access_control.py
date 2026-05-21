@@ -1130,3 +1130,80 @@ def test_ordered_email_variants_for_graph_lookup_order():
         "user@tenant.onmicrosoft.com",
         "user@contoso.com",
     ]
+
+
+# ----------------- Requester group restriction (allowed_groups) ----------------- #
+
+ADMIN_GROUP_ID = "12345678-1234-1234-1234-123456789012"
+OTHER_GROUP_ID = "99999999-9999-9999-9999-999999999999"
+
+
+def _admin_statement_restricted_to(group_id: str) -> Statement:
+    return Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approval_is_not_required": True,
+            "allowed_groups": [group_id],
+        }
+    )
+
+
+def test_requester_allowed_helper():
+    from statement import requester_allowed
+
+    # Empty allowed_groups = unrestricted, regardless of requester groups.
+    assert requester_allowed(frozenset(), frozenset()) is True
+    assert requester_allowed(frozenset(), frozenset({OTHER_GROUP_ID})) is True
+    # Restricted: requires membership in at least one listed group.
+    assert requester_allowed(frozenset({ADMIN_GROUP_ID}), frozenset({ADMIN_GROUP_ID, OTHER_GROUP_ID})) is True
+    assert requester_allowed(frozenset({ADMIN_GROUP_ID}), frozenset({OTHER_GROUP_ID})) is False
+    assert requester_allowed(frozenset({ADMIN_GROUP_ID}), frozenset()) is False
+
+
+def test_allowed_groups_blocks_non_member():
+    """A statement restricted to a group denies a requester who is not a member."""
+    decision = make_decision_on_access_request(
+        frozenset([_admin_statement_restricted_to(ADMIN_GROUP_ID)]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        requester_email="developer@example.com",
+        requester_group_ids=frozenset({OTHER_GROUP_ID}),
+    )
+    assert decision.grant is False
+    assert decision.reason == DecisionReason.NoStatements
+
+
+def test_allowed_groups_allows_member():
+    """A member of an allowed group is granted (auto-approval path here)."""
+    decision = make_decision_on_access_request(
+        frozenset([_admin_statement_restricted_to(ADMIN_GROUP_ID)]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        requester_email="infra@example.com",
+        requester_group_ids=frozenset({ADMIN_GROUP_ID}),
+    )
+    assert decision.grant is True
+    assert decision.reason == DecisionReason.ApprovalNotRequired
+
+
+def test_empty_allowed_groups_is_unrestricted_and_backward_compatible():
+    """Statements without allowed_groups behave exactly as before, even with no requester groups."""
+    st = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approval_is_not_required": True,
+        }
+    )
+    decision = make_decision_on_access_request(
+        frozenset([st]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        requester_email="anyone@example.com",
+        requester_group_ids=frozenset(),
+    )
+    assert decision.grant is True
+    assert decision.reason == DecisionReason.ApprovalNotRequired

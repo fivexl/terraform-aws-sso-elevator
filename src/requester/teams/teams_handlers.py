@@ -573,6 +573,7 @@ def register_teams_app_handlers(app: App, deps: TeamsDependencies) -> None:
             requester_email=user.email,
             account_id=account_id,
             permission_set_name=permission_set_name,
+            requester_group_ids=access_control.get_requester_group_ids(user.email),
         )
 
         request_store.put_access_request(

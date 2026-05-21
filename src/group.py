@@ -80,6 +80,7 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
         cfg.group_statements,
         requester_email=requester.email,
         group_id=request.group_id,
+        requester_group_ids=access_control.get_requester_group_ids(requester.email),
     )
 
     elevator_id = str(uuid.uuid4())
@@ -409,6 +410,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
         cfg.group_statements,
         requester_email=user.email,
         group_id=group_id,
+        requester_group_ids=access_control.get_requester_group_ids(user.email),
     )
 
     request_store.put_access_request(
