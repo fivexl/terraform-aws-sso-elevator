@@ -104,23 +104,6 @@ module "access_requester_slack_handler" {
 
 data "aws_iam_policy_document" "slack_handler" {
   statement {
-    sid    = "GetSAMLProvider"
-    effect = "Allow"
-    actions = [
-      "iam:GetSAMLProvider"
-    ]
-    resources = ["*"]
-  }
-  statement {
-    sid    = "UpdateSAMLProvider"
-    effect = "Allow"
-    actions = [
-      "iam:UpdateSAMLProvider",
-    ]
-    resources = ["*"]
-  }
-
-  statement {
     sid    = "GetInvokeSelf"
     effect = "Allow"
     actions = [
