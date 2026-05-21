@@ -104,23 +104,6 @@ module "access_requester_slack_handler" {
 
 data "aws_iam_policy_document" "slack_handler" {
   statement {
-    sid    = "GetSAMLProvider"
-    effect = "Allow"
-    actions = [
-      "iam:GetSAMLProvider"
-    ]
-    resources = ["*"]
-  }
-  statement {
-    sid    = "UpdateSAMLProvider"
-    effect = "Allow"
-    actions = [
-      "iam:UpdateSAMLProvider",
-    ]
-    resources = ["*"]
-  }
-
-  statement {
     sid    = "GetInvokeSelf"
     effect = "Allow"
     actions = [
@@ -160,21 +143,6 @@ data "aws_iam_policy_document" "slack_handler" {
   statement {
     effect = "Allow"
     actions = [
-      "iam:PutRolePolicy",
-      "iam:AttachRolePolicy",
-      "iam:CreateRole",
-      "iam:GetRole",
-      "iam:ListAttachedRolePolicies",
-      "iam:ListRolePolicies",
-    ]
-    resources = [
-      "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
-      "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"
-    ]
-  }
-  statement {
-    effect = "Allow"
-    actions = [
       "organizations:ListAccounts",
       "organizations:DescribeAccount",
       "sso:ListPermissionSets",
@@ -188,12 +156,24 @@ data "aws_iam_policy_document" "slack_handler" {
     effect = "Allow"
     actions = [
       "scheduler:CreateSchedule",
-      "iam:PassRole",
       "scheduler:ListSchedules",
       "scheduler:GetSchedule",
       "scheduler:DeleteSchedule",
     ]
     resources = ["*"]
+  }
+  statement {
+    sid    = "PassSchedulerRole"
+    effect = "Allow"
+    actions = [
+      "iam:PassRole",
+    ]
+    resources = [aws_iam_role.eventbridge_role.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["scheduler.amazonaws.com"]
+    }
   }
   statement {
     effect = "Allow"

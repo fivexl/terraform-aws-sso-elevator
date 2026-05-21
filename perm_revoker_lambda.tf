@@ -156,12 +156,24 @@ data "aws_iam_policy_document" "revoker" {
     effect = "Allow"
     actions = [
       "scheduler:DeleteSchedule",
-      "iam:PassRole",
       "scheduler:CreateSchedule",
       "scheduler:ListSchedules",
       "scheduler:GetSchedule",
     ]
     resources = ["*"]
+  }
+  statement {
+    sid    = "PassSchedulerRole"
+    effect = "Allow"
+    actions = [
+      "iam:PassRole",
+    ]
+    resources = [aws_iam_role.eventbridge_role.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["scheduler.amazonaws.com"]
+    }
   }
   statement {
     effect = "Allow"
