@@ -77,6 +77,12 @@ variable "log_level" {
   default     = "INFO"
 }
 
+variable "log_event" {
+  description = "Whether the Lambdas log the full incoming event (POWERTOOLS_LOGGER_LOG_EVENT). The event includes the chat payload and, when mutual TLS is enabled, the client certificate. Set false to avoid logging this PII to CloudWatch."
+  type        = bool
+  default     = true
+}
+
 variable "slack_channel_id" {
   description = "Slack channel ID (e.g. C…) for approval threads. Required when chat_platform is slack; leave empty for teams-only deployments."
   type        = string
