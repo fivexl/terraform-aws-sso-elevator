@@ -171,12 +171,24 @@ data "aws_iam_policy_document" "slack_handler" {
     effect = "Allow"
     actions = [
       "scheduler:CreateSchedule",
-      "iam:PassRole",
       "scheduler:ListSchedules",
       "scheduler:GetSchedule",
       "scheduler:DeleteSchedule",
     ]
     resources = ["*"]
+  }
+  statement {
+    sid    = "PassSchedulerRole"
+    effect = "Allow"
+    actions = [
+      "iam:PassRole",
+    ]
+    resources = [aws_iam_role.eventbridge_role.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["scheduler.amazonaws.com"]
+    }
   }
   statement {
     effect = "Allow"
