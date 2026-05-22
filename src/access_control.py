@@ -112,6 +112,35 @@ def get_requester_group_ids(requester_email: str) -> FrozenSet[str]:
         return frozenset()
 
 
+def eligible_accounts_and_permission_sets(
+    statements: FrozenSet[Statement],
+    requester_group_ids: FrozenSet[str],
+) -> tuple[set[str] | None, set[str] | None]:
+    """Accounts and permission-set names a requester may request, per statements + allowed_groups.
+
+    Used to filter the request modal so a requester only sees what they can actually request.
+    A ``None`` return for either means "unrestricted" — a ``*`` wildcard appeared in an eligible
+    statement, so all accounts / permission sets should be shown.
+    """
+    accounts: set[str] = set()
+    permission_sets: set[str] = set()
+    accounts_wildcard = False
+    permission_sets_wildcard = False
+    for statement in statements:
+        if not requester_allowed(statement.allowed_groups, requester_group_ids):
+            continue
+        if "*" in statement.permission_set:
+            permission_sets_wildcard = True
+        else:
+            permission_sets.update(statement.permission_set)
+        if statement.resource_type == "Account":
+            if "*" in statement.resource:
+                accounts_wildcard = True
+            else:
+                accounts.update(statement.resource)
+    return (None if accounts_wildcard else accounts, None if permission_sets_wildcard else permission_sets)
+
+
 def _filter_statements_by_requester_groups(
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     requester_group_ids: FrozenSet[str],

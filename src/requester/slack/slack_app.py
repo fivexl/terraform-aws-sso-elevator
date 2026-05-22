@@ -135,6 +135,22 @@ def _build_slack_app(ctx: RequesterContext) -> App:
         permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
 
         user_id = body.get("user", {}).get("id")
+
+        # Restrict the menu to what this requester can actually request (allowed_groups), so they
+        # only see eligible accounts / permission sets. Enforcement still happens at decision time;
+        # this just keeps the modal honest. Falls back to showing all if groups can't be resolved.
+        if user_id:
+            try:
+                requester_email = slack_helpers.get_user(client, id=user_id).email
+                group_ids = access_control.get_requester_group_ids(requester_email)
+                allowed_accounts, allowed_permission_sets = access_control.eligible_accounts_and_permission_sets(cfg.statements, group_ids)
+                if allowed_accounts is not None:
+                    accounts = [a for a in accounts if a.id in allowed_accounts]
+                if allowed_permission_sets is not None:
+                    permission_sets = [p for p in permission_sets if p.name in allowed_permission_sets]
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Could not filter options by requester groups; showing all", extra={"error": str(e)})
+
         callback_id = slack_helpers.RequestForAccessView.CALLBACK_ID
 
         view_id = request_store.get_view_id(str(user_id), callback_id) if user_id else None
