@@ -266,8 +266,10 @@ module "http_api" {
 
   # Optional custom domain + mutual TLS. Route53 records are managed by the consumer
   # (create_domain_records = false) since the module may not have zone access.
-  create_domain_name          = var.api_gateway_custom_domain_name != "" ? true : false
-  domain_name                 = var.api_gateway_custom_domain_name != "" ? var.api_gateway_custom_domain_name : null
+  create_domain_name = var.api_gateway_custom_domain_name != "" ? true : false
+  # Empty string (not null) when unset: the apigateway-v2 module's locals call
+  # replace()/startswith() on var.domain_name unconditionally and reject null.
+  domain_name                 = var.api_gateway_custom_domain_name
   domain_name_certificate_arn = var.api_gateway_custom_domain_name != "" ? var.api_gateway_domain_certificate_arn : null
   # Use the certificate we pass in; do not let the module mint its own (its internal ACM cert
   # is gated on create_domain_records, which we disable, so it would be empty → invalid cert).
