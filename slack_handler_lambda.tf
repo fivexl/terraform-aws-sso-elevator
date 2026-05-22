@@ -79,6 +79,8 @@ module "access_requester_slack_handler" {
     CONFIG_S3_KEY                               = "config/approval-config.json"
     CACHE_ENABLED                               = var.cache_enabled
     ELEVATOR_REQUESTS_TABLE_NAME                = aws_dynamodb_table.elevator_requests.name
+    REQUIRE_SLACK_MTLS                          = var.require_slack_mtls
+    SLACK_MTLS_EXPECTED_SAN                     = var.slack_mtls_expected_san
   }
 
   allowed_triggers = var.create_api_gateway ? {
@@ -256,9 +258,29 @@ module "http_api" {
       throttling_rate_limit  = var.api_gateway_throttling_rate_limit
     }
   }
-  stage_name         = local.api_stage_name
-  create_domain_name = false
-  tags               = var.tags
+  stage_name = local.api_stage_name
+
+  # When clients must use the custom domain + mTLS, disable the default execute-api endpoint
+  # so the public *.execute-api URL can't be used to bypass mutual TLS.
+  disable_execute_api_endpoint = var.require_slack_mtls ? true : null
+
+  # Optional custom domain + mutual TLS. Route53 records are managed by the consumer
+  # (create_domain_records = false) since the module may not have zone access.
+  create_domain_name = var.api_gateway_custom_domain_name != "" ? true : false
+  # Empty string (not null) when unset: the apigateway-v2 module's locals call
+  # replace()/startswith() on var.domain_name unconditionally and reject null.
+  domain_name                 = var.api_gateway_custom_domain_name
+  domain_name_certificate_arn = var.api_gateway_custom_domain_name != "" ? var.api_gateway_domain_certificate_arn : null
+  # Use the certificate we pass in; do not let the module mint its own (its internal ACM cert
+  # is gated on create_domain_records, which we disable, so it would be empty → invalid cert).
+  create_certificate    = false
+  create_domain_records = false
+  mutual_tls_authentication = var.api_gateway_mutual_tls_truststore_uri != "" ? {
+    truststore_uri     = var.api_gateway_mutual_tls_truststore_uri
+    truststore_version = var.api_gateway_mutual_tls_truststore_version
+  } : {}
+
+  tags = var.tags
   stage_access_log_settings = {
     create_log_group            = true
     log_group_retention_in_days = var.logs_retention_in_days

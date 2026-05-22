@@ -20,6 +20,20 @@ def lambda_handler(event: str, context: object) -> object:  # noqa: ANN001
     if isinstance(event, dict) and event.get("internal_action") == GROUP_APPROVAL_INTERNAL_ACTION:
         return asyncio.run(run_post_group_approval_worker(event))
     ctx = get_requester_context()
+
+    # Inbound mutual-TLS gate: when enabled, only accept requests whose client certificate
+    # (forwarded by API Gateway) presents the expected SAN. Internal self-invocations are
+    # handled above and never reach here.
+    if getattr(ctx.cfg, "require_slack_mtls", False):
+        from requester.common.api_gateway import verify_client_cert_san
+
+        ok, reason = verify_client_cert_san(event if isinstance(event, dict) else {}, ctx.cfg.slack_mtls_expected_san)
+        if not ok:
+            import config as _config
+
+            _config.get_logger("main").warning("Rejecting request: mTLS client certificate check failed", extra={"reason": reason})
+            return {"statusCode": 403, "headers": {"Content-Type": "text/plain"}, "body": "Forbidden"}
+
     if ctx.cfg.chat_platform == "teams":
         from requester.teams import teams_runtime
 

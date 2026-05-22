@@ -132,6 +132,12 @@ class Config(BaseSettings):
 
     send_dm_if_user_not_in_channel: bool = True
 
+    #: When True, verify the mutual-TLS client certificate (forwarded by API Gateway) presents
+    #: slack_mtls_expected_san before processing the request. Pair with API Gateway custom-domain
+    #: mTLS so only Slack can reach the endpoint even if it chains to a public CA.
+    require_slack_mtls: bool = False
+    slack_mtls_expected_san: str = "platform-tls-client.slack.com"
+
     sso_instance_arn: str
 
     log_level: str = "INFO"

@@ -4,6 +4,42 @@ variable "create_api_gateway" {
   default     = true
 }
 
+variable "api_gateway_custom_domain_name" {
+  description = "Optional custom domain name to attach to the HTTP API (e.g. elevator.example.com). When set, the module creates the API Gateway custom domain; Route53 records are managed by the consumer."
+  type        = string
+  default     = ""
+}
+
+variable "api_gateway_domain_certificate_arn" {
+  description = "ACM certificate ARN for the custom domain name (server certificate). Required when api_gateway_custom_domain_name is set."
+  type        = string
+  default     = ""
+}
+
+variable "api_gateway_mutual_tls_truststore_uri" {
+  description = "S3 URI (s3://bucket/key) of the truststore (PEM CA bundle) used for mutual TLS on the custom domain. When set, mTLS is enabled on the custom domain."
+  type        = string
+  default     = ""
+}
+
+variable "api_gateway_mutual_tls_truststore_version" {
+  description = "S3 object version of the mutual TLS truststore. Recommended so truststore updates are picked up."
+  type        = string
+  default     = ""
+}
+
+variable "require_slack_mtls" {
+  description = "When true, the requester Lambda verifies the mutual-TLS client certificate SAN matches slack_mtls_expected_san before processing, and the default execute-api endpoint is disabled. Use together with api_gateway_custom_domain_name + mutual TLS."
+  type        = bool
+  default     = false
+}
+
+variable "slack_mtls_expected_san" {
+  description = "Expected SAN/CN on Slack's mutual-TLS client certificate. The requester Lambda rejects requests whose client cert does not present this name."
+  type        = string
+  default     = "platform-tls-client.slack.com"
+}
+
 variable "ecr_repo_name" {
   description = "The name of the ECR repository."
   type        = string
