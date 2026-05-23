@@ -201,6 +201,7 @@ async def post_group_approval_to_teams_channel(  # noqa: PLR0912
         c.group_statements,
         requester_email=requester_email,
         group_id=rec.group_id or "",
+        requester_group_ids=access_control.get_requester_group_ids(requester_email),
     )
 
     # Late import to avoid import loops.
@@ -359,6 +360,7 @@ async def post_account_approval_to_teams_channel(  # noqa: PLR0912
         requester_email=requester_email,
         account_id=rec.account_id or "",
         permission_set_name=rec.permission_set_name or "",
+        requester_group_ids=access_control.get_requester_group_ids(requester_email),
     )
     try:
         account = organizations.describe_account(org_client, rec.account_id or "")

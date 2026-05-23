@@ -80,6 +80,7 @@ def handle_request_for_group_access_submittion(  # noqa: PLR0912, PLR0915
         cfg.group_statements,
         requester_email=requester.email,
         group_id=request.group_id,
+        requester_group_ids=access_control.get_requester_group_ids(requester.email),
     )
 
     elevator_id = str(uuid.uuid4())
@@ -325,6 +326,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         group_id=payload.request.group_id,
         approver_email=approver.email,
         requester_email=requester.email,
+        requester_group_ids=access_control.get_requester_group_ids(requester.email),
     )
 
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
@@ -409,6 +411,7 @@ async def handle_teams_group_task_submit(  # noqa: PLR0912, PLR0915
         cfg.group_statements,
         requester_email=user.email,
         group_id=group_id,
+        requester_group_ids=access_control.get_requester_group_ids(user.email),
     )
 
     request_store.put_access_request(
@@ -537,6 +540,7 @@ async def handle_teams_group_card_action(  # noqa: PLR0915, PLR0913
         group_id=rec.group_id,
         approver_email=approver.email,
         requester_email=re_email,
+        requester_group_ids=access_control.get_requester_group_ids(re_email),
     )
 
     if not decision.permit:

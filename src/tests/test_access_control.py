@@ -1130,3 +1130,200 @@ def test_ordered_email_variants_for_graph_lookup_order():
         "user@tenant.onmicrosoft.com",
         "user@contoso.com",
     ]
+
+
+# ----------------- Requester group restriction (allowed_groups) ----------------- #
+
+ADMIN_GROUP_ID = "12345678-1234-1234-1234-123456789012"
+OTHER_GROUP_ID = "99999999-9999-9999-9999-999999999999"
+
+
+def _admin_statement_restricted_to(group_id: str) -> Statement:
+    return Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approval_is_not_required": True,
+            "allowed_groups": [group_id],
+        }
+    )
+
+
+def test_requester_allowed_helper():
+    from statement import requester_allowed
+
+    # Empty allowed_groups = unrestricted, regardless of requester groups.
+    assert requester_allowed(frozenset(), frozenset()) is True
+    assert requester_allowed(frozenset(), frozenset({OTHER_GROUP_ID})) is True
+    # Restricted: requires membership in at least one listed group.
+    assert requester_allowed(frozenset({ADMIN_GROUP_ID}), frozenset({ADMIN_GROUP_ID, OTHER_GROUP_ID})) is True
+    assert requester_allowed(frozenset({ADMIN_GROUP_ID}), frozenset({OTHER_GROUP_ID})) is False
+    assert requester_allowed(frozenset({ADMIN_GROUP_ID}), frozenset()) is False
+
+
+def test_allowed_groups_blocks_non_member():
+    """A statement restricted to a group denies a requester who is not a member."""
+    decision = make_decision_on_access_request(
+        frozenset([_admin_statement_restricted_to(ADMIN_GROUP_ID)]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        requester_email="developer@example.com",
+        requester_group_ids=frozenset({OTHER_GROUP_ID}),
+    )
+    assert decision.grant is False
+    assert decision.reason == DecisionReason.NoStatements
+
+
+def test_allowed_groups_allows_member():
+    """A member of an allowed group is granted (auto-approval path here)."""
+    decision = make_decision_on_access_request(
+        frozenset([_admin_statement_restricted_to(ADMIN_GROUP_ID)]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        requester_email="infra@example.com",
+        requester_group_ids=frozenset({ADMIN_GROUP_ID}),
+    )
+    assert decision.grant is True
+    assert decision.reason == DecisionReason.ApprovalNotRequired
+
+
+def test_empty_allowed_groups_is_unrestricted_and_backward_compatible():
+    """Statements without allowed_groups behave exactly as before, even with no requester groups."""
+    st = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approval_is_not_required": True,
+        }
+    )
+    decision = make_decision_on_access_request(
+        frozenset([st]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        requester_email="anyone@example.com",
+        requester_group_ids=frozenset(),
+    )
+    assert decision.grant is True
+    assert decision.reason == DecisionReason.ApprovalNotRequired
+
+
+def test_approve_blocked_when_requester_not_in_allowed_group():
+    """Defense in depth: at approval time a group-restricted statement does not apply to a
+    requester outside the group, so an approver cannot grant it."""
+    decision = make_decision_on_approve_request(
+        action=entities.ApproverAction.Approve,
+        statements=frozenset([_admin_statement_restricted_to(ADMIN_GROUP_ID)]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        approver_email="lead@example.com",
+        requester_email="developer@example.com",
+        requester_group_ids=frozenset({OTHER_GROUP_ID}),
+    )
+    assert decision.permit is False
+    assert decision.grant is False
+
+
+def test_eligible_accounts_and_permission_sets_scopes_to_member_statements():
+    from access_control import eligible_accounts_and_permission_sets
+
+    admin_everywhere = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["*"],
+            "permission_set": ["AdministratorAccess"],
+            "allowed_groups": [ADMIN_GROUP_ID],
+        }
+    )
+    dev_sandbox = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "allowed_groups": [OTHER_GROUP_ID],
+        }
+    )
+    statements = frozenset([admin_everywhere, dev_sandbox])
+
+    # developer (OTHER_GROUP_ID) — only the sandbox statement applies → single account, no wildcard
+    accounts, permission_sets = eligible_accounts_and_permission_sets(statements, frozenset({OTHER_GROUP_ID}))
+    assert accounts == {"111111111111"}
+    assert permission_sets == {"AdministratorAccess"}
+
+    # admin (ADMIN_GROUP_ID) — the "*" statement applies → accounts unrestricted (None)
+    accounts, permission_sets = eligible_accounts_and_permission_sets(statements, frozenset({ADMIN_GROUP_ID}))
+    assert accounts is None
+    assert permission_sets == {"AdministratorAccess"}
+
+    # someone in neither group — nothing eligible
+    accounts, permission_sets = eligible_accounts_and_permission_sets(statements, frozenset())
+    assert accounts == set()
+    assert permission_sets == set()
+
+
+def test_filter_options_for_requester_scopes_dropdown():
+    from types import SimpleNamespace
+
+    from access_control import filter_options_for_requester
+
+    statements = frozenset(
+        [
+            Statement.model_validate(
+                {
+                    "resource_type": "Account",
+                    "resource": ["*"],
+                    "permission_set": ["AdministratorAccess"],
+                    "allowed_groups": [ADMIN_GROUP_ID],
+                }
+            ),
+            Statement.model_validate(
+                {
+                    "resource_type": "Account",
+                    "resource": ["111111111111"],
+                    "permission_set": ["ReadOnly"],
+                    "allowed_groups": [OTHER_GROUP_ID],
+                }
+            ),
+        ]
+    )
+    accounts = [SimpleNamespace(id="111111111111", name="sandbox"), SimpleNamespace(id="222222222222", name="prod")]
+    permission_sets = [SimpleNamespace(name="AdministratorAccess"), SimpleNamespace(name="ReadOnly")]
+
+    # developer — sees only the sandbox account and the ReadOnly permission set
+    acc, ps = filter_options_for_requester(accounts, permission_sets, statements, frozenset({OTHER_GROUP_ID}))
+    assert [a.id for a in acc] == ["111111111111"]
+    assert [p.name for p in ps] == ["ReadOnly"]
+
+    # admin — "*" statement → all accounts kept; permission set scoped to AdministratorAccess
+    acc, ps = filter_options_for_requester(accounts, permission_sets, statements, frozenset({ADMIN_GROUP_ID}))
+    assert [a.id for a in acc] == ["111111111111", "222222222222"]
+    assert [p.name for p in ps] == ["AdministratorAccess"]
+
+    # neither group — empty dropdowns
+    acc, ps = filter_options_for_requester(accounts, permission_sets, statements, frozenset())
+    assert acc == [] and ps == []
+
+
+def test_approve_allowed_for_member_of_allowed_group():
+    """A member of the allowed group can be approved at approval time."""
+    st = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approvers": ["lead@example.com"],
+            "allowed_groups": [ADMIN_GROUP_ID],
+        }
+    )
+    decision = make_decision_on_approve_request(
+        action=entities.ApproverAction.Approve,
+        statements=frozenset([st]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        approver_email="lead@example.com",
+        requester_email="infra@example.com",
+        requester_group_ids=frozenset({ADMIN_GROUP_ID}),
+    )
+    assert decision.permit is True
+    assert decision.grant is True

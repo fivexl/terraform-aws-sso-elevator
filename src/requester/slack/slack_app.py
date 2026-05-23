@@ -135,6 +135,20 @@ def _build_slack_app(ctx: RequesterContext) -> App:
         permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
 
         user_id = body.get("user", {}).get("id")
+
+        # Restrict the menu to what this requester can actually request (allowed_groups), so they
+        # only see eligible accounts / permission sets. Enforcement still happens at decision time;
+        # this just keeps the modal honest. Falls back to showing all if groups can't be resolved.
+        if user_id:
+            try:
+                requester_email = slack_helpers.get_user(client, id=user_id).email
+                group_ids = access_control.get_requester_group_ids(requester_email)
+                accounts, permission_sets = access_control.filter_options_for_requester(
+                    accounts, permission_sets, cfg.statements, group_ids
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Could not filter options by requester groups; showing all", extra={"error": str(e)})
+
         callback_id = slack_helpers.RequestForAccessView.CALLBACK_ID
 
         view_id = request_store.get_view_id(str(user_id), callback_id) if user_id else None
@@ -252,6 +266,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             permission_set_name=payload.request.permission_set_name,
             approver_email=approver.email,
             requester_email=requester.email,
+            requester_group_ids=access_control.get_requester_group_ids(requester.email),
         )
         logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -341,6 +356,7 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             account_id=request.account_id,
             permission_set_name=request.permission_set_name,
             requester_email=requester.email,
+            requester_group_ids=access_control.get_requester_group_ids(requester.email),
         )
         logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
