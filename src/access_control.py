@@ -141,6 +141,24 @@ def eligible_accounts_and_permission_sets(
     return (None if accounts_wildcard else accounts, None if permission_sets_wildcard else permission_sets)
 
 
+def filter_options_for_requester(
+    accounts: list[entities.aws.Account],
+    permission_sets: list[entities.aws.PermissionSet],
+    statements: FrozenSet[Statement],
+    requester_group_ids: FrozenSet[str],
+) -> tuple[list[entities.aws.Account], list[entities.aws.PermissionSet]]:
+    """Filter the request modal's account/permission-set options to what the requester may request.
+
+    A ``None`` from ``eligible_accounts_and_permission_sets`` means unrestricted → leave that list as-is.
+    """
+    allowed_accounts, allowed_permission_sets = eligible_accounts_and_permission_sets(statements, requester_group_ids)
+    if allowed_accounts is not None:
+        accounts = [a for a in accounts if a.id in allowed_accounts]
+    if allowed_permission_sets is not None:
+        permission_sets = [p for p in permission_sets if p.name in allowed_permission_sets]
+    return accounts, permission_sets
+
+
 def _filter_statements_by_requester_groups(
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     requester_group_ids: FrozenSet[str],

@@ -1262,6 +1262,49 @@ def test_eligible_accounts_and_permission_sets_scopes_to_member_statements():
     assert permission_sets == set()
 
 
+def test_filter_options_for_requester_scopes_dropdown():
+    from types import SimpleNamespace
+
+    from access_control import filter_options_for_requester
+
+    statements = frozenset(
+        [
+            Statement.model_validate(
+                {
+                    "resource_type": "Account",
+                    "resource": ["*"],
+                    "permission_set": ["AdministratorAccess"],
+                    "allowed_groups": [ADMIN_GROUP_ID],
+                }
+            ),
+            Statement.model_validate(
+                {
+                    "resource_type": "Account",
+                    "resource": ["111111111111"],
+                    "permission_set": ["ReadOnly"],
+                    "allowed_groups": [OTHER_GROUP_ID],
+                }
+            ),
+        ]
+    )
+    accounts = [SimpleNamespace(id="111111111111", name="sandbox"), SimpleNamespace(id="222222222222", name="prod")]
+    permission_sets = [SimpleNamespace(name="AdministratorAccess"), SimpleNamespace(name="ReadOnly")]
+
+    # developer — sees only the sandbox account and the ReadOnly permission set
+    acc, ps = filter_options_for_requester(accounts, permission_sets, statements, frozenset({OTHER_GROUP_ID}))
+    assert [a.id for a in acc] == ["111111111111"]
+    assert [p.name for p in ps] == ["ReadOnly"]
+
+    # admin — "*" statement → all accounts kept; permission set scoped to AdministratorAccess
+    acc, ps = filter_options_for_requester(accounts, permission_sets, statements, frozenset({ADMIN_GROUP_ID}))
+    assert [a.id for a in acc] == ["111111111111", "222222222222"]
+    assert [p.name for p in ps] == ["AdministratorAccess"]
+
+    # neither group — empty dropdowns
+    acc, ps = filter_options_for_requester(accounts, permission_sets, statements, frozenset())
+    assert acc == [] and ps == []
+
+
 def test_approve_allowed_for_member_of_allowed_group():
     """A member of the allowed group can be approved at approval time."""
     st = Statement.model_validate(

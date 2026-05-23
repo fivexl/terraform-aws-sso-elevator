@@ -143,11 +143,9 @@ def _build_slack_app(ctx: RequesterContext) -> App:
             try:
                 requester_email = slack_helpers.get_user(client, id=user_id).email
                 group_ids = access_control.get_requester_group_ids(requester_email)
-                allowed_accounts, allowed_permission_sets = access_control.eligible_accounts_and_permission_sets(cfg.statements, group_ids)
-                if allowed_accounts is not None:
-                    accounts = [a for a in accounts if a.id in allowed_accounts]
-                if allowed_permission_sets is not None:
-                    permission_sets = [p for p in permission_sets if p.name in allowed_permission_sets]
+                accounts, permission_sets = access_control.filter_options_for_requester(
+                    accounts, permission_sets, cfg.statements, group_ids
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning("Could not filter options by requester groups; showing all", extra={"error": str(e)})
 
