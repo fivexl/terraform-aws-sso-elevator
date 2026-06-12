@@ -1,6 +1,6 @@
-"""Slack notifications for attribute-based group sync operations.
+"""Notifications for attribute-based group sync operations.
 
-This module provides functions to send Slack notifications for:
+This module provides functions to send notifications (Slack or Teams) for:
 - Users added to groups via attribute sync
 - Manual assignments detected
 - Manual assignments removed
@@ -9,17 +9,21 @@ This module provides functions to send Slack notifications for:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 from config import get_logger
 
 if TYPE_CHECKING:
+    from requester.teams.teams_notifier import TeamsNotifier
     from slack_sdk import WebClient
 
     from sync_state import SyncAction
 
 logger = get_logger(service="sync_notifications")
+
+Notifier = Union["WebClient", "TeamsNotifier"]
 
 
 @dataclass
@@ -32,53 +36,38 @@ class SyncNotificationResult:
 
 
 def format_attributes(attributes: dict[str, str] | None) -> str:
-    """Format attributes dictionary for display in Slack message.
-
-    Args:
-        attributes: Dictionary of attribute name to value, or None.
-
-    Returns:
-        Formatted string for Slack display.
-    """
+    """Format attributes dictionary for display in a notification message."""
     if not attributes:
         return "N/A"
     return ", ".join(f"{k}={v}" for k, v in sorted(attributes.items()))
 
 
+def _slack_send(notifier: Notifier, channel_id: str, text: str) -> None:
+    """Send via Slack WebClient or Teams TeamsNotifier."""
+    from requester.teams.teams_notifier import TeamsNotifier
+
+    if isinstance(notifier, TeamsNotifier):
+        asyncio.run(notifier.send_channel_text(text))
+    else:
+        notifier.chat_postMessage(channel=channel_id, text=text)  # type: ignore[attr-defined]
+
+
 def notify_user_added_to_group(
-    slack_client: WebClient,
+    notifier: Notifier,
     action: SyncAction,
     channel_id: str,
 ) -> SyncNotificationResult:
-    """Send Slack notification when a user is added to a group via attribute sync.
-
-    **Feature: attribute-based-group-sync, Property 14: User addition notification**
-    **Validates: Requirements 6.2**
-
-    Args:
-        slack_client: Slack WebClient instance.
-        action: The SyncAction describing the add operation.
-        channel_id: Slack channel ID to send the notification to.
-
-    Returns:
-        SyncNotificationResult indicating success or failure.
-    """
-    target_channel = channel_id
-
+    """Send notification when a user is added to a group via attribute sync."""
     attrs_display = format_attributes(action.matched_attributes)
     text = (
-        f":white_check_mark: *Attribute Sync: User Added to Group*\n"
+        f"Attribute Sync: User Added to Group\n"
         f"• User: {action.user_email}\n"
         f"• Group: {action.group_name}\n"
         f"• Matched Attributes: {attrs_display}\n"
         f"• Reason: {action.reason}"
     )
-
     try:
-        slack_client.chat_postMessage(
-            channel=target_channel,
-            text=text,
-        )
+        _slack_send(notifier, channel_id, text)
         logger.info(f"Sent user addition notification for {action.user_email} to group {action.group_name}")
         return SyncNotificationResult(success=True, message="Notification sent successfully")
     except Exception as e:
@@ -87,40 +76,22 @@ def notify_user_added_to_group(
 
 
 def notify_manual_assignment_detected(
-    slack_client: WebClient,
+    notifier: Notifier,
     action: SyncAction,
     channel_id: str,
 ) -> SyncNotificationResult:
-    """Send Slack notification when a manual assignment is detected.
-
-    **Feature: attribute-based-group-sync, Property 11: Manual assignment notification**
-    **Validates: Requirements 3.3, 3.4, 4.5**
-
-    Args:
-        slack_client: Slack WebClient instance.
-        action: The SyncAction describing the manual assignment.
-        channel_id: Slack channel ID to send the notification to.
-
-    Returns:
-        SyncNotificationResult indicating success or failure.
-    """
-    target_channel = channel_id
-
+    """Send notification when a manual assignment is detected."""
     expected_attrs = format_attributes(action.matched_attributes)
     text = (
-        f":warning: *Attribute Sync: Manual Assignment Detected*\n"
+        f"Attribute Sync: Manual Assignment Detected\n"
         f"• User: {action.user_email}\n"
         f"• Group: {action.group_name}\n"
         f"• Expected Attributes: {expected_attrs}\n"
         f"• Reason: {action.reason}\n"
-        f"_This user was added to the group manually and does not match the attribute rules._"
+        f"This user was added to the group manually and does not match the attribute rules."
     )
-
     try:
-        slack_client.chat_postMessage(
-            channel=target_channel,
-            text=text,
-        )
+        _slack_send(notifier, channel_id, text)
         logger.info(f"Sent manual assignment detection notification for {action.user_email} in group {action.group_name}")
         return SyncNotificationResult(success=True, message="Notification sent successfully")
     except Exception as e:
@@ -129,40 +100,22 @@ def notify_manual_assignment_detected(
 
 
 def notify_manual_assignment_removed(
-    slack_client: WebClient,
+    notifier: Notifier,
     action: SyncAction,
     channel_id: str,
 ) -> SyncNotificationResult:
-    """Send Slack notification when a manual assignment is removed.
-
-    **Feature: attribute-based-group-sync, Property 11: Manual assignment notification**
-    **Validates: Requirements 3.3, 3.4, 4.5**
-
-    Args:
-        slack_client: Slack WebClient instance.
-        action: The SyncAction describing the removal.
-        channel_id: Slack channel ID to send the notification to.
-
-    Returns:
-        SyncNotificationResult indicating success or failure.
-    """
-    target_channel = channel_id
-
+    """Send notification when a manual assignment is removed."""
     expected_attrs = format_attributes(action.matched_attributes)
     text = (
-        f":x: *Attribute Sync: Manual Assignment Removed*\n"
+        f"Attribute Sync: Manual Assignment Removed\n"
         f"• User: {action.user_email}\n"
         f"• Group: {action.group_name}\n"
         f"• Expected Attributes: {expected_attrs}\n"
         f"• Reason: {action.reason}\n"
-        f"_This user was removed because they don't match the attribute rules and the policy is set to 'remove'._"
+        f"This user was removed because they don't match the attribute rules and the policy is set to 'remove'."
     )
-
     try:
-        slack_client.chat_postMessage(
-            channel=target_channel,
-            text=text,
-        )
+        _slack_send(notifier, channel_id, text)
         logger.info(f"Sent manual assignment removal notification for {action.user_email} from group {action.group_name}")
         return SyncNotificationResult(success=True, message="Notification sent successfully")
     except Exception as e:
@@ -171,33 +124,15 @@ def notify_manual_assignment_removed(
 
 
 def notify_sync_error(
-    slack_client: WebClient,
+    notifier: Notifier,
     error_message: str,
     error_count: int = 1,
     channel_id: str = "",
 ) -> SyncNotificationResult:
-    """Send Slack notification when sync operation encounters errors.
-
-    **Validates: Requirements 5.5**
-
-    Args:
-        slack_client: Slack WebClient instance.
-        error_message: Description of the error(s).
-        error_count: Number of errors encountered.
-        channel_id: Slack channel ID to send the notification to.
-
-    Returns:
-        SyncNotificationResult indicating success or failure.
-    """
-    target_channel = channel_id
-
-    text = f":rotating_light: *Attribute Sync: Error Encountered*\n• Error Count: {error_count}\n• Details: {error_message}"
-
+    """Send notification when sync operation encounters errors."""
+    text = f"Attribute Sync: Error Encountered\n• Error Count: {error_count}\n• Details: {error_message}"
     try:
-        slack_client.chat_postMessage(
-            channel=target_channel,
-            text=text,
-        )
+        _slack_send(notifier, channel_id, text)
         logger.info(f"Sent sync error notification: {error_count} error(s)")
         return SyncNotificationResult(success=True, message="Notification sent successfully")
     except Exception as e:
@@ -219,32 +154,15 @@ class SyncSummary:
 
 
 def notify_sync_summary(
-    slack_client: WebClient,
+    notifier: Notifier,
     summary: SyncSummary,
     channel_id: str = "",
 ) -> SyncNotificationResult:
-    """Send Slack notification with sync operation summary.
-
-    Args:
-        slack_client: Slack WebClient instance.
-        summary: SyncSummary with operation statistics.
-        channel_id: Slack channel ID to send the notification to.
-
-    Returns:
-        SyncNotificationResult indicating success or failure.
-    """
-    target_channel = channel_id
-
-    # Determine emoji based on errors
-    if summary.errors:
-        emoji = ":warning:"
-        status = "Completed with Errors"
-    else:
-        emoji = ":white_check_mark:"
-        status = "Completed Successfully"
+    """Send notification with sync operation summary."""
+    status = "Completed with Errors" if summary.errors else "Completed Successfully"
 
     text = (
-        f"{emoji} *Attribute Sync: {status}*\n"
+        f"Attribute Sync: {status}\n"
         f"• Users Evaluated: {summary.users_evaluated}\n"
         f"• Groups Processed: {summary.groups_processed}\n"
         f"• Users Added: {summary.users_added}\n"
@@ -261,10 +179,7 @@ def notify_sync_summary(
         text += f"\n• Errors ({len(summary.errors)}):\n{error_text}"
 
     try:
-        slack_client.chat_postMessage(
-            channel=target_channel,
-            text=text,
-        )
+        _slack_send(notifier, channel_id, text)
         logger.info(f"Sent sync summary notification: {summary.users_added} added, {summary.users_removed} removed")
         return SyncNotificationResult(success=True, message="Notification sent successfully")
     except Exception as e:
@@ -273,29 +188,17 @@ def notify_sync_summary(
 
 
 def send_notification_for_action(
-    slack_client: WebClient,
+    notifier: Notifier,
     action: SyncAction,
     channel_id: str,
 ) -> SyncNotificationResult:
-    """Send appropriate Slack notification based on action type.
-
-    This is a convenience function that routes to the appropriate
-    notification function based on the action type.
-
-    Args:
-        slack_client: Slack WebClient instance.
-        action: The SyncAction to notify about.
-        channel_id: Slack channel ID to send the notification to.
-
-    Returns:
-        SyncNotificationResult indicating success or failure.
-    """
+    """Send appropriate notification based on action type."""
     if action.action_type == "add":
-        return notify_user_added_to_group(slack_client, action, channel_id)
+        return notify_user_added_to_group(notifier, action, channel_id)
     elif action.action_type == "warn":
-        return notify_manual_assignment_detected(slack_client, action, channel_id)
+        return notify_manual_assignment_detected(notifier, action, channel_id)
     elif action.action_type == "remove":
-        return notify_manual_assignment_removed(slack_client, action, channel_id)
+        return notify_manual_assignment_removed(notifier, action, channel_id)
     else:
         logger.warning(f"Unknown action type: {action.action_type}")
         return SyncNotificationResult(

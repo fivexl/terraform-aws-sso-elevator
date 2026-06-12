@@ -26,6 +26,8 @@ class AuditEntry:
     requester_slack_id: str = "NA"
     requester_email: str = "NA"
     request_id: str = "NA"
+    #: Correlates with DynamoDB / product request id (not the SSO API assignment request_id above).
+    elevator_request_id: str = "NA"
     approver_slack_id: str = "NA"
     approver_email: str = "NA"
     group_name: str = "NA"

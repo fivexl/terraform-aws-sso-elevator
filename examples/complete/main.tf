@@ -29,6 +29,7 @@ module "aws_sso_elevator" {
   source                           = "../.."
   aws_sns_topic_subscription_email = "email@gmail.com"
 
+  chat_platform                                  = "slack"
   slack_signing_secret                           = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
   slack_bot_token                                = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
   slack_channel_id                               = "***********"
