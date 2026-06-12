@@ -28,6 +28,67 @@ sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 identity_store_id = sso_instance.identity_store_id
 
 
+def _group_access_decision_messages(
+    client: WebClient,
+    decision: access_control.AccessRequestDecision,
+) -> tuple[str, str, str]:
+    match decision.reason:
+        case access_control.DecisionReason.ApprovalNotRequired:
+            return (
+                "Approval for this Group is not required. Request will be approved automatically.",
+                "Approval for this Group is not required. Your request will be approved automatically.",
+                cfg.good_result_emoji,
+            )
+        case access_control.DecisionReason.SelfApproval:
+            return (
+                "Self approval is allowed and requester is an approver. Request will be approved automatically.",
+                "Self approval is allowed and you are an approver. Your request will be approved automatically.",
+                cfg.good_result_emoji,
+            )
+        case access_control.DecisionReason.RequiresApproval:
+            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(
+                client,
+                decision.approvers,  # type: ignore # noqa: PGH003
+            )
+            if not approvers:
+                return (
+                    """
+                None of the approvers from configuration could be found in Slack.
+                Request cannot be processed. Please discard the request and check the module configuration.
+                """,
+                    """
+                Your request cannot be processed because none of the approvers from configuration could be found in Slack.
+                Please discard the request and check the module configuration.
+                """,
+                    cfg.bad_result_emoji,
+                )
+            mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
+            text = f"{mention_approvers} there is a request waiting for the approval."
+            if approver_emails_not_found:
+                missing_emails = ", ".join(approver_emails_not_found)
+                text += f"""
+                    Note: Some approvers ({missing_emails}) could not be found in Slack.
+                    Please discard the request and check the module configuration.
+                    """
+            return (
+                text,
+                f"Your request is waiting for the approval from {mention_approvers}.",
+                cfg.waiting_result_emoji,
+            )
+        case access_control.DecisionReason.NoApprovers:
+            return (
+                "Nobody can approve this request.",
+                "Nobody can approve this request.",
+                cfg.bad_result_emoji,
+            )
+        case access_control.DecisionReason.NoStatements:
+            return (
+                "There are no statements for this Group.",
+                "There are no statements for this Group.",
+                cfg.bad_result_emoji,
+            )
+
+
 @handle_errors
 def handle_request_for_group_access_submittion(
     body: dict,
@@ -82,49 +143,7 @@ def handle_request_for_group_access_submittion(
                 ),
             )
 
-    match decision.reason:
-        case access_control.DecisionReason.ApprovalNotRequired:
-            text = "Approval for this Group is not required. Request will be approved automatically."
-            dm_text = "Approval for this Group is not required. Your request will be approved automatically."
-            color_coding_emoji = cfg.good_result_emoji
-        case access_control.DecisionReason.SelfApproval:
-            text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
-            dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
-            color_coding_emoji = cfg.good_result_emoji
-        case access_control.DecisionReason.RequiresApproval:
-            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(
-                client,
-                decision.approvers,  # type: ignore # noqa: PGH003
-            )
-            if not approvers:
-                text = """
-                None of the approvers from configuration could be found in Slack.
-                Request cannot be processed. Please discard the request and check the module configuration.
-                """
-                dm_text = """
-                Your request cannot be processed because none of the approvers from configuration could be found in Slack.
-                Please discard the request and check the module configuration.
-                """
-                color_coding_emoji = cfg.bad_result_emoji
-            else:
-                mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
-                text = f"{mention_approvers} there is a request waiting for the approval."
-                if approver_emails_not_found:
-                    missing_emails = ", ".join(approver_emails_not_found)
-                    text += f"""
-                    Note: Some approvers ({missing_emails}) could not be found in Slack.
-                    Please discard the request and check the module configuration.
-                    """
-                dm_text = f"Your request is waiting for the approval from {mention_approvers}."
-                color_coding_emoji = cfg.waiting_result_emoji
-        case access_control.DecisionReason.NoApprovers:
-            text = "Nobody can approve this request."
-            dm_text = "Nobody can approve this request."
-            color_coding_emoji = cfg.bad_result_emoji
-        case access_control.DecisionReason.NoStatements:
-            text = "There are no statements for this Group."
-            dm_text = "There are no statements for this Group."
-            color_coding_emoji = cfg.bad_result_emoji
+    text, dm_text, color_coding_emoji = _group_access_decision_messages(client, decision)
 
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
