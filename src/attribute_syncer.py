@@ -15,11 +15,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import boto3
-from slack_sdk import WebClient
 
 import s3 as s3_module
 from attribute_mapper import AttributeCondition, AttributeMappingRule, AttributeMapper
-from config import get_logger
+from config import get_config, get_logger
 from sync_config import (
     SyncConfiguration,
     SyncConfigurationError,
@@ -28,6 +27,7 @@ from sync_config import (
     resolve_group_names,
 )
 from sync_notifications import (
+    Notifier,
     SyncSummary,
     notify_sync_error,
     notify_sync_summary,
@@ -295,9 +295,9 @@ class SyncContext:
     identity_store_client: IdentityStoreClient
     identity_store_id: str
     s3_client: S3Client
-    slack_client: WebClient
+    notifier: Notifier
     config: SyncConfiguration
-    slack_channel_id: str
+    channel_id: str
     audit_bucket_name: str
     audit_bucket_prefix: str
 
@@ -317,7 +317,7 @@ def _execute_action(
         if success:
             result.users_added += 1
             _log_audit_entry(action, ctx.audit_bucket_name, ctx.audit_bucket_prefix)
-            send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
+            send_notification_for_action(ctx.notifier, action, ctx.channel_id)
         else:
             result.errors.append(f"Failed to add {action.user_email} to {action.group_name}")
 
@@ -331,14 +331,14 @@ def _execute_action(
             result.users_removed += 1
             result.manual_assignments_removed += 1
             _log_audit_entry(action, ctx.audit_bucket_name, ctx.audit_bucket_prefix)
-            send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
+            send_notification_for_action(ctx.notifier, action, ctx.channel_id)
         else:
             result.errors.append(f"Failed to remove {action.user_email} from {action.group_name}")
 
     elif action.action_type == "warn":
         result.manual_assignments_detected += 1
         _log_audit_entry(action, ctx.audit_bucket_name, ctx.audit_bucket_prefix)
-        send_notification_for_action(ctx.slack_client, action, ctx.slack_channel_id)
+        send_notification_for_action(ctx.notifier, action, ctx.channel_id)
 
 
 def _finalize_result(result: SyncOperationResult) -> SyncOperationResult:
@@ -473,9 +473,32 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
             "body": {"message": "Attribute sync is disabled", "success": True},
         }
 
-    # Initialize Slack client (token may change, so not module-level)
-    slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    slack_client = WebClient(token=slack_bot_token)
+    # Initialize notifier: Teams or Slack depending on chat_platform
+    cfg = get_config()
+    if cfg.chat_platform == "teams":
+        import boto3 as _boto3
+
+        from requester.teams import teams_runtime
+        from requester.teams.teams_deps import TeamsDependencies
+        from requester.teams.teams_notifier import TeamsNotifier
+
+        session = _boto3.Session()
+        teams_runtime.configure_teams_dependencies(
+            TeamsDependencies(
+                cfg=cfg,
+                org_client=session.client("organizations"),  # type: ignore[arg-type]
+                s3_client=session.client("s3"),  # type: ignore[arg-type]
+                sso_client=session.client("sso-admin"),  # type: ignore[arg-type]
+                identity_store_client=session.client("identitystore"),  # type: ignore[arg-type]
+                schedule_client=session.client("scheduler"),  # type: ignore[arg-type]
+            )
+        )
+        notifier: Notifier = TeamsNotifier(cfg, teams_runtime.get_teams_app)
+    else:
+        from slack_sdk import WebClient
+
+        slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
+        notifier = WebClient(token=slack_bot_token)
 
     # Get identity store ID from environment
     identity_store_id = os.environ.get("IDENTITY_STORE_ID", "")
@@ -486,8 +509,8 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
             "body": {"error": "IDENTITY_STORE_ID not configured", "success": False},
         }
 
-    # Get slack channel ID from environment
-    slack_channel_id = os.environ.get("SLACK_CHANNEL_ID", "")
+    # Get channel ID from environment (Slack channel or Teams conversation id)
+    channel_id = os.environ.get("SLACK_CHANNEL_ID", "")
 
     # Get audit bucket config from environment
     audit_bucket_name = os.environ.get("S3_BUCKET_FOR_AUDIT_ENTRY_NAME", "")
@@ -498,9 +521,9 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
         identity_store_client=_identity_store_client,
         identity_store_id=identity_store_id,
         s3_client=_s3_client,
-        slack_client=slack_client,
+        notifier=notifier,
         config=config,
-        slack_channel_id=slack_channel_id,
+        channel_id=channel_id,
         audit_bucket_name=audit_bucket_name,
         audit_bucket_prefix=audit_bucket_prefix,
     )
@@ -515,12 +538,12 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
         try:
             if result.errors:
                 notify_sync_error(
-                    slack_client=slack_client,
+                    notifier=notifier,
                     error_message="\n".join(result.errors[:5]),
                     error_count=len(result.errors),
-                    channel_id=slack_channel_id,
+                    channel_id=channel_id,
                 )
-            notify_sync_summary(slack_client=slack_client, summary=result.to_summary(), channel_id=slack_channel_id)
+            notify_sync_summary(notifier=notifier, summary=result.to_summary(), channel_id=channel_id)
         except Exception as e:
             logger.exception(f"Failed to send summary notification: {e}")
     else:
