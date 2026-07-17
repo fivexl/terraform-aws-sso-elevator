@@ -379,3 +379,98 @@ class TestListGroupsForUser:
         assert result == frozenset([GROUP_A, GROUP_B])
         client.get_paginator.assert_called_once_with("list_group_memberships_for_member")
         paginator.paginate.assert_called_once_with(IdentityStoreId="d-1234567890", MemberId={"UserId": "user-id"})
+
+
+class TestModalOptionFiltering:
+    """Filtering of the Slack request modal's options to what the requester may request."""
+
+    def test_eligible_group_ids_unrestricted_returns_all(self):
+        statements = frozenset([group_statement(), group_statement(resource=[GROUP_B])])
+        assert access_control.eligible_group_ids(statements, "dev@test.com", frozenset()) == frozenset([GROUP_A, GROUP_B])
+
+    def test_eligible_group_ids_hides_restricted_groups(self):
+        restricted = GroupStatement.model_validate(
+            {**group_statement(resource=[GROUP_B]).model_dump(), "allowed_users": ["oncall@test.com"]}
+        )
+        statements = frozenset([group_statement(), restricted])
+        assert access_control.eligible_group_ids(statements, "dev@test.com", frozenset()) == frozenset([GROUP_A])
+        assert access_control.eligible_group_ids(statements, "oncall@test.com", frozenset()) == frozenset([GROUP_A, GROUP_B])
+
+    def test_eligible_group_ids_by_group_membership(self):
+        restricted = GroupStatement.model_validate({**group_statement(resource=[GROUP_B]).model_dump(), "allowed_groups": [GROUP_A]})
+        statements = frozenset([restricted])
+        assert access_control.eligible_group_ids(statements, "dev@test.com", frozenset([GROUP_A])) == frozenset([GROUP_B])
+        assert access_control.eligible_group_ids(statements, "dev@test.com", frozenset()) == frozenset()
+
+    def test_eligible_accounts_and_permission_sets_wildcard_means_unrestricted(self):
+        statements = frozenset([account_statement(resource=["*"], permission_set=["*"])])
+        accounts, permission_sets = access_control.eligible_accounts_and_permission_sets(statements, "dev@test.com", frozenset())
+        assert accounts is None
+        assert permission_sets is None
+
+    def test_eligible_accounts_and_permission_sets_ignores_ineligible_statements(self):
+        restricted = Statement.model_validate(
+            {
+                **account_statement(resource=["222222222222"], permission_set=["AdministratorAccess"]).model_dump(),
+                "allowed_users": ["oncall@test.com"],
+            }
+        )
+        unrestricted = account_statement(resource=["111111111111"], permission_set=["ReadOnlyAccess"])
+        statements = frozenset([restricted, unrestricted])
+
+        accounts, permission_sets = access_control.eligible_accounts_and_permission_sets(statements, "dev@test.com", frozenset())
+        assert accounts == frozenset(["111111111111"])
+        assert permission_sets == frozenset(["ReadOnlyAccess"])
+
+        accounts, permission_sets = access_control.eligible_accounts_and_permission_sets(statements, "oncall@test.com", frozenset())
+        assert accounts == frozenset(["111111111111", "222222222222"])
+        assert permission_sets == frozenset(["ReadOnlyAccess", "AdministratorAccess"])
+
+    def test_filter_account_request_options(self):
+        restricted = Statement.model_validate(
+            {
+                **account_statement(resource=["222222222222"], permission_set=["AdministratorAccess"]).model_dump(),
+                "allowed_users": ["oncall@test.com"],
+            }
+        )
+        unrestricted = account_statement(resource=["111111111111"], permission_set=["ReadOnlyAccess"])
+        statements = frozenset([restricted, unrestricted])
+        all_accounts = [
+            entities.aws.Account(id="111111111111", name="dev"),
+            entities.aws.Account(id="222222222222", name="prod"),
+        ]
+        all_permission_sets = [
+            entities.aws.PermissionSet(name="ReadOnlyAccess", arn="arn:ro", description=None),
+            entities.aws.PermissionSet(name="AdministratorAccess", arn="arn:admin", description=None),
+        ]
+
+        accounts, permission_sets = access_control.filter_account_request_options(
+            all_accounts, all_permission_sets, statements, "dev@test.com", frozenset()
+        )
+        assert [account.id for account in accounts] == ["111111111111"]
+        assert [permission_set.name for permission_set in permission_sets] == ["ReadOnlyAccess"]
+
+        accounts, permission_sets = access_control.filter_account_request_options(
+            all_accounts, all_permission_sets, statements, "oncall@test.com", frozenset()
+        )
+        assert [account.id for account in accounts] == ["111111111111", "222222222222"]
+        assert [permission_set.name for permission_set in permission_sets] == ["ReadOnlyAccess", "AdministratorAccess"]
+
+    def test_filter_account_request_options_wildcard_keeps_everything(self):
+        statements = frozenset([account_statement(resource=["*"], permission_set=["*"])])
+        all_accounts = [entities.aws.Account(id="111111111111", name="dev")]
+        all_permission_sets = [entities.aws.PermissionSet(name="ReadOnlyAccess", arn="arn:ro", description=None)]
+        accounts, permission_sets = access_control.filter_account_request_options(
+            all_accounts, all_permission_sets, statements, "dev@test.com", frozenset()
+        )
+        assert accounts == all_accounts
+        assert permission_sets == all_permission_sets
+
+    def test_no_available_options_views_have_no_submit_button(self):
+        import slack_helpers
+
+        for view_class in (slack_helpers.RequestForAccessView, slack_helpers.RequestForGroupAccessView):
+            view = view_class.build_no_available_options_view("You are not allowed to request access.")
+            assert view.submit is None
+            assert view.callback_id == view_class.CALLBACK_ID
+            assert "not allowed" in view.blocks[0].text.text

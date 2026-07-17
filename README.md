@@ -373,6 +373,7 @@ By default, a statement says what can be requested and who approves it, but not 
 - It is enforced at both request time and approval time, so an ineligible request can't be approved either.
 - If the requester cannot be resolved to an SSO user (or group memberships can't be fetched), statements restricted with `AllowedGroups` fail closed — they are treated as not available to that requester. Unrestricted statements are unaffected.
 - If statements match the request but the requester is not eligible for any of them, the request is denied with a "not allowed to request" message.
+- The Slack request dialogs only show what the requester is eligible for: groups, accounts, and permission sets covered solely by statements the requester can't use are hidden from the select lists. If nothing is available, the dialog shows a "not allowed to request access" message instead of the form. (Note: account and permission-set lists are filtered independently, so a specific ineligible account/permission-set *combination* may still be selectable — it is denied on submission.)
 
 Example — developers can request `ReadOnlyAccess` themselves, but only members of the infra group (or a specific user) can request `AdministratorAccess`:
 

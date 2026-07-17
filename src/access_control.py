@@ -96,6 +96,70 @@ def _filter_statements_for_requester(
     return frozenset(st for st in statements if requester_allowed(st, emails, requester_group_ids))  # type: ignore # noqa: PGH003
 
 
+def eligible_group_ids(
+    statements: FrozenSet[GroupStatement],
+    requester_email: str,
+    requester_group_ids: FrozenSet[str],
+) -> FrozenSet[str]:
+    """Group IDs the requester may request, per each statement's ``allowed_groups``/``allowed_users``.
+
+    Used to filter the request modal so a requester only sees groups they can actually request.
+    """
+    emails = requester_email_variants(requester_email)
+    return frozenset(
+        group_id for statement in statements if requester_allowed(statement, emails, requester_group_ids) for group_id in statement.resource
+    )
+
+
+def eligible_accounts_and_permission_sets(
+    statements: FrozenSet[Statement],
+    requester_email: str,
+    requester_group_ids: FrozenSet[str],
+) -> tuple[FrozenSet[str] | None, FrozenSet[str] | None]:
+    """Account IDs and permission-set names the requester may request, per ``allowed_groups``/``allowed_users``.
+
+    ``None`` for either element means "unrestricted" — a ``*`` wildcard appeared in an eligible
+    statement, so all accounts / permission sets should be shown.
+    """
+    emails = requester_email_variants(requester_email)
+    accounts: set[str] = set()
+    permission_sets: set[str] = set()
+    accounts_wildcard = False
+    permission_sets_wildcard = False
+    for statement in statements:
+        if not requester_allowed(statement, emails, requester_group_ids):
+            continue
+        if "*" in statement.permission_set:
+            permission_sets_wildcard = True
+        else:
+            permission_sets.update(statement.permission_set)
+        if statement.resource_type == "Account":
+            if "*" in statement.resource:
+                accounts_wildcard = True
+            else:
+                accounts.update(statement.resource)
+    return (
+        None if accounts_wildcard else frozenset(accounts),
+        None if permission_sets_wildcard else frozenset(permission_sets),
+    )
+
+
+def filter_account_request_options(  # noqa: PLR0913
+    accounts: list[entities.aws.Account],
+    permission_sets: list[entities.aws.PermissionSet],
+    statements: FrozenSet[Statement],
+    requester_email: str,
+    requester_group_ids: FrozenSet[str],
+) -> tuple[list[entities.aws.Account], list[entities.aws.PermissionSet]]:
+    """Filter the request modal's account/permission-set options to what the requester may request."""
+    allowed_accounts, allowed_permission_sets = eligible_accounts_and_permission_sets(statements, requester_email, requester_group_ids)
+    if allowed_accounts is not None:
+        accounts = [account for account in accounts if account.id in allowed_accounts]
+    if allowed_permission_sets is not None:
+        permission_sets = [permission_set for permission_set in permission_sets if permission_set.name in allowed_permission_sets]
+    return accounts, permission_sets
+
+
 def determine_affected_statements(
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     account_id: str | None = None,

@@ -143,6 +143,17 @@ class RequestForAccessView:
         )
 
     @classmethod
+    def build_no_available_options_view(cls, message: str) -> View:
+        # No submit button: there is nothing the user could request.
+        return View(
+            type="modal",
+            callback_id=cls.CALLBACK_ID,
+            close=PlainTextObject(text="Close"),
+            title=PlainTextObject(text="Get AWS access"),
+            blocks=[SectionBlock(text=MarkdownTextObject(text=message))],
+        )
+
+    @classmethod
     def update_with_accounts_and_permission_sets(
         cls, accounts: list[entities.aws.Account], permission_sets: list[entities.aws.PermissionSet]
     ) -> View:
@@ -557,6 +568,17 @@ class RequestForGroupAccessView:
                     ),
                 ),
             ],
+        )
+
+    @classmethod
+    def build_no_available_options_view(cls, message: str) -> View:  # noqa: ANN102
+        # No submit button: there is nothing the user could request.
+        return View(
+            type="modal",
+            callback_id=cls.CALLBACK_ID,
+            close=PlainTextObject(text="Close"),
+            title=PlainTextObject(text="Get AWS access"),
+            blocks=[SectionBlock(text=MarkdownTextObject(text=message))],
         )
 
     @classmethod
