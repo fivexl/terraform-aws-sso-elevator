@@ -116,6 +116,8 @@ There are two key differences compared to the standard Elevator configuration:
 - ResourceType is not required for group access configurations.
 - In the Resource field, you must provide group IDs instead of account IDs.
 
+Group statements also support the optional `AllowedGroups` and `AllowedUsers` requester restrictions — see [Restricting who can request access](#restricting-who-can-request-access).
+
 The Elevator will only work with groups specified in the configuration.
 
 If you were using Terraform AWS SSO Elevator before version 2.0.0, you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
@@ -356,7 +358,52 @@ The fields in the configuration dictionary are:
 - **Approvers**: This field lists the potential approvers for the request. It accepts either a single string or a list of strings representing different approvers.
 - **AllowSelfApproval**: This field can be a boolean, indicating whether the requester, if present in the `Approvers` list, is permitted to approve their own request. It defaults to `None`.
 - **ApprovalIsNotRequired**: This field can also be a boolean, signifying whether the approval can be granted automatically, bypassing the approvers entirely. The default value is `None`.
-- 
+- **AllowedGroups**: Optional requester restriction. A single SSO group ID or a list of SSO group IDs. If set, only members of at least one of the listed groups may request access using this statement. See [Restricting who can request access](#restricting-who-can-request-access).
+- **AllowedUsers**: Optional requester restriction. A single email or a list of emails. If set, only the listed users may request access using this statement. See [Restricting who can request access](#restricting-who-can-request-access).
+
+### Restricting who can request access
+
+By default, a statement says what can be requested and who approves it, but not who is allowed to request it — any user the Elevator can resolve in SSO can request any account/permission set (or group) that has a matching statement. The optional `AllowedGroups` and `AllowedUsers` fields restrict the requester side. They work the same way in both `config` (account statements) and `group_config` (group statements):
+
+- If both fields are omitted or empty, the statement is unrestricted — same behavior as before.
+- If either field is set, the requester must be a member of at least one group listed in `AllowedGroups` **or** be listed by email in `AllowedUsers`. Matching either one is sufficient.
+- `AllowedGroups` entries are SSO group IDs (the same format as `Resource` in `group_config`). Group membership is resolved via the IAM Identity Center `ListGroupMembershipsForMember` API using the requester's SSO user.
+- `AllowedUsers` entries are matched against the requester's email case-insensitively, including the secondary fallback domain variants if `secondary_fallback_email_domains` is configured.
+- The restriction applies to the whole statement, including `ApprovalIsNotRequired` and `AllowSelfApproval` — an ineligible requester cannot use an auto-approved statement.
+- It is enforced at both request time and approval time, so an ineligible request can't be approved either.
+- If the requester cannot be resolved to an SSO user (or group memberships can't be fetched), statements restricted with `AllowedGroups` fail closed — they are treated as not available to that requester. Unrestricted statements are unaffected.
+- If statements match the request but the requester is not eligible for any of them, the request is denied with a "not allowed to request" message.
+
+Example — developers can request `ReadOnlyAccess` themselves, but only members of the infra group (or a specific user) can request `AdministratorAccess`:
+
+```hcl
+config = [
+  {
+    "ResourceType" : "Account",
+    "Resource" : "*",
+    "PermissionSet" : "ReadOnlyAccess",
+    "Approvers" : ["lead@example.com"],
+  },
+  {
+    "ResourceType" : "Account",
+    "Resource" : "*",
+    "PermissionSet" : "AdministratorAccess",
+    "Approvers" : ["cto@example.com"],
+    "AllowedGroups" : ["99999999-8888-7777-6666-555555555555"], # infra team SSO group
+    "AllowedUsers" : ["oncall@example.com"],
+  },
+]
+
+group_config = [
+  {
+    "Resource" : ["11111111-2222-3333-4444-555555555555"], # ProdAdmins
+    "Approvers" : ["cto@example.com"],
+    "AllowedGroups" : ["99999999-8888-7777-6666-555555555555"], # infra team SSO group
+    "AllowedUsers" : ["oncall@example.com"],
+  },
+]
+```
+
 ### Explicit Deny
 In the system, an explicit denial in any statement overrides any approvals. For instance, if one statement designates an individual as an approver for all accounts, but another statement specifies that the same individual is not allowed to self-approve or to bypass the approval process for a particular account and permission set (by setting "allow_self_approval" and "approval_is_not_required" to `False`), then that individual will not be able to approve requests for that specific account, thereby enforcing a stricter control.
 

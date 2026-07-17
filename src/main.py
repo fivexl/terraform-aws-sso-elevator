@@ -255,6 +255,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         permission_set_name=payload.request.permission_set_name,
         approver_email=approver.email,
         requester_email=requester.email,
+        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.statements, requester.email),
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -334,6 +335,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         account_id=request.account_id,
         permission_set_name=request.permission_set_name,
         requester_email=requester.email,
+        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.statements, requester.email),
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -416,6 +418,10 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         case access_control.DecisionReason.NoStatements:
             text = "There are no statements for this Permission Set & Account."
             dm_text = "There are no statements for this Permission Set & Account."
+            color_coding_emoji = cfg.bad_result_emoji
+        case access_control.DecisionReason.RequesterNotAllowed:
+            text = f"<@{requester.id}> is not allowed to request access to this Permission Set & Account."
+            dm_text = "You are not allowed to request access to this Permission Set & Account."
             color_coding_emoji = cfg.bad_result_emoji
 
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
