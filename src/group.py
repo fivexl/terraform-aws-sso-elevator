@@ -28,7 +28,7 @@ sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
 identity_store_id = sso_instance.identity_store_id
 
 
-def _group_access_decision_messages(
+def _group_access_decision_messages(  # noqa: PLR0911
     client: WebClient,
     decision: access_control.AccessRequestDecision,
 ) -> tuple[str, str, str]:
@@ -87,6 +87,12 @@ def _group_access_decision_messages(
                 "There are no statements for this Group.",
                 cfg.bad_result_emoji,
             )
+        case access_control.DecisionReason.RequesterNotAllowed:
+            return (
+                "Requester is not allowed to request access to this Group.",
+                "You are not allowed to request access to this Group.",
+                cfg.bad_result_emoji,
+            )
 
 
 @handle_errors
@@ -107,6 +113,7 @@ def handle_request_for_group_access_submittion(
         cfg.group_statements,
         requester_email=requester.email,
         group_id=request.group_id,
+        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.group_statements, requester.email),
     )
 
     show_buttons = bool(decision.approvers)
@@ -250,6 +257,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
         group_id=payload.request.group_id,
         approver_email=approver.email,
         requester_email=requester.email,
+        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.group_statements, requester.email),
     )
 
     logger.info("Decision on request was made", extra={"decision": decision.dict()})

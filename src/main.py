@@ -118,6 +118,21 @@ def load_select_options_for_group_access_request(client: WebClient, body: dict) 
     groups = sso.get_groups_from_config(sso_instance.identity_store_id, identity_store_client, cfg)
 
     user_id = body.get("user", {}).get("id")
+
+    # Only show groups the requester is eligible to request (AllowedGroups/AllowedUsers restrictions)
+    requester = slack_helpers.get_user(client, id=user_id)
+    requester_group_ids = access_control.get_requester_group_ids_if_needed(cfg.group_statements, requester.email)
+    eligible_group_ids = access_control.eligible_group_ids(cfg.group_statements, requester.email, requester_group_ids)
+    groups = [group for group in groups if group.id in eligible_group_ids]
+
+    if groups:
+        view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
+    else:
+        logger.info("Requester is not eligible for any group statement, showing empty state", extra={"requester_email": requester.email})
+        view = slack_helpers.RequestForGroupAccessView.build_no_available_options_view(
+            "You are not allowed to request access to any SSO group. Please contact your administrator if you believe this is a mistake."
+        )
+
     callback_id = slack_helpers.RequestForGroupAccessView.CALLBACK_ID
     view_key = f"{user_id}:{callback_id}"
 
@@ -130,11 +145,9 @@ def load_select_options_for_group_access_request(client: WebClient, body: dict) 
         )
         # Fallback: open a new view with the data already loaded
         trigger_id = body["trigger_id"]
-        view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
         return client.views_open(trigger_id=trigger_id, view=view)
 
     logger.debug(f"Updating view with view_id from key: {view_key}")
-    view = slack_helpers.RequestForGroupAccessView.update_with_groups(groups=groups)
     return client.views_update(view_id=view_id, view=view)
 
 
@@ -146,6 +159,29 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
     permission_sets = sso.get_permission_sets_from_config_with_cache(sso_client=sso_client, s3_client=s3_client, cfg=cfg)
 
     user_id = body.get("user", {}).get("id")
+
+    # Only show accounts/permission sets the requester is eligible to request (AllowedGroups/AllowedUsers restrictions)
+    requester = slack_helpers.get_user(client, id=user_id)
+    requester_group_ids = access_control.get_requester_group_ids_if_needed(cfg.statements, requester.email)
+    accounts, permission_sets = access_control.filter_account_request_options(
+        accounts=accounts,
+        permission_sets=permission_sets,
+        statements=cfg.statements,
+        requester_email=requester.email,
+        requester_group_ids=requester_group_ids,
+    )
+
+    if accounts and permission_sets:
+        view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(
+            accounts=accounts, permission_sets=permission_sets
+        )
+    else:
+        logger.info("Requester is not eligible for any statement, showing empty state", extra={"requester_email": requester.email})
+        view = slack_helpers.RequestForAccessView.build_no_available_options_view(
+            "You are not allowed to request access to any account or permission set. "
+            "Please contact your administrator if you believe this is a mistake."
+        )
+
     callback_id = slack_helpers.RequestForAccessView.CALLBACK_ID
     view_key = f"{user_id}:{callback_id}"
 
@@ -158,13 +194,9 @@ def load_select_options_for_account_access_request(client: WebClient, body: dict
         )
         # Fallback: open a new view with the data already loaded
         trigger_id = body["trigger_id"]
-        view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(
-            accounts=accounts, permission_sets=permission_sets
-        )
         return client.views_open(trigger_id=trigger_id, view=view)
 
     logger.debug(f"Updating view with view_id from key: {view_key}")
-    view = slack_helpers.RequestForAccessView.update_with_accounts_and_permission_sets(accounts=accounts, permission_sets=permission_sets)
     return client.views_update(view_id=view_id, view=view)
 
 
@@ -255,6 +287,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         permission_set_name=payload.request.permission_set_name,
         approver_email=approver.email,
         requester_email=requester.email,
+        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.statements, requester.email),
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -334,6 +367,7 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         account_id=request.account_id,
         permission_set_name=request.permission_set_name,
         requester_email=requester.email,
+        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.statements, requester.email),
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -416,6 +450,10 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
         case access_control.DecisionReason.NoStatements:
             text = "There are no statements for this Permission Set & Account."
             dm_text = "There are no statements for this Permission Set & Account."
+            color_coding_emoji = cfg.bad_result_emoji
+        case access_control.DecisionReason.RequesterNotAllowed:
+            text = f"<@{requester.id}> is not allowed to request access to this Permission Set & Account."
+            dm_text = "You are not allowed to request access to this Permission Set & Account."
             color_coding_emoji = cfg.bad_result_emoji
 
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
