@@ -333,6 +333,7 @@ class TestApproveRequestDecision:
         )
         assert decision.permit is True
 
+
 class TestRequesterGroupResolution:
     def test_email_variants_include_secondary_fallback_domains(self):
         # conftest sets secondary_fallback_email_domains to ["domen.com"]
