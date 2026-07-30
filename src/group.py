@@ -220,9 +220,6 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             text=f"<@{approver.id}> request is already in progress, please wait for the result.",
             thread_ts=payload.thread_ts,
         )
-    cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
-    cache_for_dublicate_requests["group_id"] = payload.request.group_id
-
     if payload.action == entities.ApproverAction.Discard:
         blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
             blocks=payload.message["blocks"],
@@ -251,13 +248,17 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             thread_ts=payload.thread_ts,
         )
 
+    requester_group_ids = access_control.get_requester_group_ids_if_needed(cfg.group_statements, requester.email)
+    cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
+    cache_for_dublicate_requests["group_id"] = payload.request.group_id
+
     decision = access_control.make_decision_on_approve_request(
         action=payload.action,
         statements=cfg.group_statements,  # type: ignore # noqa: PGH003
         group_id=payload.request.group_id,
         approver_email=approver.email,
         requester_email=requester.email,
-        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.group_statements, requester.email),
+        requester_group_ids=requester_group_ids,
     )
 
     logger.info("Decision on request was made", extra={"decision": decision.dict()})

@@ -274,3 +274,38 @@ def test_requires_approval_no_approvers_found(group_module, slack_client):
         # Uses bad_result_emoji
         color_arg = mock_sh.HeaderSectionBlock.set_color_coding.call_args
         assert color_arg.kwargs["color_coding_emoji"] == ":x:"
+
+
+def test_group_approval_lookup_error_is_retryable(group_module, slack_client):
+    payload = MagicMock(
+        approver_slack_id=APPROVER_1.id,
+        action=entities.ApproverAction.Approve,
+        channel_id="C_CHAN",
+        thread_ts="1234567890.123456",
+    )
+    payload.request.requester_slack_id = REQUESTER.id
+    payload.request.group_id = GROUP.id
+
+    with (
+        patch.object(group_module, "slack_helpers") as mock_sh,
+        patch.object(group_module, "access_control") as mock_ac,
+    ):
+        mock_sh.ButtonGroupClickedPayload.model_validate.return_value = payload
+        mock_sh.get_user.side_effect = [APPROVER_1, REQUESTER, APPROVER_1, REQUESTER]
+        mock_ac.get_requester_group_ids_if_needed.side_effect = RuntimeError("SSO unavailable")
+        group_module.cache_for_dublicate_requests.clear()
+
+        for _ in range(2):
+            group_module.handle_group_button_click(
+                body={},
+                client=slack_client,
+                context={"user_id": APPROVER_1.id},
+            )
+
+        assert mock_ac.get_requester_group_ids_if_needed.call_count == 2
+        mock_ac.make_decision_on_approve_request.assert_not_called()
+        mock_ac.execute_decision_on_group_request.assert_not_called()
+        slack_client.chat_update.assert_not_called()
+        assert group_module.cache_for_dublicate_requests == {}
+        assert slack_client.chat_postMessage.call_count == 2
+        assert all("unexpected error" in call.kwargs["text"] for call in slack_client.chat_postMessage.call_args_list)

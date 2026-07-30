@@ -333,7 +333,6 @@ class TestApproveRequestDecision:
         )
         assert decision.permit is True
 
-
 class TestRequesterGroupResolution:
     def test_email_variants_include_secondary_fallback_domains(self):
         # conftest sets secondary_fallback_email_domains to ["domen.com"]
@@ -356,11 +355,19 @@ class TestRequesterGroupResolution:
         statements = frozenset([Statement.model_validate({**account_statement().model_dump(), "allowed_groups": [GROUP_A]})])
         assert access_control.get_requester_group_ids_if_needed(statements, "dev@test.com") == frozenset([GROUP_A])
 
-    def test_get_requester_group_ids_fails_closed(self, monkeypatch):
+    def test_get_requester_group_ids_propagates_lookup_failure(self, monkeypatch):
         def boom(*_args, **_kwargs):  # noqa: ANN002, ANN003
             raise RuntimeError("SSO unavailable")
 
         monkeypatch.setattr(access_control.sso, "describe_sso_instance", boom)
+        with pytest.raises(RuntimeError, match="SSO unavailable"):
+            access_control.get_requester_group_ids("dev@test.com")
+
+    def test_get_requester_group_ids_returns_confirmed_empty_membership(self, monkeypatch):
+        monkeypatch.setattr(access_control.sso, "describe_sso_instance", lambda *_args: MagicMock(identity_store_id="d-123"))
+        monkeypatch.setattr(access_control.sso, "get_user_principal_id_by_email", lambda **_kwargs: ("user-id", False))
+        monkeypatch.setattr(access_control.sso, "list_groups_for_user", lambda *_args: frozenset())
+
         assert access_control.get_requester_group_ids("dev@test.com") == frozenset()
 
 

@@ -220,7 +220,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         payload = slack_helpers.ButtonClickedPayload.model_validate(body)
     except Exception as e:
         logger.exception(e)
-        return group.handle_group_button_click(body, client, context)
+        return group.handle_group_button_click(body=body, client=client, context=context)
 
     logger.info("Button click payload", extra={"payload": payload})
     # Approver might be from different Slack workspace, if so, get_user will fail.
@@ -248,10 +248,6 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             text=f"<@{approver.id}> request is already in progress, please wait for the result.",
             thread_ts=payload.thread_ts,
         )
-    cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
-    cache_for_dublicate_requests["account_id"] = payload.request.account_id
-    cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
-
     if payload.action == entities.ApproverAction.Discard:
         blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
             blocks=payload.message["blocks"],
@@ -280,6 +276,11 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
 
+    requester_group_ids = access_control.get_requester_group_ids_if_needed(cfg.statements, requester.email)
+    cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
+    cache_for_dublicate_requests["account_id"] = payload.request.account_id
+    cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
+
     decision = access_control.make_decision_on_approve_request(
         action=payload.action,
         statements=cfg.statements,
@@ -287,7 +288,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         permission_set_name=payload.request.permission_set_name,
         approver_email=approver.email,
         requester_email=requester.email,
-        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.statements, requester.email),
+        requester_group_ids=requester_group_ids,
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 

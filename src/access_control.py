@@ -58,9 +58,8 @@ def requester_email_variants(requester_email: str) -> FrozenSet[str]:
 def get_requester_group_ids(requester_email: str) -> FrozenSet[str]:
     """Resolve the SSO group IDs the requester belongs to.
 
-    Used to evaluate the optional ``allowed_groups`` requester restriction. Returns an empty
-    set if the requester can't be resolved to an SSO user — restricted statements then deny
-    (fail closed) while unrestricted statements are unaffected.
+    Lookup errors are propagated so they cannot be confused with a successful lookup returning
+    no memberships.
     """
     try:
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
@@ -71,9 +70,9 @@ def get_requester_group_ids(requester_email: str) -> FrozenSet[str]:
             cfg=cfg,
         )
         return sso.list_groups_for_user(sso_instance.identity_store_id, user_principal_id, identitystore_client)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Could not resolve requester group memberships; treating as no groups", extra={"error": str(e)})
-        return frozenset()
+    except Exception as error:  # noqa: BLE001
+        logger.exception(f"Could not resolve requester group memberships: {error}")
+        raise
 
 
 def get_requester_group_ids_if_needed(

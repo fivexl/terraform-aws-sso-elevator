@@ -371,7 +371,7 @@ By default, a statement says what can be requested and who approves it, but not 
 - `AllowedUsers` entries are matched against the requester's email case-insensitively, including the secondary fallback domain variants if `secondary_fallback_email_domains` is configured.
 - The restriction applies to the whole statement, including `ApprovalIsNotRequired` and `AllowSelfApproval` — an ineligible requester cannot use an auto-approved statement.
 - It is enforced at both request time and approval time, so an ineligible request can't be approved either.
-- If the requester cannot be resolved to an SSO user (or group memberships can't be fetched), statements restricted with `AllowedGroups` fail closed — they are treated as not available to that requester. Unrestricted statements are unaffected.
+- If the requester cannot be resolved to an SSO user or group memberships can't be fetched, processing stops with an error and no access is granted.
 - If statements match the request but the requester is not eligible for any of them, the request is denied with a "not allowed to request" message.
 - The Slack request dialogs only show what the requester is eligible for: groups, accounts, and permission sets covered solely by statements the requester can't use are hidden from the select lists. If nothing is available, the dialog shows a "not allowed to request access" message instead of the form. (Note: account and permission-set lists are filtered independently, so a specific ineligible account/permission-set *combination* may still be selectable — it is denied on submission.)
 
