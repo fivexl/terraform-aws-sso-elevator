@@ -43,33 +43,16 @@ module "access_requester_slack_handler" {
     module.sso_elevator_dependencies[0].lambda_layer_arn,
   ]
 
+  # The configuration lives in SSM Parameter Store (see requester_ssm_parameters.tf).
+  # Only the bootstrap values that are read before the config is loaded stay here:
+  # LOG_LEVEL is consumed by config.get_logger() at import time and
+  # POWERTOOLS_LOGGER_LOG_EVENT is read by aws-lambda-powertools itself.
   environment_variables = {
-    LOG_LEVEL = var.log_level
+    LOG_LEVEL                   = var.log_level
+    POWERTOOLS_LOGGER_LOG_EVENT = true
 
-    SLACK_SIGNING_SECRET = var.slack_signing_secret
-    SLACK_BOT_TOKEN      = var.slack_bot_token
-    SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = var.schedule_group_name
-
-
-    SSO_INSTANCE_ARN                            = local.sso_instance_arn
-    POWERTOOLS_LOGGER_LOG_EVENT                 = true
-    SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
-    REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
-    REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
-    S3_BUCKET_FOR_AUDIT_ENTRY_NAME              = local.s3_bucket_name
-    S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
-    SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
-    REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
-    APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME   = var.approver_renotification_initial_wait_time
-    APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER  = var.approver_renotification_backoff_multiplier
-    MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
-    PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
-    SECONDARY_FALLBACK_EMAIL_DOMAINS            = jsonencode(var.secondary_fallback_email_domains)
-    SEND_DM_IF_USER_NOT_IN_CHANNEL              = var.send_dm_if_user_not_in_channel
-    CONFIG_BUCKET_NAME                          = local.config_bucket_name
-    CONFIG_S3_KEY                               = "config/approval-config.json"
-    CACHE_ENABLED                               = var.cache_enabled
+    SSM_CONFIG_PARAMETER_PATH = local.requester_ssm_parameter_path
+    SSM_CONFIG_VERSION        = local.requester_ssm_config_version
   }
 
   allowed_triggers = var.create_api_gateway ? {
@@ -236,6 +219,35 @@ data "aws_iam_policy_document" "slack_handler" {
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
+  }
+  statement {
+    sid    = "AllowReadConfigFromSSM"
+    effect = "Allow"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:GetParametersByPath",
+    ]
+    resources = [
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.requester_ssm_parameter_path}",
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.requester_ssm_parameter_path}/*",
+    ]
+  }
+
+  # Needed to read the SecureString parameters. Scoped by kms:ViaService because the AWS managed
+  # alias/aws/ssm key cannot be referenced by ARN, and it is not known which key the caller passed.
+  statement {
+    sid    = "AllowDecryptSSMParameters"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
+    }
   }
 }
 

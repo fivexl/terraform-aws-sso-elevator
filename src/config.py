@@ -4,6 +4,7 @@ from typing import Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
+from mypy_boto3_ssm import SSMClient
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -68,6 +69,39 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
         raise
 
 
+def load_config_from_ssm(ssm_client: SSMClient, path: str) -> dict[str, str]:
+    """
+    Load configuration from SSM Parameter Store.
+
+    Every parameter under `path` becomes one configuration value, keyed by the last
+    segment of the parameter name lowercased, e.g. `/sso-elevator/access-requester/config/SLACK_CHANNEL_ID`
+    becomes `slack_channel_id`.
+
+    Args:
+        ssm_client: Boto3 SSM client
+        path: Parameter Store path prefix holding the configuration
+
+    Returns:
+        Dictionary of configuration field names to values
+
+    Raises:
+        RuntimeError: If no parameters are found under the path
+        Exception: If the SSM lookup fails
+    """
+    logger.info(f"Loading config from SSM Parameter Store path {path}")
+    parameters: dict[str, str] = {}
+    paginator = ssm_client.get_paginator("get_parameters_by_path")
+    for page in paginator.paginate(Path=path, Recursive=True, WithDecryption=True):
+        for parameter in page["Parameters"]:
+            parameters[parameter["Name"].rsplit("/", maxsplit=1)[-1].lower()] = parameter["Value"]
+
+    if not parameters:
+        raise RuntimeError(f"No configuration parameters found under SSM Parameter Store path {path}")
+
+    logger.info(f"Loaded {len(parameters)} parameters from SSM Parameter Store path {path}")
+    return parameters
+
+
 def parse_statement(_dict: dict) -> Statement:
     def to_set_if_list_or_str(v: list | str) -> frozenset[str]:
         if isinstance(v, list):
@@ -106,6 +140,15 @@ def parse_group_statement(_dict: dict) -> GroupStatement:
     )
 
 
+def decode_json_list_fields(values: dict) -> dict:
+    """Decode the JSON encoded list fields, which arrive as strings from env vars and SSM."""
+    return values | {
+        field: json.loads(values[field])
+        for field in ("secondary_fallback_email_domains", "permission_duration_list_override")
+        if isinstance(values.get(field), str)
+    }
+
+
 def get_groups_from_statements(statements: set[GroupStatement]) -> frozenset[str]:
     return frozenset(group for statement in statements for group in statement.resource)
 
@@ -121,6 +164,8 @@ class Config(BaseSettings):
     post_update_to_slack: bool = False
     slack_channel_id: str
     slack_bot_token: str
+    # Empty for the lambdas that do not talk to the Slack API (e.g. the revoker).
+    slack_signing_secret: str = ""
 
     approver_renotification_initial_wait_time: int
     approver_renotification_backoff_multiplier: int
@@ -163,6 +208,10 @@ class Config(BaseSettings):
     @classmethod
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101
         import boto3
+
+        # Values coming from environment variables or SSM Parameter Store are always strings,
+        # so the list fields arrive JSON encoded.
+        values = decode_json_list_fields(values)
 
         config_s3_key = values.get("config_s3_key", "")
 
@@ -220,5 +269,11 @@ _config: Optional[Config] = None
 def get_config() -> Config:
     global _config  # noqa: PLW0603
     if _config is None:
-        _config = Config()  # type: ignore # noqa: PGH003
+        ssm_config_path = os.environ.get("SSM_CONFIG_PARAMETER_PATH", "")
+        if ssm_config_path:
+            import boto3
+
+            _config = Config(**load_config_from_ssm(boto3.client("ssm"), ssm_config_path))  # type: ignore # noqa: PGH003
+        else:
+            _config = Config()  # type: ignore # noqa: PGH003
     return _config
