@@ -48,6 +48,10 @@ mypy-boto3-scheduler==1.40.20 \
     --hash=sha256:60bccfd8a3de0e90bf8dd3866aab09e855ad9a632cc45907d4f8b539edf3ceb5 \
     --hash=sha256:931058d494964ba47e6265ea0191b3ab038b431042c93603dd24976af9264ac7
     # via boto3-stubs
+mypy-boto3-ssm==1.40.54 \
+    --hash=sha256:57a2f70cd7d78334085cba746a1530f882c0c3a41a80955c65d49fd3b57d65bd \
+    --hash=sha256:b5ae410922a8c00ab5077bec48174c5f4fdb35339b2ea156401b84e7a626c952
+    # via boto3-stubs
 mypy-boto3-sso-admin==1.40.37 \
     --hash=sha256:220dfb5f750d10df0df9660a339278d4ce4f6480d67858873cae1cfa7374ecd7 \
     --hash=sha256:4e20aaa7cd07e283f60f2c8ca0a50caa775a78fb63e40873856724fd59bcd800

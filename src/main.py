@@ -29,6 +29,12 @@ s3_client = session.client("s3")
 cfg = config.get_config()
 app = App(
     process_before_response=True,
+    # Taken from the config instead of the SLACK_BOT_TOKEN / SLACK_SIGNING_SECRET
+    # environment variables Slack Bolt reads by default, because the requester loads
+    # its configuration from SSM Parameter Store. None is passed when a value is
+    # missing so that Slack Bolt still falls back to the environment variables.
+    token=cfg.slack_bot_token or None,
+    signing_secret=cfg.slack_signing_secret or None,
     # Logger removed to avoid pickle errors with lazy listeners in Lambda
     # Slack Bolt will use its own default logger instead
 )

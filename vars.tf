@@ -112,6 +112,23 @@ variable "requester_lambda_name" {
   default     = "access-requester"
 }
 
+variable "requester_ssm_parameter_path" {
+  description = "SSM Parameter Store path prefix holding the access-requester lambda configuration. The lambda reads every parameter under this path at cold start."
+  type        = string
+  default     = "/sso-elevator/access-requester/config"
+
+  validation {
+    condition     = startswith(var.requester_ssm_parameter_path, "/")
+    error_message = "requester_ssm_parameter_path must be an absolute path starting with '/'."
+  }
+}
+
+variable "ssm_parameter_kms_key_id" {
+  description = "KMS key id, ARN or alias used to encrypt the access-requester SecureString parameters. Defaults to the AWS managed alias/aws/ssm key."
+  type        = string
+  default     = null
+}
+
 variable "event_brige_check_on_inconsistency_rule_name" {
   description = "DEPRECATED: Use event_bridge_check_on_inconsistency_rule_name instead. This variable contains a typo and will be removed in a future version."
   type        = string

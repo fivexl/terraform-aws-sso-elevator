@@ -318,3 +318,62 @@ def test_config_group_statement_parsing_with_s3(mock_s3_client, monkeypatch):
     group_statement = list(cfg.group_statements)[0]
     assert "11e111e1-e111-11ee-e111-1e11e1ee11e1" in group_statement.resource
     assert group_statement.allow_self_approval is True
+
+
+def ssm_client_returning(parameters: dict):
+    """SSM client stub whose get_parameters_by_path paginator yields `parameters`."""
+    client = MagicMock()
+    client.get_paginator.return_value.paginate.return_value = [
+        {"Parameters": [{"Name": name, "Value": value} for name, value in parameters.items()]}
+    ]
+    return client
+
+
+def test_load_config_from_ssm_maps_parameter_names_to_config_fields():
+    """Parameter names are mapped onto Config fields by their last, lowercased segment."""
+    path = "/sso-elevator/access-requester/config"
+    client = ssm_client_returning({f"{path}/SLACK_CHANNEL_ID": "C123", f"{path}/CACHE_ENABLED": "true"})
+
+    result = config.load_config_from_ssm(client, path)
+
+    assert result == {"slack_channel_id": "C123", "cache_enabled": "true"}
+    client.get_paginator.assert_called_once_with("get_parameters_by_path")
+    client.get_paginator.return_value.paginate.assert_called_once_with(Path=path, Recursive=True, WithDecryption=True)
+
+
+def test_load_config_from_ssm_raises_when_no_parameters_found():
+    """An empty path means the lambda would start with no configuration, so fail loudly."""
+    with pytest.raises(RuntimeError):
+        config.load_config_from_ssm(ssm_client_returning({}), "/sso-elevator/missing")
+
+
+def test_get_config_loads_from_ssm_when_path_is_set(monkeypatch):
+    """With SSM_CONFIG_PARAMETER_PATH set, the config comes from SSM instead of the environment."""
+    import boto3
+
+    path = "/sso-elevator/access-requester/config"
+    parameters = {f"{path}/{key.upper()}": str(value) for key, value in valid_config_dict().items()}
+    parameters[f"{path}/SLACK_SIGNING_SECRET"] = "signing-secret"
+    parameters[f"{path}/SLACK_CHANNEL_ID"] = "C123"
+    client = ssm_client_returning(parameters)
+
+    monkeypatch.setattr(boto3, "client", lambda service: client if service == "ssm" else MagicMock())
+    monkeypatch.setenv("SSM_CONFIG_PARAMETER_PATH", path)
+    monkeypatch.setattr(config, "_config", None)
+
+    cfg = config.get_config()
+
+    assert cfg.slack_channel_id == "C123"
+    assert cfg.slack_signing_secret == "signing-secret"
+    client.get_paginator.assert_called_once_with("get_parameters_by_path")
+
+
+def test_get_config_falls_back_to_environment_variables(monkeypatch):
+    """Without SSM_CONFIG_PARAMETER_PATH the config still comes from environment variables."""
+    monkeypatch.delenv("SSM_CONFIG_PARAMETER_PATH", raising=False)
+    monkeypatch.setattr(config, "_config", None)
+    for key, value in valid_config_dict().items():
+        monkeypatch.setenv(key.upper(), str(value))
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C123")
+
+    assert config.get_config().slack_channel_id == "C123"
