@@ -17,6 +17,8 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "slack_channel_id": "x",
         "slack_bot_token": "x",
         "sso_instance_arn": "x",
+        "cli_expected_account_id": "111111111111",
+        "cli_sso_role_name_prefix": "AWSReservedSSO_",
         "log_level": "DEBUG",
         "slack_app_log_level": "INFO",
         "s3_bucket_for_audit_entry_name": "x",

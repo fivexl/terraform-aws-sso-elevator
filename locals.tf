@@ -21,9 +21,16 @@ locals {
   config_bucket_name = var.config_bucket_name != "sso-elevator-config" ? var.config_bucket_name : "sso-elevator-config-${random_string.random.result}"
 
   # HTTP API configuration
-  api_resource_path = "/access-requester"
-  api_stage_name    = "default"
-  full_api_url      = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
+  api_resource_path     = "/access-requester"
+  api_resource_path_cli = "/access-requester-cli"
+  api_stage_name        = "default"
+  full_api_url          = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
+  full_api_url_cli      = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path_cli}" : ""
+
+  # CLI access-request path: which account a caller's verified IAM ARN must belong to.
+  # Defaults to the account this module is deployed into (same idea as sso_instance_arn's
+  # own auto-discovery above) rather than requiring the deployer to look it up themselves.
+  cli_expected_account_id = var.cli_expected_account_id != "" ? var.cli_expected_account_id : data.aws_caller_identity.current.account_id
 
   # Event Bridge rule names with fallback to deprecated variables
   event_bridge_check_on_inconsistency_rule_name = coalesce(

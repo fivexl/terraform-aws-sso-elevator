@@ -70,12 +70,19 @@ module "access_requester_slack_handler" {
     CONFIG_BUCKET_NAME                          = local.config_bucket_name
     CONFIG_S3_KEY                               = "config/approval-config.json"
     CACHE_ENABLED                               = var.cache_enabled
+
+    CLI_EXPECTED_ACCOUNT_ID  = local.cli_expected_account_id
+    CLI_SSO_ROLE_NAME_PREFIX = var.cli_sso_role_name_prefix
   }
 
   allowed_triggers = var.create_api_gateway ? {
     AllowExecutionFromAPIGateway = {
       service    = "apigateway"
       source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path}"
+    }
+    AllowExecutionFromAPIGatewayCli = {
+      service    = "apigateway"
+      source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path_cli}"
     }
   } : {}
 
@@ -260,6 +267,22 @@ module "http_api" {
         uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
         type = "AWS_PROXY"
       }
+      throttling_burst_limit = var.api_gateway_throttling_burst_limit
+      throttling_rate_limit  = var.api_gateway_throttling_rate_limit
+    }
+    # Same Lambda, same deployment — a second route for the CLI's signed
+    # requests. AWS_IAM here means API Gateway itself verifies the caller's
+    # SigV4 signature (unlike the Slack route above, which relies on Slack's
+    # own signing secret checked inside the Lambda), and populates
+    # requestContext.authorizer.iam for main.lambda_handler to read. The
+    # Lambda forks on the request path to decide which of the two to run —
+    # see CLI_ACCESS_REQUEST_PATH in main.py.
+    "POST ${local.api_resource_path_cli}" : {
+      integration = {
+        uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+        type = "AWS_PROXY"
+      }
+      authorization_type     = "AWS_IAM"
       throttling_burst_limit = var.api_gateway_throttling_burst_limit
       throttling_rate_limit  = var.api_gateway_throttling_rate_limit
     }

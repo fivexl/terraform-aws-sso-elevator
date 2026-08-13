@@ -465,3 +465,19 @@ variable "identity_store_id" {
   type        = string
   default     = ""
 }
+
+# ==========================================
+# CLI access-request path
+# ==========================================
+
+variable "cli_expected_account_id" {
+  description = "AWS account ID that a CLI caller's verified IAM ARN must belong to for the request to be accepted. If not provided, defaults to the account this module is deployed into."
+  type        = string
+  default     = ""
+}
+
+variable "cli_sso_role_name_prefix" {
+  description = "Required prefix on a CLI caller's assumed-role name for the request to be accepted as an SSO-provisioned session."
+  type        = string
+  default     = "AWSReservedSSO_"
+}

@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from typing import Callable
 
@@ -8,6 +9,7 @@ from slack_sdk import WebClient
 from slack_sdk.web.slack_response import SlackResponse
 
 import access_control
+import cli_auth
 import config
 import entities
 import group
@@ -34,9 +36,93 @@ app = App(
 )
 
 
+# Route path for the CLI's signed-request intake, on the same API Gateway HTTP
+# API as the Slack route but with an AWS_IAM authorizer instead of Slack's own
+# signature check — see api_resource_path_cli in locals.tf.
+CLI_ACCESS_REQUEST_PATH = "/access-requester-cli"
+# routeKey (not rawPath/requestContext.http.path) is what actually identifies which
+# route matched: it's always exactly "{METHOD} {path}" as defined in the routes map,
+# regardless of the stage name, whereas rawPath's relationship to a named (non-$default)
+# stage's prefix isn't something to rely on without checking case by case.
+CLI_ACCESS_REQUEST_ROUTE_KEY = f"POST {CLI_ACCESS_REQUEST_PATH}"
+
+
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
+    if event.get("routeKey") == CLI_ACCESS_REQUEST_ROUTE_KEY:
+        return handle_cli_access_request(event)
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
+
+
+def handle_cli_access_request(event: dict) -> dict:
+    """Handle a signed CLI request for AWS access, submitted via the AWS_IAM-authenticated
+    CLI_ACCESS_REQUEST_PATH route instead of the Slack modal.
+
+    API Gateway has already verified the caller's SigV4 signature by the time this runs;
+    cli_auth.extract_identity only decides whether the resulting identity is trustworthy
+    enough to act on. Past that point, this funnels into the same process_access_request
+    the Slack modal path uses, so approval and everything downstream is unchanged.
+    """
+    logger.info("Handling CLI access request")
+    try:
+        iam_context = (event.get("requestContext") or {}).get("authorizer", {}).get("iam", {}) or {}
+        # Whether userId survives here alongside userArn wasn't confirmed before this was
+        # built — log the full object once so it can be checked against a real signed request.
+        logger.info("Authorizer IAM context", extra={"iam_context": iam_context})
+
+        user_arn = iam_context.get("userArn", "")
+        identity_email = cli_auth.extract_identity(user_arn) if user_arn else None
+        if not identity_email:
+            logger.info("Rejected CLI request: could not verify a signed identity with an email")
+            return cli_auth.GENERIC_REJECTION
+
+        try:
+            body = json.loads(event.get("body") or "{}")
+        except json.JSONDecodeError:
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": "Request body must be valid JSON."}),
+            }
+
+        try:
+            hours = int(body.get("duration", ""))
+        except (TypeError, ValueError):
+            hours = 0
+        if hours <= 0:
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": "duration must be a positive integer number of hours."}),
+            }
+
+        requester = slack_helpers.get_user_by_email(app.client, identity_email)
+        request = slack_helpers.RequestForAccess(
+            permission_set_name=body.get("permission_set", ""),
+            account_id=body.get("account", ""),
+            reason=body.get("reason", ""),
+            requester_slack_id=requester.id,
+            permission_duration=timedelta(hours=hours),
+        )
+
+        process_access_request(request=request, requester=requester, client=app.client)
+
+        return {
+            "statusCode": 200,
+            "headers": {"content-type": "application/json"},
+            "body": json.dumps({"ok": True, "message": "Request received and posted for approval in Slack."}),
+        }
+    except Exception as e:
+        logger.exception(f"Error handling CLI access request: {e}")
+        app.client.chat_postMessage(
+            channel=cfg.slack_channel_id,
+            text="A CLI access request encountered an unexpected error. Refer to the logs for more details.",
+        )
+        return {
+            "statusCode": 500,
+            "headers": {"content-type": "application/json"},
+            "body": json.dumps({"message": "An unexpected error occurred while processing the request."}),
+        }
 
 
 user_view_map = {}
@@ -352,17 +438,19 @@ app.action(entities.ApproverAction.Discard.value)(
 )
 
 
-@handle_errors
-def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
-    body: dict,
-    ack: Ack,  # noqa: ARG001
+def process_access_request(  # noqa: PLR0915, PLR0912
+    request: slack_helpers.RequestForAccess,
+    requester: entities.slack.User,
     client: WebClient,
-    context: BoltContext,  # noqa: ARG001
-) -> SlackResponse | None:
-    logger.info("Handling request for access submission")
-    request = slack_helpers.RequestForAccessView.parse(body)
-    logger.info("View submitted", extra={"view": request})
-    requester = slack_helpers.get_user(client, id=request.requester_slack_id)
+) -> None:
+    """Decide on, post for approval (or auto-execute), and notify about an access request.
+
+    Shared by both intake paths: the Slack modal submission (handle_request_for_access_submittion,
+    below) and the CLI path (handle_cli_access_request). Both resolve a RequestForAccess and a
+    requester by the time they get here; everything past that point — the decision, the Slack
+    approval message, discard/renotify scheduling, and auto-execution — is identical regardless of
+    where the request came from, so it lives in one place rather than being duplicated.
+    """
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
         account_id=request.account_id,
@@ -502,6 +590,20 @@ def handle_request_for_access_submittion(  # noqa: PLR0915, PLR0912
                 channel=requester.id,
                 text="Your request was processed, permissions granted.",
             )
+
+
+@handle_errors
+def handle_request_for_access_submittion(
+    body: dict,
+    ack: Ack,  # noqa: ARG001
+    client: WebClient,
+    context: BoltContext,  # noqa: ARG001
+) -> None:
+    logger.info("Handling request for access submission")
+    request = slack_helpers.RequestForAccessView.parse(body)
+    logger.info("View submitted", extra={"view": request})
+    requester = slack_helpers.get_user(client, id=request.requester_slack_id)
+    process_access_request(request=request, requester=requester, client=client)
 
 
 app.view(slack_helpers.RequestForAccessView.CALLBACK_ID)(

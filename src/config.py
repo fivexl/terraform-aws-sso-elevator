@@ -131,6 +131,14 @@ class Config(BaseSettings):
 
     sso_instance_arn: str
 
+    # CLI access-request path: identity read from the AWS_IAM authorizer's
+    # userArn is only trusted if it matches both of these. cli_expected_account_id
+    # defaults to "" (matches no real account, so every CLI request is rejected
+    # until it's explicitly set) rather than being required, so existing
+    # deployments/tests that don't set it aren't broken by its addition.
+    cli_expected_account_id: str = ""
+    cli_sso_role_name_prefix: str = "AWSReservedSSO_"
+
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"
     statements: frozenset[Statement]
