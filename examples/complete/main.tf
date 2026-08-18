@@ -42,6 +42,8 @@ module "aws_sso_elevator" {
   approver_renotification_initial_wait_time  = 15
   approver_renotification_backoff_multiplier = 2
 
+  use_pre_created_image = false
+
   # S3 config bucket configuration (caching is enabled by default)
   # config_bucket_name     = "sso-elevator-config"  # Optional: custom S3 bucket name for config and cache
   # cache_enabled          = true                   # Optional: enable/disable caching (default: true)
