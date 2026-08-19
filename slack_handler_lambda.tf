@@ -279,8 +279,9 @@ module "http_api" {
     # see CLI_ACCESS_REQUEST_PATH in main.py.
     "POST ${local.api_resource_path_cli}" : {
       integration = {
-        uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
-        type = "AWS_PROXY"
+        uri                    = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+        type                   = "AWS_PROXY"
+        payload_format_version = "2.0" # routeKey and requestContext.authorizer.iam only exist in 2.0 — see main.py/cli_auth.py
       }
       authorization_type     = "AWS_IAM"
       throttling_burst_limit = var.api_gateway_throttling_burst_limit
