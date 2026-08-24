@@ -1,0 +1,94 @@
+name: CLI Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish or re-publish, e.g. v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cli-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/elevate/go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean --config cmd/elevate/.goreleaser.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  smoke:
+    needs: goreleaser
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the published release and run it
+        env:
+          ELEVATE_VERSION: ${{ inputs.tag || github.ref_name }}
+        run: sh install.sh
+
+  publication-state:
+    needs: [goreleaser, smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Promote a good release, demote a broken one
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASED: ${{ needs.goreleaser.result }}
+          SMOKED: ${{ needs.smoke.result }}
+        run: |
+          set -eu
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::warning::No release exists for $TAG — nothing to promote or demote"
+            [ "$RELEASED" = "success" ] && [ "$SMOKED" = "success" ] || exit 1
+            exit 0
+          fi
+          if [ "$RELEASED" = "success" ] && [ "$SMOKED" = "success" ]; then
+            case "$TAG" in
+              *-*)
+                echo "$TAG is a prerelease tag — leaving its publication state alone"
+                exit 0
+                ;;
+            esac
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --draft=false --prerelease=false --latest
+            echo "### $TAG published" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease
+          echo "::error::$TAG is broken (goreleaser=$RELEASED smoke=$SMOKED) — marked prerelease so installs fall back to the last good release"
+          {
+            echo "### $TAG withheld"
+            echo ""
+            echo "goreleaser: \`$RELEASED\` · smoke: \`$SMOKED\`"
+            echo ""
+            echo "Marked **prerelease** so \`/releases/latest\` skips it and \`install.sh\` keeps installing the previous release."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1

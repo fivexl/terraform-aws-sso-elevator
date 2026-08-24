@@ -66,6 +66,7 @@ func saveConfig(cfg cliConfig) (string, error) {
 // every time. Passing --endpoint on a request still overrides this file.
 func runConfigure(args []string) {
 	fs := flag.NewFlagSet("elevate configure", flag.ExitOnError)
+	fs.Usage = func() { usage(fs.Output()) }
 	endpoint := fs.String("endpoint", "", "SSO Elevator API invoke URL to save for future commands (required)")
 	fs.Parse(args)
 

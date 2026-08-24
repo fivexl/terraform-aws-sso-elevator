@@ -1,0 +1,67 @@
+version: 2
+
+before:
+  hooks:
+    # Unlike boris-mcp-cli (go.mod at repo root), this repo's go.mod is
+    # nested in cmd/elevate/ — GoReleaser itself runs from the repo root, so
+    # this needs an explicit working directory. before.hooks entries are
+    # plain strings (no dir:/cmd: object form here), so `go -C` (Go 1.20+)
+    # is used instead of shell `cd` to avoid depending on hook shell
+    # semantics.
+    - go -C cmd/elevate mod tidy
+
+builds:
+  - main: .
+    dir: cmd/elevate
+    binary: elevate
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.buildCommit={{.Commit}}
+      - -X main.buildDate={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - LICENSE
+      - src: cmd/elevate/README.md
+        dst: README.md
+
+checksum:
+  name_template: checksums.txt
+
+# macOS code signing/notarization is intentionally not configured here — it's
+# planned as a follow-up by someone else on the team. Unlike a self-updating
+# CLI, this tool has no update mechanism that depends on a signature being
+# present, so an unsigned darwin binary is safe to ship in the meantime (users
+# just see a Gatekeeper warning on first run). Add a `notarize:` block here
+# once signing secrets exist.
+
+brews:
+  - name: elevate
+    repository:
+      owner: fivexl
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/fivexl/terraform-aws-sso-elevator
+    description: Submit temporary AWS access requests from the command line
+    license: Apache-2.0
+    install: |
+      bin.install "elevate"
+    test: |
+      system "#{bin}/elevate", "version"
+
+release:
+  github:
+    owner: fivexl
+    name: terraform-aws-sso-elevator
+  # Makes re-publishing a tag idempotent — a release that failed partway
+  # through leaves some assets uploaded and some not; without this, a retry
+  # fails on a 422 for the ones that already made it.
+  replace_existing_artifacts: true

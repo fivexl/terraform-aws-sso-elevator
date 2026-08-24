@@ -1,0 +1,36 @@
+name: CLI CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["cmd/elevate/**"]
+  pull_request:
+    paths: ["cmd/elevate/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/elevate/go.mod
+      - name: Check go.mod is tidy
+        working-directory: cmd/elevate
+        run: go mod tidy -diff
+      - name: Vet
+        working-directory: cmd/elevate
+        run: go vet ./...
+      - name: Build
+        working-directory: cmd/elevate
+        run: go build ./...
+      - name: Test
+        working-directory: cmd/elevate
+        run: go test ./...
