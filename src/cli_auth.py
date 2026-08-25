@@ -14,9 +14,7 @@ import re
 
 import config
 
-_ASSUMED_ROLE_ARN_RE = re.compile(
-    r"^arn:aws:sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)$"
-)
+_ASSUMED_ROLE_ARN_RE = re.compile(r"^arn:aws:sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)$")
 
 GENERIC_REJECTION = {
     "statusCode": 403,
@@ -24,8 +22,7 @@ GENERIC_REJECTION = {
     "body": json.dumps(
         {
             "message": (
-                "The credentials provided are not associated with an SSO session. "
-                "Please sign in using your AWS SSO session and try again."
+                "The credentials provided are not associated with an SSO session. Please sign in using your AWS SSO session and try again."
             )
         }
     ),

@@ -8,6 +8,11 @@ output "requester_api_endpoint_url" {
   value       = var.create_api_gateway ? local.full_api_url : null
 }
 
+output "requester_api_endpoint_url_cli" {
+  description = "The full URL for the CLI's access-request route. Pass this to `elevate configure --endpoint` (or set as ELEVATE_ENDPOINT)."
+  value       = var.create_api_gateway ? local.full_api_url_cli : null
+}
+
 output "lambda_function_url" {
   description = "value for the access_requester lambda function URL"
   value       = var.create_lambda_url ? module.access_requester_slack_handler.lambda_function_url : null
