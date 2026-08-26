@@ -56,7 +56,7 @@ Usage:
   elevate help | -h | --help
 
 Flags (for the default request-submission command):
-  --account          AWS account ID to request access to (required)
+  --account           AWS account ID to request access to (required)
   --permission-set    Permission set name to request (required)
   --duration          How long access is needed, in hours (required)
   --reason            Reason for the access request (required)
