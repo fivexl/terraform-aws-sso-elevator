@@ -8,6 +8,8 @@ The normal SSO Elevator flow happens entirely in Slack: you post a request, an a
 
 ## Install
 
+Homebrew and the install script below only support macOS and Linux (`.goreleaser.yaml` builds for `goos: [darwin, linux]`, and `install.sh` rejects any other OS). On Windows, use [Build from source](#build-from-source) instead.
+
 ### Homebrew (recommended)
 
 ```bash
@@ -53,7 +55,14 @@ Credentials and region come from the standard AWS SDK chain — `AWS_PROFILE`, `
 elevate --account 123456789012 --permission-set ReadOnly --duration 2 --reason "debugging prod issue"
 ```
 
-`--duration` is a positive integer number of hours. `--region` overrides the resolved AWS region if needed (falls back to `us-east-1` if none is resolved). Run `elevate --help` for the full flag reference.
+- `--account` — AWS account ID to request access to (required)
+- `--permission-set` — Permission set name to request (required)
+- `--duration` — How long access is needed, as a positive integer number of hours (required)
+- `--reason` — Reason for the access request (required)
+- `--endpoint` — SSO Elevator API invoke URL for this call only, overriding `ELEVATE_ENDPOINT` and the saved config file (see [Configure](#configure))
+- `--region` — AWS region for SigV4 signing; defaults to the resolved AWS config region, falling back to `us-east-1`
+
+Run `elevate --help` for the full flag reference.
 
 **What a successful submission means — and doesn't mean.** A `2xx` response means the request was received and posted into the approval workflow; it does **not** mean access has been granted. Depending on the module's configuration, the request may be granted automatically (if you're a self-approving approver for that account/permission-set combination) or may require someone else to click Approve/Deny in Slack — and the response looks the same either way, since the server can't tell your specific case apart from the response alone. `elevate` does not poll or wait for the final decision; check Slack, or the account's IAM Identity Center assignments, to confirm the actual outcome.
 
