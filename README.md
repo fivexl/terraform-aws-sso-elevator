@@ -475,7 +475,7 @@ To fix the Security Hub issue when migrating to API Gateway, manually delete the
 **After updating the module, you can find the API URL in the output of the module. Please don't forget to update the Slack App manifest with the new URL.**
 
 ## CLI tool
-Access requests can also be submitted from the command line, without Slack, via the `POST /access-requester-cli` route — signed directly with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. See [`cmd/elevate/README.md`](cmd/elevate/README.md) for build and usage instructions.
+Access requests can also be submitted from the command line, without Slack, via the `POST /access-requester-cli` route — signed directly with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
 
 # Deployment and Usage
 
@@ -880,7 +880,7 @@ settings:
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
 | <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
-| <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | The full URL for the CLI's access-request route. Pass this to `elevate configure --endpoint` (or set as ELEVATE\_ENDPOINT). |
+| <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR\_ENDPOINT). |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END_TF_DOCS -->
 

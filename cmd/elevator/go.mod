@@ -1,4 +1,4 @@
-module github.com/fivexl/terraform-aws-sso-elevator/cmd/elevate
+module github.com/fivexl/terraform-aws-sso-elevator/cmd/elevator
 
 go 1.27
 

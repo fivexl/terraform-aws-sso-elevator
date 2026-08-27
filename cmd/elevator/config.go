@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-// cliConfig is the on-disk shape of ~/.sso-elevator-cli/config.json.
+// cliConfig is the on-disk shape of ~/.elevator/config.json.
 type cliConfig struct {
 	Endpoint string `json:"endpoint"`
 }
@@ -19,7 +19,7 @@ func configFilePath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".sso-elevator-cli", "config.json"), nil
+	return filepath.Join(home, ".elevator", "config.json"), nil
 }
 
 // loadConfig returns a zero-value cliConfig (no error) if the file doesn't
@@ -61,17 +61,17 @@ func saveConfig(cfg cliConfig) (string, error) {
 	return path, nil
 }
 
-// runConfigure implements `elevate configure --endpoint URL`, saving the
-// endpoint so subsequent `elevate` requests don't need --endpoint passed
+// runConfigure implements `elevator configure --endpoint URL`, saving the
+// endpoint so subsequent `elevator` requests don't need --endpoint passed
 // every time. Passing --endpoint on a request still overrides this file.
 func runConfigure(args []string) {
-	fs := flag.NewFlagSet("elevate configure", flag.ExitOnError)
+	fs := flag.NewFlagSet("elevator configure", flag.ExitOnError)
 	fs.Usage = func() { usage(fs.Output()) }
 	endpoint := fs.String("endpoint", "", "SSO Elevator API invoke URL to save for future commands (required)")
 	fs.Parse(args)
 
 	if *endpoint == "" {
-		fmt.Fprintln(fs.Output(), "Usage: elevate configure --endpoint URL")
+		fmt.Fprintln(fs.Output(), "Usage: elevator configure --endpoint URL")
 		fs.PrintDefaults()
 		log.Fatal("--endpoint is required")
 	}

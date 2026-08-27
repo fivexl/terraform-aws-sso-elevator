@@ -1,4 +1,4 @@
-// elevate is a CLI that submits a temporary AWS access request without Slack.
+// elevator is a CLI that submits a temporary AWS access request without Slack.
 //
 // It signs the request directly with the caller's own local AWS credentials
 // and sends it to the SSO Elevator API. API Gateway's AWS_IAM authorizer
@@ -28,7 +28,7 @@ func main() {
 			usage(os.Stdout)
 			return
 		case "version", "--version", "-V":
-			fmt.Printf("elevate %s (commit %s, built %s)\n", version, buildCommit, buildDate)
+			fmt.Printf("elevator %s (commit %s, built %s)\n", version, buildCommit, buildDate)
 			return
 		case "configure":
 			runConfigure(os.Args[2:])
@@ -38,22 +38,22 @@ func main() {
 	runRequest(os.Args[1:])
 }
 
-// usage is the single source of truth for elevate's help text — reached both
-// from `elevate help`/`-h`/`--help` directly, and from either subcommand's
+// usage is the single source of truth for elevator's help text — reached both
+// from `elevator help`/`-h`/`--help` directly, and from either subcommand's
 // FlagSet.Usage when its own -h/-help is parsed, so the text is identical no
 // matter how it's requested.
 func usage(w io.Writer) {
-	fmt.Fprint(w, `elevate — submit a temporary AWS access request without Slack.
+	fmt.Fprint(w, `elevator — submit a temporary AWS access request without Slack.
 
 It signs the request with your local AWS credentials and posts it to the
 SSO Elevator API; API Gateway's AWS_IAM authorizer verifies the signature
 and the Lambda extracts your identity from it — no separate login step.
 
 Usage:
-  elevate --account ID --permission-set NAME --duration HOURS --reason TEXT [flags]
-  elevate configure --endpoint URL
-  elevate version
-  elevate help | -h | --help
+  elevator --account ID --permission-set NAME --duration HOURS --reason TEXT [flags]
+  elevator configure --endpoint URL
+  elevator version
+  elevator help | -h | --help
 
 Flags (for the default request-submission command):
   --account           AWS account ID to request access to (required)
@@ -61,22 +61,22 @@ Flags (for the default request-submission command):
   --duration          How long access is needed, in hours (required)
   --reason            Reason for the access request (required)
   --endpoint          SSO Elevator API invoke URL — overrides the saved
-                      config file and ELEVATE_ENDPOINT for this call only
+                      config file and ELEVATOR_ENDPOINT for this call only
   --region            AWS region for SigV4 signing — defaults to the
                       resolved AWS config region, falling back to us-east-1
 
 Configuration, in precedence order (highest first):
   1. --endpoint flag
-  2. ELEVATE_ENDPOINT environment variable
-  3. ~/.sso-elevator-cli/config.json, written by `+"`elevate configure --endpoint URL`"+`
+  2. ELEVATOR_ENDPOINT environment variable
+  3. ~/.elevator/config.json, written by `+"`elevator configure --endpoint URL`"+`
 
 Credentials and region come from the standard AWS SDK chain — AWS_PROFILE,
 AWS_REGION, an active SSO session, etc. Nothing AWS-specific is configured
 by this tool directly; set AWS_PROFILE as you would for any AWS CLI command.
 
 Example:
-  elevate configure --endpoint https://xxxx.execute-api.us-east-1.amazonaws.com/default/access-requester-cli
-  elevate --account 123456789012 --permission-set ReadOnly --duration 2 --reason "debugging prod issue"
+  elevator configure --endpoint https://xxxx.execute-api.us-east-1.amazonaws.com/default/access-requester-cli
+  elevator --account 123456789012 --permission-set ReadOnly --duration 2 --reason "debugging prod issue"
 
 What happens after you run it: a successful submission means the request
 was received and posted to the approval workflow in Slack — it does NOT

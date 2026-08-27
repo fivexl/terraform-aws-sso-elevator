@@ -3,17 +3,17 @@ version: 2
 before:
   hooks:
     # Unlike boris-mcp-cli (go.mod at repo root), this repo's go.mod is
-    # nested in cmd/elevate/ — GoReleaser itself runs from the repo root, so
+    # nested in cmd/elevator/ — GoReleaser itself runs from the repo root, so
     # this needs an explicit working directory. before.hooks entries are
     # plain strings (no dir:/cmd: object form here), so `go -C` (Go 1.20+)
     # is used instead of shell `cd` to avoid depending on hook shell
     # semantics.
-    - go -C cmd/elevate mod tidy
+    - go -C cmd/elevator mod tidy
 
 builds:
   - main: .
-    dir: cmd/elevate
-    binary: elevate
+    dir: cmd/elevator
+    binary: elevator
     env:
       - CGO_ENABLED=0
     goos: [darwin, linux]
@@ -29,7 +29,7 @@ archives:
     name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}"
     files:
       - LICENSE
-      - src: cmd/elevate/README.md
+      - src: cmd/elevator/README.md
         dst: README.md
 
 checksum:
@@ -43,7 +43,7 @@ checksum:
 # once signing secrets exist.
 
 brews:
-  - name: elevate
+  - name: elevator
     repository:
       owner: fivexl
       name: homebrew-tap
@@ -53,9 +53,9 @@ brews:
     description: Submit temporary AWS access requests from the command line
     license: Apache-2.0
     install: |
-      bin.install "elevate"
+      bin.install "elevator"
     test: |
-      system "#{bin}/elevate", "version"
+      system "#{bin}/elevator", "version"
 
 release:
   github:

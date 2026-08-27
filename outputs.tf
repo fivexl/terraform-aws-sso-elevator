@@ -9,7 +9,7 @@ output "requester_api_endpoint_url" {
 }
 
 output "requester_api_endpoint_url_cli" {
-  description = "The full URL for the CLI's access-request route. Pass this to `elevate configure --endpoint` (or set as ELEVATE_ENDPOINT)."
+  description = "The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR_ENDPOINT)."
   value       = var.create_api_gateway ? local.full_api_url_cli : null
 }
 
