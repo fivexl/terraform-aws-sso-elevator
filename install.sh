@@ -38,6 +38,13 @@ detect_arch() {
 # keeps CLI release tags out of the module's own vX.Y.Z-less version tags
 # (e.g. "4.3.1") and out of any tag-triggered module workflow.
 validate_version() {
+  # The elevator-v[0-9]*.[0-9]*.[0-9]* shape alone doesn't reject "/" or
+  # "..", since case-pattern "*" matches those like any other character —
+  # e.g. "elevator-v1/../../etc/passwd.0.0" satisfies it. Reject "/"
+  # explicitly first; a real tag never contains one.
+  case "$1" in
+    */*) die "invalid version format: $1 (must not contain '/')" ;;
+  esac
   case "$1" in
     elevator-v[0-9]*.[0-9]*.[0-9]*) return 0 ;;
     *) die "invalid version format: $1 (expected elevator-vX.Y.Z)" ;;
