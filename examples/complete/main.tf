@@ -42,6 +42,11 @@ module "aws_sso_elevator" {
   approver_renotification_initial_wait_time  = 15
   approver_renotification_backoff_multiplier = 2
 
+  # Builds the Lambda image from source instead of pulling the published one.
+  # Needed for now because the published image predates the CLI feature in
+  # this PR — the default (true) will work again once a real module release
+  # ships with CLI support and ecr_repo_tag is bumped to match. Remove this
+  # override at that point.
   use_pre_created_image = false
 
   # S3 config bucket configuration (caching is enabled by default)
