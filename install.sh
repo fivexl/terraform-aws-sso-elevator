@@ -1,17 +1,17 @@
 #!/bin/sh
-# Installs the elevate CLI (cmd/elevate/) from GitHub Releases.
+# Installs the elevator CLI (cmd/elevator/) from GitHub Releases.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/fivexl/terraform-aws-sso-elevator/main/install.sh | sh
 #
 # Env overrides:
-#   ELEVATE_VERSION      Pin to a specific tag (e.g. v1.2.0) instead of latest.
-#   ELEVATE_INSTALL_DIR  Install directory (default: $HOME/.local/bin).
+#   ELEVATOR_VERSION      Pin to a specific tag (e.g. elevator-v1.2.0) instead of latest.
+#   ELEVATOR_INSTALL_DIR  Install directory (default: $HOME/.local/bin).
 set -eu
 
 REPO="fivexl/terraform-aws-sso-elevator"
-BINARY_NAME="elevate"
-INSTALL_DIR="${ELEVATE_INSTALL_DIR:-$HOME/.local/bin}"
+BINARY_NAME="elevator"
+INSTALL_DIR="${ELEVATOR_INSTALL_DIR:-$HOME/.local/bin}"
 
 log() { printf '%s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -33,12 +33,14 @@ detect_arch() {
 }
 
 # validate_version defends against path-traversal / repo-pivot if
-# ELEVATE_VERSION is ever set from an untrusted source — only allow a strict
-# vX.Y.Z(-suffix) shape, nothing else.
+# ELEVATOR_VERSION is ever set from an untrusted source — only allow a strict
+# elevator-vX.Y.Z(-suffix) shape, nothing else. The elevator- prefix also
+# keeps CLI release tags out of the module's own vX.Y.Z-less version tags
+# (e.g. "4.3.1") and out of any tag-triggered module workflow.
 validate_version() {
   case "$1" in
-    v[0-9]*.[0-9]*.[0-9]*) return 0 ;;
-    *) die "invalid version format: $1 (expected vX.Y.Z)" ;;
+    elevator-v[0-9]*.[0-9]*.[0-9]*) return 0 ;;
+    *) die "invalid version format: $1 (expected elevator-vX.Y.Z)" ;;
   esac
 }
 
@@ -83,7 +85,7 @@ verify_archive_members() {
 main() {
   os=$(detect_os)
   arch=$(detect_arch)
-  version="${ELEVATE_VERSION:-$(get_latest_version)}"
+  version="${ELEVATOR_VERSION:-$(get_latest_version)}"
   validate_version "$version"
 
   archive_name="${BINARY_NAME}-${os}-${arch}.tar.gz"
@@ -120,6 +122,6 @@ EOF
 }
 
 # Guard so this can be sourced by tests without auto-running main().
-if [ -z "${ELEVATE_INSTALLER_TEST_MODE:-}" ]; then
+if [ -z "${ELEVATOR_INSTALLER_TEST_MODE:-}" ]; then
   main
 fi

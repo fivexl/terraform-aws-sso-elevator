@@ -2,11 +2,16 @@ name: CLI Release
 
 on:
   push:
-    tags: ["v*"]
+    # Namespaced so this never collides with the module's own release tags
+    # (bare "4.3.1"-style, no "v") or with base.yml/build_docker.yml, which
+    # both still trigger on a bare "v*" — a shared v0.1.0-style tag used to
+    # make both of those run against a CLI-only release and push an
+    # ECR image under the wrong tag namespace.
+    tags: ["elevator-v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to publish or re-publish, e.g. v1.0.0"
+        description: "Existing tag to publish or re-publish, e.g. elevator-v1.0.0"
         required: true
         type: string
 
@@ -27,11 +32,21 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version-file: cmd/elevate/go.mod
+          go-version-file: cmd/elevator/go.mod
+      - name: Resolve the module-facing version GoReleaser expects
+        # The real git tag is "elevator-vX.Y.Z" (see the push.tags comment
+        # above for why), but GoReleaser's own semver parsing only
+        # recognizes an optional bare "v" prefix, not an arbitrary prefix
+        # in front of it. GORELEASER_CURRENT_TAG overrides what GoReleaser
+        # treats as the tag/version, so it sees a plain "vX.Y.Z" without
+        # needing the actual git tag to look like one.
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          echo "GORELEASER_CURRENT_TAG=${TAG#elevator-}" >> "$GITHUB_ENV"
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean --config cmd/elevate/.goreleaser.yaml
+          args: release --clean --config cmd/elevator/.goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -47,7 +62,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the published release and run it
         env:
-          ELEVATE_VERSION: ${{ inputs.tag || github.ref_name }}
+          ELEVATOR_VERSION: ${{ inputs.tag || github.ref_name }}
         run: sh install.sh
 
   publication-state:
@@ -70,8 +85,13 @@ jobs:
             [ "$RELEASED" = "success" ] && [ "$SMOKED" = "success" ] || exit 1
             exit 0
           fi
+          # Strip the elevator- namespace prefix before checking for a real
+          # prerelease suffix (e.g. -rc1) — the prefix itself always
+          # contains a hyphen, which would otherwise make every CLI release
+          # look like a prerelease tag.
+          MODULE_TAG="${TAG#elevator-}"
           if [ "$RELEASED" = "success" ] && [ "$SMOKED" = "success" ]; then
-            case "$TAG" in
+            case "$MODULE_TAG" in
               *-*)
                 echo "$TAG is a prerelease tag — leaving its publication state alone"
                 exit 0

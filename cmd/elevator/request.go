@@ -6,10 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -19,6 +21,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 )
 
+// requestTimeout bounds a single attempt. HTTP APIs cap the API Gateway to
+// Lambda integration at 30s, so this is set just above that ceiling — long
+// enough that the server, not this client, is what times out first.
+const requestTimeout = 35 * time.Second
+
+// maxConnectAttempts bounds retries of connection-level failures only (DNS,
+// refused connection, TLS handshake) — failures that happen before any
+// request bytes reach the server, so nothing has been submitted yet and a
+// retry can't double it up.
+const maxConnectAttempts = 3
+
 type requestPayload struct {
 	Account       string `json:"account"`
 	PermissionSet string `json:"permission_set"`
@@ -26,25 +39,25 @@ type requestPayload struct {
 	Reason        string `json:"reason"`
 }
 
-// runRequest implements the default `elevate --account ... --permission-set
+// runRequest implements the default `elevator --account ... --permission-set
 // ... --duration ... --reason ...` submission flow. The request to the API
 // Gateway endpoint is signed directly with the caller's own credentials —
 // API Gateway's AWS_IAM authorizer verifies that signature itself and
 // forwards the caller's identity to the Lambda, so there's no separate
 // STS call to make or forward here.
 func runRequest(args []string) {
-	fs := flag.NewFlagSet("elevate", flag.ExitOnError)
+	fs := flag.NewFlagSet("elevator", flag.ExitOnError)
 	fs.Usage = func() { usage(fs.Output()) }
 	account := fs.String("account", "", "AWS account ID to request access to (required)")
 	permissionSet := fs.String("permission-set", "", "Permission set name to request (required)")
 	duration := fs.String("duration", "", "How long access is needed, in hours (required)")
 	reason := fs.String("reason", "", "Reason for the access request (required)")
-	endpointFlag := fs.String("endpoint", "", "SSO Elevator API invoke URL (overrides ELEVATE_ENDPOINT and the saved config file if set)")
+	endpointFlag := fs.String("endpoint", "", "SSO Elevator API invoke URL (overrides ELEVATOR_ENDPOINT and the saved config file if set)")
 	region := fs.String("region", "", "AWS region for SigV4 signing (defaults to the resolved AWS config region, falling back to us-east-1)")
 	fs.Parse(args)
 
 	if *account == "" || *permissionSet == "" || *duration == "" || *reason == "" {
-		fmt.Fprintln(fs.Output(), "Usage: elevate --account ID --permission-set NAME --duration HOURS --reason TEXT [--endpoint URL]")
+		fmt.Fprintln(fs.Output(), "Usage: elevator --account ID --permission-set NAME --duration HOURS --reason TEXT [--endpoint URL]")
 		fs.PrintDefaults()
 		log.Fatal("--account, --permission-set, --duration, and --reason are required")
 	}
@@ -53,11 +66,11 @@ func runRequest(args []string) {
 	}
 
 	// Endpoint resolution, highest precedence first: --endpoint flag,
-	// ELEVATE_ENDPOINT env var (for scripts/automation that can't run the
+	// ELEVATOR_ENDPOINT env var (for scripts/automation that can't run the
 	// interactive `configure` step), then the saved config file.
 	endpoint := *endpointFlag
 	if endpoint == "" {
-		endpoint = os.Getenv("ELEVATE_ENDPOINT")
+		endpoint = os.Getenv("ELEVATOR_ENDPOINT")
 	}
 	if endpoint == "" {
 		cfg, err := loadConfig()
@@ -67,7 +80,7 @@ func runRequest(args []string) {
 		endpoint = cfg.Endpoint
 	}
 	if endpoint == "" {
-		log.Fatal("no --endpoint given, ELEVATE_ENDPOINT not set, and none saved — run `elevate configure --endpoint URL` once, pass --endpoint, or set ELEVATE_ENDPOINT")
+		log.Fatal("no --endpoint given, ELEVATOR_ENDPOINT not set, and none saved — run `elevator configure --endpoint URL` once, pass --endpoint, or set ELEVATOR_ENDPOINT")
 	}
 
 	ctx := context.Background()
@@ -116,9 +129,10 @@ func runRequest(args []string) {
 	fmt.Printf("Credential source: %s\n", creds.Source)
 	fmt.Printf("POST %s\n\n", endpoint)
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := &http.Client{Timeout: requestTimeout}
+	resp, err := sendWithConnectRetry(httpClient, req)
 	if err != nil {
-		log.Fatalf("send request: %v", err)
+		log.Fatalf("send request: %v (if this was a timeout waiting for a response, check Slack or the account's IAM Identity Center assignments before retrying — the request may have already gone through)", err)
 	}
 	defer resp.Body.Close()
 
@@ -134,6 +148,37 @@ func runRequest(args []string) {
 	}
 
 	printSubmissionResult(*account, *permissionSet, *duration, respBody)
+}
+
+// sendWithConnectRetry retries only when req never reached the server — a
+// dial-level failure (DNS, connection refused, TLS handshake). A timeout
+// waiting for a response is not retried here: by then the request may
+// already be sitting in the Lambda, and retrying could submit a duplicate
+// access request (and a duplicate auto-grant, if the caller self-approves).
+func sendWithConnectRetry(client *http.Client, req *http.Request) (*http.Response, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxConnectAttempts; attempt++ {
+		resp, err := client.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !isDialError(err) || attempt == maxConnectAttempts {
+			return nil, err
+		}
+		backoff := time.Duration(attempt) * 2 * time.Second
+		fmt.Printf("Connection attempt %d failed (%v), retrying in %s...\n", attempt, err, backoff)
+		time.Sleep(backoff)
+	}
+	return nil, lastErr
+}
+
+// isDialError reports whether err is a failure to establish the connection
+// at all, as opposed to a timeout or failure after the connection was made
+// (by which point the request may have already reached the Lambda).
+func isDialError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 // printSubmissionResult prints an unambiguous "what happens next" message on
