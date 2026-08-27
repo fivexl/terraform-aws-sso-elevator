@@ -17,9 +17,16 @@ def main_module():
     """Import main with all module-level side effects (Bolt's App() token
     validation, the SSO instance lookup transitively triggered by importing
     group, and boto3 client construction) mocked out — same technique
-    test_group.py's group_module fixture uses for the same underlying problem."""
+    test_group.py's group_module fixture uses for the same underlying problem.
+
+    cli_auth's own module-level iam client goes through this same patched
+    boto3.Session, so its get_role() is stubbed here too, returning a role
+    at IAM Identity Center's real reserved path — otherwise every "valid
+    SSO session" test below would get rejected by cli_auth's own path check
+    (a MagicMock().Path never equals the real path string)."""
     sys.modules.pop("main", None)
     sys.modules.pop("group", None)
+    sys.modules.pop("cli_auth", None)
 
     with (
         patch.dict("sys.modules", {}),
@@ -28,8 +35,10 @@ def main_module():
         patch("sso.describe_sso_instance", return_value=MagicMock(identity_store_id="d-1234")),
         patch("slack_bolt.App") as mock_app_cls,
     ):
-        mock_boto3_session.return_value.client.return_value = MagicMock()
-        mock_default_session.return_value.client.return_value = MagicMock()
+        shared_client = MagicMock()
+        shared_client.get_role.return_value = {"Role": {"Path": "/aws-reserved/sso.amazonaws.com/", "RoleName": "irrelevant-for-this-test"}}
+        mock_boto3_session.return_value.client.return_value = shared_client
+        mock_default_session.return_value.client.return_value = shared_client
         mock_app_cls.return_value = MagicMock()
         import main
 

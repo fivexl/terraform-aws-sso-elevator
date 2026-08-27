@@ -182,6 +182,12 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:sso:::account/*"
     ]
   }
+  # iam:GetRole here is also what src/cli_auth.py relies on to verify a CLI
+  # caller's assumed role is genuinely IAM Identity Center-provisioned: the
+  # resource scoping below means a role at any other path 403s on GetRole
+  # rather than returning a (non-matching) real path, so a spoofed role
+  # never gets its metadata read at all. Don't broaden these resources
+  # without checking that function's expectations.
   statement {
     effect = "Allow"
     actions = [
