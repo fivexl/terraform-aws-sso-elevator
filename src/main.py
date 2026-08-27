@@ -66,11 +66,9 @@ def handle_cli_access_request(event: dict) -> dict:
     logger.info("Handling CLI access request")
     try:
         iam_context = (event.get("requestContext") or {}).get("authorizer", {}).get("iam", {}) or {}
-        # Whether userId survives here alongside userArn wasn't confirmed before this was
-        # built — log the full object once so it can be checked against a real signed request.
-        logger.info("Authorizer IAM context", extra={"iam_context": iam_context})
-
         user_arn = iam_context.get("userArn", "")
+        logger.debug("Authorizer IAM userArn", extra={"user_arn": user_arn})
+
         identity_email = cli_auth.extract_identity(user_arn) if user_arn else None
         if not identity_email:
             logger.info("Rejected CLI request: could not verify a signed identity with an email")
@@ -85,22 +83,38 @@ def handle_cli_access_request(event: dict) -> dict:
                 "body": json.dumps({"message": "Request body must be valid JSON."}),
             }
 
+        account_id = body.get("account", "")
+        permission_set_name = body.get("permission_set", "")
+        reason = body.get("reason", "")
+        if not account_id or not permission_set_name or not reason:
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": "account, permission_set, and reason are all required and must be non-empty."}),
+            }
+
         try:
             hours = int(body.get("duration", ""))
         except (TypeError, ValueError):
             hours = 0
-        if hours <= 0:
+        if hours <= 0 or hours > cfg.max_permissions_duration_time:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "duration must be a positive integer number of hours."}),
+                "body": json.dumps(
+                    {
+                        "message": (
+                            f"duration must be a positive integer number of hours, no greater than {cfg.max_permissions_duration_time}."
+                        )
+                    }
+                ),
             }
 
         requester = slack_helpers.get_user_by_email(app.client, identity_email)
         request = slack_helpers.RequestForAccess(
-            permission_set_name=body.get("permission_set", ""),
-            account_id=body.get("account", ""),
-            reason=body.get("reason", ""),
+            permission_set_name=permission_set_name,
+            account_id=account_id,
+            reason=reason,
             requester_slack_id=requester.id,
             permission_duration=timedelta(hours=hours),
         )
