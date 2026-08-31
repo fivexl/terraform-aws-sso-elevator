@@ -52,15 +52,40 @@ validate_version() {
 }
 
 get_latest_version() {
-  # Resolve via the /releases/latest redirect's Location header first — avoids
-  # GitHub API rate limits. Fall back to the API if that fails for any reason.
-  version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-    "https://github.com/${REPO}/releases/latest" 2>/dev/null | sed -n 's#.*/tag/##p') || true
-  if [ -z "${version:-}" ]; then
-    version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-      | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-  fi
-  [ -n "${version:-}" ] || die "could not resolve the latest release version"
+  # This repo also publishes the module's own version releases (e.g. "4.3.1",
+  # no "elevator-" prefix) as GitHub Releases. /releases/latest doesn't
+  # distinguish between the two kinds of release -- it just returns whichever
+  # was published most recently, of either kind -- so a module release
+  # published after the last CLI release would make it resolve to the wrong
+  # one. List releases explicitly instead and take the first non-prerelease
+  # elevator-v* tag, in the order the API returns them (newest first).
+  fields=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=30" 2>/dev/null \
+    | grep -E '"tag_name"|"prerelease"' \
+    | sed -E 's/^[[:space:]]*"tag_name": *"([^"]*)".*/TAG \1/; s/^[[:space:]]*"prerelease": *(true|false).*/PRE \1/')
+
+  version=""
+  tag=""
+  while IFS= read -r line; do
+    case "$line" in
+      "TAG "*) tag="${line#TAG }" ;;
+      "PRE "*)
+        pre="${line#PRE }"
+        case "$tag" in
+          elevator-v*)
+            if [ "$pre" = "false" ]; then
+              version="$tag"
+              break
+            fi
+            ;;
+        esac
+        tag=""
+        ;;
+    esac
+  done <<EOF
+$fields
+EOF
+
+  [ -n "${version:-}" ] || die "could not resolve the latest elevator-v* release version"
   echo "$version"
 }
 
