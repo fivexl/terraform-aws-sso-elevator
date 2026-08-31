@@ -6,7 +6,8 @@ signature itself and populates requestContext.authorizer.iam.userArn with
 the caller's verified identity before the Lambda ever runs — extract_identity
 here doesn't verify a signature, it decides whether that already-verified
 identity is trustworthy enough to act on: a real SSO session, in the expected
-account, with an email in it.
+account, under a genuinely SSO-provisioned role, resolved to a real
+registered email via an Identity Store lookup.
 
 An assumed-role ARN (arn:aws:sts::<account>:assumed-role/<role-name>/<session>)
 never carries the underlying role's IAM path, only its name — and a role's
@@ -15,15 +16,29 @@ name a role of their own AWSReservedSSO_Anything. What AWS actually protects
 is the *path* IAM Identity Center provisions its roles under
 (/aws-reserved/sso.amazonaws.com/), which is why this looks the role up via
 iam:GetRole rather than trusting the name alone.
+
+Separately, the session name (RoleSessionName) is set by IAM Identity Center
+to the caller's Identity Store *username*, not necessarily their email —
+that's only true when the identity source's username happens to be an email
+(e.g. a plain AD sAMAccountName or a long email truncated to
+RoleSessionName's 64-character limit are both real, valid usernames that
+aren't literally an email string). Treating it as the email directly would
+wrongly reject those legitimate sessions, so this looks the real email up
+from the Identity Store instead of parsing the session name as one.
 """
 
 import json
 import re
+from typing import TYPE_CHECKING
 
 import boto3
 import botocore.exceptions
 
 import config
+import sso
+
+if TYPE_CHECKING:
+    from mypy_boto3_identitystore import IdentityStoreClient
 
 _ASSUMED_ROLE_ARN_RE = re.compile(r"^arn:aws:sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)$")
 
@@ -51,20 +66,23 @@ GENERIC_REJECTION = {
 }
 
 
-def extract_identity(user_arn: str) -> str | None:
-    """Return the requester's email, but only if user_arn is an assumed-role
-    session in the expected account, under a role that's genuinely
-    IAM Identity Center-provisioned (verified via its real IAM path, not
-    just its name), with an email as the session name. A spoofed ARN that
-    satisfies only some of those checks — wrong account, wrong role path,
-    or no '@' — is rejected."""
+def extract_identity(user_arn: str, identity_store_client: "IdentityStoreClient", identity_store_id: str) -> str | None:
+    """Return the requester's real, registered email, but only if user_arn is
+    an assumed-role session in the expected account, under a role that's
+    genuinely IAM Identity Center-provisioned (verified via its real IAM
+    path, not just its name), whose session name resolves to an Identity
+    Store user by exact username match. A spoofed ARN, or a role session
+    whose name doesn't match any real username, is rejected."""
     cfg = config.get_config()
     match = _ASSUMED_ROLE_ARN_RE.match(user_arn)
     if not match:
         return None
-    # No cli_expected_account_id configured means match["account_id"] (always a
-    # 12-digit string from the regex) can never equal it — every CLI request is
-    # rejected until an operator explicitly sets it. Fails closed, not open.
+    # Rejects every CLI request only if cli_expected_account_id is unset
+    # ("" can never equal match["account_id"], always a 12-digit string) —
+    # but that's not the real-world default. Every real Terraform deployment
+    # resolves it to the actual deploying account ID (see locals.tf), so in
+    # practice this check is "same account as the deployment," not a
+    # fail-closed fallback for a missing config value.
     if match["account_id"] != cfg.cli_expected_account_id:
         return None
 
@@ -74,10 +92,12 @@ def extract_identity(user_arn: str) -> str | None:
     if not _is_sso_provisioned_role(role_name):
         return None
 
-    session_name = match["session_name"]
-    if "@" not in session_name:
-        return None
-    return session_name
+    # session_name is the Identity Store username IAM Identity Center set
+    # RoleSessionName to, not necessarily an email itself -- see the module
+    # docstring. Resolving it through the Identity Store, rather than
+    # returning it directly, is what makes an AD-style username (no '@' at
+    # all) work here the same way it already does on the Slack path.
+    return sso.find_email_by_username(identity_store_client, identity_store_id, match["session_name"])
 
 
 def _is_sso_provisioned_role(role_name: str) -> bool:

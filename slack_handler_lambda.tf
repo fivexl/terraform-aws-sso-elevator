@@ -203,6 +203,11 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"
     ]
   }
+  # identitystore:ListUsers here is also what src/cli_auth.py (via
+  # sso.find_email_by_username) relies on to resolve a CLI caller's
+  # Identity Store username (RoleSessionName) to their real registered
+  # email — RoleSessionName isn't always an email itself (AD-style
+  # usernames, or a long email truncated to its 64-character limit).
   statement {
     effect = "Allow"
     actions = [

@@ -350,6 +350,26 @@ def list_users(client: IdentityStoreClient, identity_store_id: str) -> dict:
     return r
 
 
+def find_email_by_username(client: IdentityStoreClient, identity_store_id: str, username: str) -> str | None:
+    """Look up a user's real, registered email by their exact IAM Identity Center
+    username (the UserName attribute — what IAM Identity Center actually sets an
+    SSO session's RoleSessionName to, which is not always an email address itself:
+    it can be an AD sAMAccountName, or a long email truncated to RoleSessionName's
+    64-character limit). Returns None if no user has that exact username — this
+    does not attempt a prefix or fuzzy match on a possibly-truncated username,
+    since that could resolve to the wrong person."""
+    list_of_users = list_users(client, identity_store_id)
+    for user in list_of_users["Users"]:
+        if user.get("UserName", "") != username:
+            continue
+        emails = user.get("Emails", [])
+        primary = next((e["Value"] for e in emails if e.get("Primary")), None)
+        if primary:
+            return primary
+        return emails[0]["Value"] if emails else None
+    return None
+
+
 def _find_user_principal_id_by_email(email: str, list_of_users: dict) -> str | None:
     try:
         for user in list_of_users["Users"]:

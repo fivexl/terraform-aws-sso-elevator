@@ -4,7 +4,7 @@ from typing import Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import entities
@@ -133,11 +133,23 @@ class Config(BaseSettings):
 
     # CLI access-request path: identity read from the AWS_IAM authorizer's
     # userArn is only trusted if it matches both of these. cli_expected_account_id
-    # defaults to "" (matches no real account, so every CLI request is rejected
-    # until it's explicitly set) rather than being required, so existing
-    # deployments/tests that don't set it aren't broken by its addition.
+    # defaults to "" here only so existing deployments/tests that predate this
+    # field aren't broken by its addition — every real Terraform deployment
+    # (see locals.tf) resolves it to the actual deploying account ID by
+    # default, not "". This default is NOT a fail-closed safety net; don't
+    # rely on an unset cli_expected_account_id to reject all CLI requests.
     cli_expected_account_id: str = ""
     cli_sso_role_name_prefix: str = "AWSReservedSSO_"
+
+    @field_validator("cli_sso_role_name_prefix")
+    @classmethod
+    def cli_sso_role_name_prefix_must_not_be_empty(cls, value: str) -> str:  # noqa: ANN101
+        # str.startswith("") is always True, so an empty prefix would
+        # silently make cli_auth.extract_identity's role-name check accept
+        # any role name at all instead of rejecting non-matching ones.
+        if value == "":
+            raise ValueError("cli_sso_role_name_prefix must not be empty — an empty prefix matches every role name")
+        return value
 
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"

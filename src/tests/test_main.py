@@ -23,7 +23,11 @@ def main_module():
     boto3.Session, so its get_role() is stubbed here too, returning a role
     at IAM Identity Center's real reserved path — otherwise every "valid
     SSO session" test below would get rejected by cli_auth's own path check
-    (a MagicMock().Path never equals the real path string)."""
+    (a MagicMock().Path never equals the real path string). Likewise, the
+    shared client's list_users paginator is stubbed to resolve every test
+    ARN's session name ("req@example.com") to a matching Identity Store
+    user, since cli_auth.extract_identity now looks the session name up
+    rather than trusting it directly."""
     sys.modules.pop("main", None)
     sys.modules.pop("group", None)
     sys.modules.pop("cli_auth", None)
@@ -37,6 +41,9 @@ def main_module():
     ):
         shared_client = MagicMock()
         shared_client.get_role.return_value = {"Role": {"Path": "/aws-reserved/sso.amazonaws.com/", "RoleName": "irrelevant-for-this-test"}}
+        shared_client.get_paginator.return_value.paginate.return_value = [
+            {"Users": [{"UserName": "req@example.com", "Emails": [{"Value": "req@example.com", "Primary": True}]}]}
+        ]
         mock_boto3_session.return_value.client.return_value = shared_client
         mock_default_session.return_value.client.return_value = shared_client
         mock_app_cls.return_value = MagicMock()
@@ -158,6 +165,29 @@ def test_handle_cli_access_request_success_calls_process_access_request(main_mod
     assert called_kwargs["request"].requester_slack_id == "U_REQ"
     assert called_kwargs["requester"] is fake_requester
     assert result["statusCode"] == 200
+
+
+def test_handle_cli_access_request_rejects_verified_identity_with_no_slack_account(main_module):
+    """A verified SSO identity with no matching Slack user is an expected
+    outcome (someone in Identity Center but not in this Slack workspace),
+    not a server bug -- it must not page the approvals channel, and it
+    must return the exact same response as an unverified identity, so a
+    caller can't use the difference to enumerate which emails have a
+    Slack account here."""
+    import slack_sdk.errors
+
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "2"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    with (
+        patch.object(main_module.slack_helpers, "get_user_by_email", side_effect=slack_sdk.errors.SlackApiError("users_not_found", None)),
+        patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result == main_module.cli_auth.GENERIC_REJECTION
+    mock_post_message.assert_not_called()
 
 
 def test_handle_cli_access_request_reports_unexpected_errors(main_module):

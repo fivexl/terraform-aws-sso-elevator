@@ -3,6 +3,7 @@ from datetime import timedelta
 from typing import Callable
 
 import boto3
+import slack_sdk.errors
 from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
@@ -54,7 +55,7 @@ def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
     return slack_handler.handle(event, context)
 
 
-def handle_cli_access_request(event: dict) -> dict:
+def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
     """Handle a signed CLI request for AWS access, submitted via the AWS_IAM-authenticated
     CLI_ACCESS_REQUEST_PATH route instead of the Slack modal.
 
@@ -69,7 +70,7 @@ def handle_cli_access_request(event: dict) -> dict:
         user_arn = iam_context.get("userArn", "")
         logger.debug("Authorizer IAM userArn", extra={"user_arn": user_arn})
 
-        identity_email = cli_auth.extract_identity(user_arn) if user_arn else None
+        identity_email = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id) if user_arn else None
         if not identity_email:
             logger.info("Rejected CLI request: could not verify a signed identity with an email")
             return cli_auth.GENERIC_REJECTION
@@ -110,7 +111,18 @@ def handle_cli_access_request(event: dict) -> dict:
                 ),
             }
 
-        requester = slack_helpers.get_user_by_email(app.client, identity_email)
+        try:
+            requester = slack_helpers.get_user_by_email(app.client, identity_email)
+        except slack_sdk.errors.SlackApiError:
+            # A verified SSO identity with no matching Slack account is an
+            # expected outcome, not a bug — it shouldn't page anyone via the
+            # approvals channel. Reusing GENERIC_REJECTION's exact status
+            # and body also avoids giving a caller a cheap way to tell
+            # "identity accepted, no Slack match" apart from "identity
+            # rejected outright", which would otherwise let someone probe
+            # for which emails have a Slack account in this workspace.
+            logger.info(f"No Slack user found for verified CLI identity {identity_email!r}")
+            return cli_auth.GENERIC_REJECTION
         request = slack_helpers.RequestForAccess(
             permission_set_name=permission_set_name,
             account_id=account_id,
