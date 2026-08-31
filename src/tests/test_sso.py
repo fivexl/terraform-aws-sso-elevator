@@ -66,4 +66,6 @@ def test_find_email_by_username_does_not_prefix_match_a_truncated_username():
     full_username = "jsmith.very.long.username.that.got.truncated@company.com"
     client = _client_returning([{"UserName": full_username, "Emails": [{"Value": "jsmith@company.com", "Primary": True}]}])
 
-    assert sso.find_email_by_username(client, "d-1234567890", "jsmith.very.long.username.that.got.truncat") is None
+    # RoleSessionName caps at 64 characters, so simulate a real truncation by
+    # slicing rather than hardcoding a second near-duplicate literal.
+    assert sso.find_email_by_username(client, "d-1234567890", full_username[:44]) is None
