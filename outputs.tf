@@ -9,8 +9,8 @@ output "requester_api_endpoint_url" {
 }
 
 output "requester_api_endpoint_url_cli" {
-  description = "The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR_ENDPOINT)."
-  value       = var.create_api_gateway ? local.full_api_url_cli : null
+  description = "The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR_ENDPOINT). null unless enable_access_requester_cli is also true."
+  value       = var.create_api_gateway && var.enable_access_requester_cli ? local.full_api_url_cli : null
 }
 
 output "lambda_function_url" {

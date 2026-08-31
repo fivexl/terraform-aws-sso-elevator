@@ -470,6 +470,12 @@ variable "identity_store_id" {
 # CLI access-request path
 # ==========================================
 
+variable "enable_access_requester_cli" {
+  description = "If true (and create_api_gateway is also true), adds the POST /access-requester-cli route so the elevate CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Off by default so upgrading an existing deployment doesn't silently add a new AWS_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it."
+  type        = bool
+  default     = false
+}
+
 variable "cli_expected_account_id" {
   description = "AWS account ID that a CLI caller's verified IAM ARN must belong to for the request to be accepted. If not provided, defaults to the account this module is deployed into."
   type        = string

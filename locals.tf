@@ -25,7 +25,7 @@ locals {
   api_resource_path_cli = "/access-requester-cli"
   api_stage_name        = "default"
   full_api_url          = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
-  full_api_url_cli      = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path_cli}" : ""
+  full_api_url_cli      = var.create_api_gateway && var.enable_access_requester_cli ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path_cli}" : ""
 
   # CLI access-request path: which account a caller's verified IAM ARN must belong to.
   # Defaults to the account this module is deployed into (same idea as sso_instance_arn's

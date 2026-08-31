@@ -49,6 +49,11 @@ module "aws_sso_elevator" {
   # override at that point.
   use_pre_created_image = false
 
+  # Off by default (see vars.tf) so upgrading an existing deployment doesn't
+  # silently add this route; this example turns it on to actually demonstrate
+  # the CLI feature end to end.
+  enable_access_requester_cli = true
+
   # S3 config bucket configuration (caching is enabled by default)
   # config_bucket_name     = "sso-elevator-config"  # Optional: custom S3 bucket name for config and cache
   # cache_enabled          = true                   # Optional: enable/disable caching (default: true)
