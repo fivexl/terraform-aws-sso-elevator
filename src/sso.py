@@ -378,11 +378,30 @@ def find_email_by_username(list_of_users: dict, username: str) -> str | None:
 
 def _find_user_principal_id_by_email(email: str, list_of_users: dict) -> str | None:
     try:
-        for user in list_of_users["Users"]:
-            for user_email in user.get("Emails", []):
-                if user_email.get("Value", "").lower() == email.lower():
-                    logger.info("Found SSO user", extra={"user": user})
-                    return user["UserId"]
+        # Matched case-insensitively (AWS SSO email lookups aren't
+        # case-sensitive), so two different identity store users whose emails
+        # differ only by case are a real possibility, not just a theoretical
+        # one -- e.g. a directory sync writing an alternate email in a
+        # different case than another user's primary. Picking whichever one
+        # happens to come first in list_users' pagination order would grant
+        # access based on iteration order rather than identity, so collect
+        # every match and refuse to guess if there's more than one.
+        matching_user_ids = {
+            user["UserId"]
+            for user in list_of_users["Users"]
+            for user_email in user.get("Emails", [])
+            if user_email.get("Value", "").lower() == email.lower()
+        }
+        if len(matching_user_ids) > 1:
+            logger.error(
+                "Multiple SSO users share this email case-insensitively -- refusing to pick one",
+                extra={"email": email, "candidate_user_ids": sorted(matching_user_ids)},
+            )
+            return None
+        if matching_user_ids:
+            user_id = next(iter(matching_user_ids))
+            logger.info("Found SSO user", extra={"user_id": user_id})
+            return user_id
         logger.info("User not found", extra={"email": email})
         return None
     except errors.SSOUserNotFound as e:
