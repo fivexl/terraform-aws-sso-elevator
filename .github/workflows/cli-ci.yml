@@ -3,9 +3,9 @@ name: CLI CI
 on:
   push:
     branches: [main]
-    paths: ["cmd/elevator/**"]
+    paths: ["cmd/elevator/**", "install.sh"]
   pull_request:
-    paths: ["cmd/elevator/**"]
+    paths: ["cmd/elevator/**", "install.sh"]
 
 permissions:
   contents: read
@@ -34,3 +34,28 @@ jobs:
       - name: Test
         working-directory: cmd/elevator
         run: go test ./...
+      # Both GitHub-hosted runner images used above ship shellcheck
+      # preinstalled -- only needs running once, not once per OS in the
+      # matrix, since its output doesn't depend on the runner OS.
+      - name: Shellcheck install.sh
+        if: matrix.os == 'ubuntu-latest'
+        run: shellcheck install.sh
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/elevator/go.mod
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          working-directory: cmd/elevator
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: golang/govulncheck-action@v1
+        with:
+          work-dir: cmd/elevator

@@ -1,0 +1,22 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        # Best-effort cleanup/output calls where there's nothing productive
+        # to do with a failure -- a lingering temp file, a broken
+        # stdout/stderr pipe, or a response body that's about to go out of
+        # scope anyway. Checking these would just be boilerplate, not real
+        # error handling.
+        - (io.Closer).Close
+        - (*os.File).Close
+        - os.Remove
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+        # Both call sites in this module construct their FlagSet with
+        # flag.ExitOnError, which makes Parse call os.Exit on failure
+        # instead of ever returning a non-nil error -- there's no error
+        # path here to check.
+        - (*flag.FlagSet).Parse

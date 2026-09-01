@@ -31,3 +31,14 @@ updates:
     labels:
       - "dependencies"
       - "terraform"
+
+  - package-ecosystem: "gomod"
+    directory: "/cmd/elevator"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "cmd/elevator"
+    labels:
+      - "dependencies"
+      - "go"
+      - "cli"
