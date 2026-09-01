@@ -28,9 +28,14 @@ locals {
   full_api_url_cli      = var.create_api_gateway && var.enable_access_requester_cli ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path_cli}" : ""
 
   # CLI access-request path: which account a caller's verified IAM ARN must belong to.
-  # Defaults to the account this module is deployed into (same idea as sso_instance_arn's
-  # own auto-discovery above) rather than requiring the deployer to look it up themselves.
-  cli_expected_account_id = var.cli_expected_account_id != "" ? var.cli_expected_account_id : data.aws_caller_identity.current.account_id
+  # Always the account this module is deployed into -- not operator-configurable,
+  # because cli_auth.py's iam:GetRole check (verifying the caller's role is
+  # genuinely SSO-provisioned) can only ever resolve against this same
+  # account regardless of what this value claimed. Letting them diverge
+  # either broke every request (if pointed at some other real account) or,
+  # in the case where that other account happened to be one an attacker
+  # controlled, let a same-named role there impersonate a real user here.
+  cli_expected_account_id = data.aws_caller_identity.current.account_id
 
   # Event Bridge rule names with fallback to deprecated variables
   event_bridge_check_on_inconsistency_rule_name = coalesce(

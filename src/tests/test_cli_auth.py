@@ -153,13 +153,12 @@ def test_extract_identity_rejects_wrong_account_even_with_valid_session_name(moc
 
 
 def test_extract_identity_rejects_everything_when_account_id_unset(mock_iam_client, mock_find_email_by_username):
-    """Regression test for the "fails closed by default" claim: with
-    cli_expected_account_id left at its "" default (as it is for any
-    deployment/test that hasn't set it), every request is rejected --
-    including one with an otherwise-perfectly-valid ARN. This is the
-    Python-level default's actual behavior; it is NOT what a real
-    Terraform deployment does by default (see the comments on
-    cli_expected_account_id in config.py and cli_auth.py)."""
+    """cli_expected_account_id isn't operator-configurable -- Terraform
+    always sets it to the deploying account (locals.tf) -- but Config()
+    used directly, without going through Terraform (tests, or any other
+    direct construction), still defaults it to "". This confirms that case
+    rejects every request, including one with an otherwise-perfectly-valid
+    ARN, rather than silently matching everything."""
     with patch.object(cli_auth.config, "get_config") as mock_get_config:
         mock_get_config.return_value = SimpleNamespace(cli_expected_account_id="", cli_sso_role_name_prefix="AWSReservedSSO_")
         assert extract_identity(EMAIL_ARN) is None

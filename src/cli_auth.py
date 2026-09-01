@@ -77,12 +77,10 @@ def extract_identity(user_arn: str, identity_store_client: "IdentityStoreClient"
     match = _ASSUMED_ROLE_ARN_RE.match(user_arn)
     if not match:
         return None
-    # Rejects every CLI request only if cli_expected_account_id is unset
-    # ("" can never equal match["account_id"], always a 12-digit string) —
-    # but that's not the real-world default. Every real Terraform deployment
-    # resolves it to the actual deploying account ID (see locals.tf), so in
-    # practice this check is "same account as the deployment," not a
-    # fail-closed fallback for a missing config value.
+    # cli_expected_account_id is always the account this module is deployed
+    # into (see locals.tf) — not operator-configurable, precisely because
+    # this check needs to agree with _is_sso_provisioned_role's iam:GetRole
+    # call below, which can only ever resolve against that same account.
     if match["account_id"] != cfg.cli_expected_account_id:
         return None
 

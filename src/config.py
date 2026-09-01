@@ -132,12 +132,14 @@ class Config(BaseSettings):
     sso_instance_arn: str
 
     # CLI access-request path: identity read from the AWS_IAM authorizer's
-    # userArn is only trusted if it matches both of these. cli_expected_account_id
-    # defaults to "" here only so existing deployments/tests that predate this
-    # field aren't broken by its addition — every real Terraform deployment
-    # (see locals.tf) resolves it to the actual deploying account ID by
-    # default, not "". This default is NOT a fail-closed safety net; don't
-    # rely on an unset cli_expected_account_id to reject all CLI requests.
+    # userArn is only trusted if it matches both of these.
+    # cli_expected_account_id is always the account this module is deployed
+    # into (see locals.tf) — not operator-configurable, since cli_auth.py's
+    # iam:GetRole check can only ever resolve against that same account
+    # regardless of what this claimed, so letting them diverge was either a
+    # guaranteed rejection or, worse, a cross-account impersonation path.
+    # The "" default here only matters for tests/direct Config() use that
+    # don't go through Terraform at all.
     cli_expected_account_id: str = ""
     cli_sso_role_name_prefix: str = "AWSReservedSSO_"
 
