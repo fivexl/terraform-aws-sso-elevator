@@ -33,20 +33,30 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: cmd/elevator/go.mod
-      - name: Resolve the module-facing version GoReleaser expects
-        # The real git tag is "elevator-vX.Y.Z" (see the push.tags comment
-        # above for why), but GoReleaser's own semver parsing only
-        # recognizes an optional bare "v" prefix, not an arbitrary prefix
-        # in front of it. GORELEASER_CURRENT_TAG overrides what GoReleaser
-        # treats as the tag/version, so it sees a plain "vX.Y.Z" without
-        # needing the actual git tag to look like one.
-        run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          echo "GORELEASER_CURRENT_TAG=${TAG#elevator-}" >> "$GITHUB_ENV"
+      # A previous version of this step set GORELEASER_CURRENT_TAG to strip
+      # the "elevator-" prefix, meaning to make GoReleaser treat the tag as
+      # plain "vX.Y.Z" for version/changelog purposes. Verified locally
+      # (goreleaser release against a real "elevator-vX.Y.Z" tag) that this
+      # env var doesn't just affect internal version parsing — it's also
+      # what GoReleaser uses as the published GitHub Release's actual tag
+      # name. So the override made the release publish under "vX.Y.Z"
+      # instead of the real tag, recreating the exact collision with the
+      # module's own version tags this whole naming scheme exists to avoid.
+      # Removed entirely: GoReleaser now sees the real "elevator-vX.Y.Z" tag
+      # for everything, at the cost of {{.Version}} (embedded in the binary
+      # via -ldflags) being the full "elevator-vX.Y.Z" string rather than a
+      # bare "X.Y.Z" — correctness over a cosmetic version string.
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean --config cmd/elevator/.goreleaser.yaml
+          # --skip=validate: GoReleaser's default validation hard-rejects a
+          # tag shaped like "elevator-vX.Y.Z" as "not semver" (confirmed
+          # locally) — it only recognizes an optional bare "v" prefix, not
+          # an arbitrary prefix in front of one. The same flag also skips
+          # validate's git-tree-is-clean check, but that runs before the
+          # before.hooks step below (the only thing that touches the tree,
+          # via `go mod tidy`) ever executes, so nothing meaningful is lost.
+          args: release --clean --skip=validate --config cmd/elevator/.goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
