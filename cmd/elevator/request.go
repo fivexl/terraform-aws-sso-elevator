@@ -32,6 +32,18 @@ const requestTimeout = 35 * time.Second
 // retry can't double it up.
 const maxConnectAttempts = 3
 
+// doNotFollowRedirects makes any 3xx response the final response instead of
+// being followed. A SigV4-signed request must never be replayed to a
+// different URL: the default CheckRedirect follows up to 10 redirects, and
+// a 307/308 would replay the full signed request — Authorization,
+// X-Amz-Security-Token, and body — to whatever the redirect points at,
+// while a 301/302/303 gets rewritten to a bodyless GET whose 200 response
+// would read here as a successful submission even though nothing was
+// actually sent.
+func doNotFollowRedirects(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 type requestPayload struct {
 	Account       string `json:"account"`
 	PermissionSet string `json:"permission_set"`
@@ -129,7 +141,7 @@ func runRequest(args []string) {
 	fmt.Printf("Credential source: %s\n", creds.Source)
 	fmt.Printf("POST %s\n\n", endpoint)
 
-	httpClient := &http.Client{Timeout: requestTimeout}
+	httpClient := &http.Client{Timeout: requestTimeout, CheckRedirect: doNotFollowRedirects}
 	resp, err := sendWithConnectRetry(httpClient, req)
 	if err != nil {
 		log.Fatalf("send request: %v (if this was a timeout waiting for a response, check Slack or the account's IAM Identity Center assignments before retrying — the request may have already gone through)", err)
