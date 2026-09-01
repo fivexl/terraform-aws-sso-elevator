@@ -293,6 +293,8 @@ def execute_decision(  # noqa: PLR0913
     approver: entities.slack.User,
     requester: entities.slack.User,
     reason: str,
+    request_source: str = "slack",
+    verified_arn: str = "NA",
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -334,6 +336,8 @@ def execute_decision(  # noqa: PLR0913
             sso_user_principal_id=sso_user_principal_id,
             audit_entry_type="account",
             secondary_domain_was_used=secondary_domain_was_used,
+            request_source=request_source,
+            verified_arn=verified_arn,
         ),
     )
 

@@ -1,7 +1,7 @@
 import datetime
 import time
 from datetime import timedelta, timezone
-from typing import Optional, TypeVar, Union
+from typing import Literal, Optional, TypeVar, Union
 
 import jmespath as jp
 import slack_sdk.errors
@@ -41,6 +41,12 @@ class RequestForAccess(BaseModel):
     reason: str
     requester_slack_id: str
     permission_duration: timedelta
+    # Which intake path this came through, and (for "cli") the SigV4-verified
+    # ARN cli_auth.extract_identity resolved it from -- threaded into
+    # AuditEntry so a disputed self-approved grant doesn't read identically
+    # to a Slack one, and approvers reviewing history can tell the two apart.
+    request_source: Literal["slack", "cli"] = "slack"
+    verified_arn: str = "NA"
 
 
 class RequestForAccessView:
@@ -245,12 +251,21 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
     group: Optional[entities.aws.SSOGroup] = None,
     role_name: Optional[str] = None,
     show_buttons: bool = True,
+    request_source: Literal["slack", "cli"] = "slack",
+    verified_arn: str = "NA",
 ) -> list[Block]:
     fields = [
         MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
         MarkdownTextObject(text=f"Reason: {reason}"),
         MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
     ]
+    # Displayed so an approver can apply extra scrutiny to the newer CLI trust
+    # path, and so ButtonClickedPayload.validate_payload can recover
+    # request_source/verified_arn when it reconstructs the request from this
+    # message's text -- they aren't otherwise persisted anywhere it can read.
+    if request_source == "cli":
+        fields.append(MarkdownTextObject(text="Source: CLI"))
+        fields.append(MarkdownTextObject(text=f"Verified ARN: {verified_arn}"))
     _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identity_store_client,
         identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
@@ -358,6 +373,11 @@ class ButtonClickedPayload(BaseModel):
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         account = cls.find_in_fields(fields, "Account")
         account_id = account.split("#")[-1]
+        # "Source"/"Verified ARN" are only present on messages built after
+        # this field was added -- default to "slack"/"NA" so approval clicks
+        # on already-posted messages don't fail to parse.
+        request_source = cls.find_in_fields_optional(fields, "Source") or "slack"
+        verified_arn = cls.find_in_fields_optional(fields, "Verified ARN") or "NA"
         return {
             "action": jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),
@@ -370,6 +390,8 @@ class ButtonClickedPayload(BaseModel):
                 permission_set_name=cls.find_in_fields(fields, "Role name"),
                 reason=cls.find_in_fields(fields, "Reason"),
                 permission_duration=permission_duration,
+                request_source="cli" if request_source == "CLI" else "slack",
+                verified_arn=verified_arn,
             ),
         }
 
@@ -379,6 +401,13 @@ class ButtonClickedPayload(BaseModel):
             if field["text"].startswith(key):
                 return field["text"].split(": ")[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
+
+    @staticmethod
+    def find_in_fields_optional(fields: list[dict[str, str]], key: str) -> str | None:
+        for field in fields:
+            if field["text"].startswith(key):
+                return field["text"].split(": ")[1].strip()
+        return None
 
 
 def parse_user(user: dict) -> entities.slack.User:

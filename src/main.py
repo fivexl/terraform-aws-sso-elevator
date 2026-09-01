@@ -164,6 +164,8 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
             reason=reason,
             requester_slack_id=requester.id,
             permission_duration=timedelta(hours=hours),
+            request_source="cli",
+            verified_arn=user_arn,
         )
 
         process_access_request(request=request, requester=requester, client=app.client)
@@ -493,6 +495,8 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         approver=approver,
         requester=requester,
         reason=payload.request.reason,
+        request_source=payload.request.request_source,
+        verified_arn=payload.request.verified_arn,
     )
     cache_for_dublicate_requests.clear()
     if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
@@ -557,6 +561,8 @@ def process_access_request(  # noqa: PLR0915, PLR0912
             permission_duration=request.permission_duration,
             show_buttons=show_buttons,
             color_coding_emoji=cfg.waiting_result_emoji,
+            request_source=request.request_source,
+            verified_arn=request.verified_arn,
         ),
         channel=cfg.slack_channel_id,
         text=f"Request for access to {account.name} account from {requester.real_name}",
@@ -659,6 +665,8 @@ def process_access_request(  # noqa: PLR0915, PLR0912
         approver=requester,
         requester=requester,
         reason=request.reason,
+        request_source=request.request_source,
+        verified_arn=request.verified_arn,
     )
 
     if decision.grant:
