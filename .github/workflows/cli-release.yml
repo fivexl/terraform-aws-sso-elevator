@@ -15,9 +15,9 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
-
+# No top-level permissions block: each job below declares exactly what it
+# needs, rather than every job (including smoke, which only reads a public
+# release and never writes anything) inheriting contents: write.
 concurrency:
   group: cli-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
@@ -25,6 +25,10 @@ concurrency:
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # required to mint the OIDC token the attestation below is signed with
+      attestations: write # required to publish the attestation to this repo
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +37,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: cmd/elevator/go.mod
+      - uses: anchore/sbom-action/download-syft@v0 # installs syft, which sboms: in .goreleaser.yaml shells out to
       # A previous version of this step set GORELEASER_CURRENT_TAG to strip
       # the "elevator-" prefix, meaning to make GoReleaser treat the tag as
       # plain "vX.Y.Z" for version/changelog purposes. Verified locally
@@ -60,9 +65,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      # Attests, via GitHub's own Sigstore-backed OIDC identity, that these
+      # exact archives were built by this exact workflow run from this exact
+      # commit -- verifiable by anyone with `gh attestation verify
+      # elevator-<os>-<arch>.tar.gz --owner fivexl`, with no signing
+      # keys/secrets for this repo to manage. This is separate from (and
+      # doesn't depend on) the release's own prerelease/draft state above,
+      # since the attestation is tied to the build artifacts and this run,
+      # not to whether the release has been promoted yet.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*.tar.gz
 
   smoke:
     needs: goreleaser
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:

@@ -18,6 +18,12 @@ builds:
       - CGO_ENABLED=0
     goos: [darwin, linux]
     goarch: [amd64, arm64]
+    flags:
+      # Strips local filesystem paths (GOPATH, the runner's checkout
+      # directory) from the compiled binary, both so two builds of the same
+      # commit produce byte-identical output (reproducibility) and so the
+      # binary doesn't embed the CI runner's own directory layout.
+      - -trimpath
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -35,27 +41,40 @@ archives:
 checksum:
   name_template: checksums.txt
 
-# macOS code signing/notarization is intentionally not configured here — it's
-# planned as a follow-up by someone else on the team. Unlike a self-updating
-# CLI, this tool has no update mechanism that depends on a signature being
-# present, so an unsigned darwin binary is safe to ship in the meantime (users
-# just see a Gatekeeper warning on first run). Add a `notarize:` block here
-# once signing secrets exist.
+# sboms + the build-provenance attestation step in cli-release.yml are this
+# project's artifact-authenticity story: an SBOM per archive, plus a SLSA
+# provenance attestation tying each archive back to the exact CI run and
+# commit that produced it, verifiable with `gh attestation verify` -- no
+# separate signing keys/secrets to manage, since it rides on GitHub's own
+# OIDC-backed (Sigstore) attestation support.
+sboms:
+  - id: default
+    artifacts: archive
 
-brews:
+# macOS code signing/notarization is intentionally not configured here — it's
+# planned as a follow-up by someone else on the team. This is a real gap, not
+# a cosmetic one: on current macOS, an unsigned, unnotarized binary that
+# actually went through Gatekeeper's quarantine check (e.g. downloaded and
+# extracted via a browser/Finder, not install.sh) gets a hard "Apple could
+# not verify this app" block, not a dismissible warning -- the user has to
+# go into System Settings > Privacy & Security to allow it. install.sh's own
+# curl+tar path typically doesn't trigger this at all, since curl doesn't set
+# the quarantine attribute the way a browser download does, but that's a
+# property of how the file was fetched, not something this tool controls or
+# should be relied on. Add a `notarize:` block here once signing secrets
+# exist.
+
+homebrew_casks:
   - name: elevator
     repository:
       owner: fivexl
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
     homepage: https://github.com/fivexl/terraform-aws-sso-elevator
     description: Submit temporary AWS access requests from the command line
     license: Apache-2.0
-    install: |
-      bin.install "elevator"
-    test: |
-      system "#{bin}/elevator", "version"
+    binaries:
+      - elevator
 
 release:
   github:
@@ -65,3 +84,19 @@ release:
   # through leaves some assets uploaded and some not; without this, a retry
   # fails on a 422 for the ones that already made it.
   replace_existing_artifacts: true
+  # Every release starts out marked prerelease, regardless of whether the
+  # tag itself looks like one. This is deliberate: it's the only thing that
+  # keeps a release that hasn't passed cli-release.yml's smoke job yet out
+  # of GitHub's "latest" release and out of install.sh's default (unpinned)
+  # install path, both of which explicitly filter on prerelease == false --
+  # so a plain `curl install.sh | sh` run can't land on an untested build
+  # during the window between this release being created and smoke
+  # finishing. The smoke job itself still reaches it fine, since it pins an
+  # exact tag (ELEVATOR_VERSION) rather than resolving "latest", and a
+  # prerelease's assets are just as publicly downloadable as a normal
+  # release's -- only draft releases would need extra plumbing here.
+  # cli-release.yml's publication-state job flips this to false (promoting
+  # it to a real release) once smoke passes, unless the tag itself is a
+  # genuine prerelease (e.g. elevator-v1.0.0-rc1), in which case it's left
+  # alone on purpose.
+  prerelease: true

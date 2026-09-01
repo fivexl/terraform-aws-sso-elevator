@@ -35,3 +35,6 @@ override.tf.json
 # Built elevator CLI binary (cmd/elevator/)
 cmd/elevator/elevator
 cmd/elevator/elevator.exe
+
+# goreleaser's local output directory (e.g. from `goreleaser release --snapshot`)
+/dist/

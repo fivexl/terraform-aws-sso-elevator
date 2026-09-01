@@ -37,6 +37,16 @@ go build -o elevator .
 
 This is a separate, nested Go module (`cmd/elevator/go.mod`) — the rest of this repo is Python/Terraform, so building the CLI doesn't touch or require anything else in the repo.
 
+### Verifying a release
+
+`install.sh` always verifies the downloaded archive's checksum against the release's `checksums.txt` before installing anything, so this section is only for confirming the release itself is genuinely what this repo's CI built — useful if you're distributing the binary further, or just want stronger assurance than "GitHub says so."
+
+Each release includes an SBOM (`*.sbom.json`, one per archive) and a [GitHub build provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds) tying that exact archive back to the workflow run and commit that produced it — no separate signing key to fetch or trust, since it's backed by GitHub's own OIDC identity. Verify with the [`gh` CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify elevator-linux-amd64.tar.gz --owner fivexl
+```
+
 ## Configure
 
 `elevator` needs to know which API endpoint to call. In order of precedence (first one set wins):
