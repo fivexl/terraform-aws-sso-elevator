@@ -82,6 +82,17 @@ def mock_iam_client():
 
 
 @pytest.fixture(autouse=True)
+def mock_list_users():
+    """Stubs the Identity Store list_users call extract_identity makes before
+    find_email_by_username -- the returned content doesn't matter here since
+    find_email_by_username itself is separately mocked below, this just
+    stands in for the identity_store_client=None passed by the extract_identity
+    wrapper above."""
+    with patch.object(cli_auth.sso, "list_users", return_value={"Users": []}) as mock_list:
+        yield mock_list
+
+
+@pytest.fixture(autouse=True)
 def mock_find_email_by_username():
     """Stubs the Identity Store username-to-email lookup so tests don't hit
     real AWS. Defaults to "no match" (None); tests that need a successful
@@ -95,7 +106,7 @@ def test_extract_identity_accepts_valid_sso_session(mock_iam_client, mock_find_e
     mock_find_email_by_username.return_value = "requester@example.com"
 
     assert extract_identity(EMAIL_ARN) == "requester@example.com"
-    mock_find_email_by_username.assert_called_once_with(None, IDENTITY_STORE_ID, "requester@example.com")
+    mock_find_email_by_username.assert_called_once_with({"Users": []}, "requester@example.com")
 
 
 def test_extract_identity_accepts_valid_sso_session_with_region_segment(mock_iam_client, mock_find_email_by_username):
@@ -117,7 +128,7 @@ def test_extract_identity_accepts_ad_style_username_with_no_at_sign(mock_iam_cli
     mock_find_email_by_username.return_value = "j.smith@company.com"
 
     assert extract_identity(USERNAME_ARN) == "j.smith@company.com"
-    mock_find_email_by_username.assert_called_once_with(None, IDENTITY_STORE_ID, "jsmith")
+    mock_find_email_by_username.assert_called_once_with({"Users": []}, "jsmith")
 
 
 def test_extract_identity_rejects_session_name_matching_no_user(mock_iam_client):

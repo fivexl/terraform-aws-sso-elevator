@@ -97,7 +97,8 @@ def extract_identity(user_arn: str, identity_store_client: "IdentityStoreClient"
     # docstring. Resolving it through the Identity Store, rather than
     # returning it directly, is what makes an AD-style username (no '@' at
     # all) work here the same way it already does on the Slack path.
-    return sso.find_email_by_username(identity_store_client, identity_store_id, match["session_name"])
+    list_of_users = sso.list_users(identity_store_client, identity_store_id)
+    return sso.find_email_by_username(list_of_users, match["session_name"])
 
 
 def _is_sso_provisioned_role(role_name: str) -> bool:

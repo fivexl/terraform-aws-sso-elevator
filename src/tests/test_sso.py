@@ -3,12 +3,24 @@ from unittest.mock import MagicMock
 import sso
 
 
-def _client_returning(users: list[dict]) -> MagicMock:
+def _users(users: list[dict]) -> dict:
+    return {"Users": users}
+
+
+def test_list_users_collects_users_across_pages():
     client = MagicMock()
     paginator = MagicMock()
     client.get_paginator.return_value = paginator
-    paginator.paginate.return_value = [{"Users": users}]
-    return client
+    paginator.paginate.return_value = [
+        {"Users": [{"UserName": "a"}]},
+        {"Users": [{"UserName": "b"}]},
+    ]
+
+    result = sso.list_users(client, "d-1234567890")
+
+    assert result == {"Users": [{"UserName": "a"}, {"UserName": "b"}]}
+    client.get_paginator.assert_called_once_with("list_users")
+    paginator.paginate.assert_called_once_with(IdentityStoreId="d-1234567890")
 
 
 def test_find_email_by_username_matches_exact_username():
@@ -16,15 +28,13 @@ def test_find_email_by_username_matches_exact_username():
     Identity Store username, not necessarily an email (e.g. an AD
     sAMAccountName) -- matched here by username, independent of what the
     user's actual email looks like."""
-    client = _client_returning(
-        [{"UserName": "jsmith", "Emails": [{"Value": "j.smith@company.com", "Primary": True}]}],
-    )
+    list_of_users = _users([{"UserName": "jsmith", "Emails": [{"Value": "j.smith@company.com", "Primary": True}]}])
 
-    assert sso.find_email_by_username(client, "d-1234567890", "jsmith") == "j.smith@company.com"
+    assert sso.find_email_by_username(list_of_users, "jsmith") == "j.smith@company.com"
 
 
 def test_find_email_by_username_prefers_primary_email():
-    client = _client_returning(
+    list_of_users = _users(
         [
             {
                 "UserName": "jsmith",
@@ -33,30 +43,28 @@ def test_find_email_by_username_prefers_primary_email():
                     {"Value": "primary@company.com", "Primary": True},
                 ],
             }
-        ],
+        ]
     )
 
-    assert sso.find_email_by_username(client, "d-1234567890", "jsmith") == "primary@company.com"
+    assert sso.find_email_by_username(list_of_users, "jsmith") == "primary@company.com"
 
 
 def test_find_email_by_username_falls_back_to_first_email_if_none_marked_primary():
-    client = _client_returning(
-        [{"UserName": "jsmith", "Emails": [{"Value": "only@company.com", "Primary": False}]}],
-    )
+    list_of_users = _users([{"UserName": "jsmith", "Emails": [{"Value": "only@company.com", "Primary": False}]}])
 
-    assert sso.find_email_by_username(client, "d-1234567890", "jsmith") == "only@company.com"
+    assert sso.find_email_by_username(list_of_users, "jsmith") == "only@company.com"
 
 
 def test_find_email_by_username_returns_none_when_user_has_no_email():
-    client = _client_returning([{"UserName": "jsmith", "Emails": []}])
+    list_of_users = _users([{"UserName": "jsmith", "Emails": []}])
 
-    assert sso.find_email_by_username(client, "d-1234567890", "jsmith") is None
+    assert sso.find_email_by_username(list_of_users, "jsmith") is None
 
 
 def test_find_email_by_username_returns_none_when_no_user_matches():
-    client = _client_returning([{"UserName": "someone-else", "Emails": [{"Value": "x@company.com", "Primary": True}]}])
+    list_of_users = _users([{"UserName": "someone-else", "Emails": [{"Value": "x@company.com", "Primary": True}]}])
 
-    assert sso.find_email_by_username(client, "d-1234567890", "jsmith") is None
+    assert sso.find_email_by_username(list_of_users, "jsmith") is None
 
 
 def test_find_email_by_username_does_not_prefix_match_a_truncated_username():
@@ -64,8 +72,8 @@ def test_find_email_by_username_does_not_prefix_match_a_truncated_username():
     known, accepted limitation -- this must not fall back to a fuzzy/prefix
     match, since that could resolve to the wrong person."""
     full_username = "jsmith.very.long.username.that.got.truncated@company.com"
-    client = _client_returning([{"UserName": full_username, "Emails": [{"Value": "jsmith@company.com", "Primary": True}]}])
+    list_of_users = _users([{"UserName": full_username, "Emails": [{"Value": "jsmith@company.com", "Primary": True}]}])
 
     # RoleSessionName caps at 64 characters, so simulate a real truncation by
     # slicing rather than hardcoding a second near-duplicate literal.
-    assert sso.find_email_by_username(client, "d-1234567890", full_username[:44]) is None
+    assert sso.find_email_by_username(list_of_users, full_username[:44]) is None

@@ -350,15 +350,21 @@ def list_users(client: IdentityStoreClient, identity_store_id: str) -> dict:
     return r
 
 
-def find_email_by_username(client: IdentityStoreClient, identity_store_id: str, username: str) -> str | None:
+def find_email_by_username(list_of_users: dict, username: str) -> str | None:
     """Look up a user's real, registered email by their exact IAM Identity Center
     username (the UserName attribute — what IAM Identity Center actually sets an
     SSO session's RoleSessionName to, which is not always an email address itself:
     it can be an AD sAMAccountName, or a long email truncated to RoleSessionName's
     64-character limit). Returns None if no user has that exact username — this
     does not attempt a prefix or fuzzy match on a possibly-truncated username,
-    since that could resolve to the wrong person."""
-    list_of_users = list_users(client, identity_store_id)
+    since that could resolve to the wrong person.
+
+    Takes an already-fetched list_users() result rather than fetching its own,
+    mirroring _find_user_principal_id_by_email's shape below — list_users does a
+    full paginated scan of the identity store, so a caller making more than one
+    lookup against it in the same request (e.g. this plus
+    get_user_principal_id_by_email for group-statement resolution) should fetch
+    once and reuse it instead of each lookup re-fetching independently."""
     for user in list_of_users["Users"]:
         if user.get("UserName", "") != username:
             continue
