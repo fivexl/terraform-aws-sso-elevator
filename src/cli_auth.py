@@ -20,11 +20,19 @@ iam:GetRole rather than trusting the name alone.
 Separately, the session name (RoleSessionName) is set by IAM Identity Center
 to the caller's Identity Store *username*, not necessarily their email —
 that's only true when the identity source's username happens to be an email
-(e.g. a plain AD sAMAccountName or a long email truncated to
-RoleSessionName's 64-character limit are both real, valid usernames that
-aren't literally an email string). Treating it as the email directly would
-wrongly reject those legitimate sessions, so this looks the real email up
-from the Identity Store instead of parsing the session name as one.
+(a plain AD sAMAccountName is a real, valid username that isn't literally an
+email string). Treating it as the email directly would wrongly reject a
+legitimate sAMAccountName-style session, so this looks the real email up
+from the Identity Store by exact username match instead of parsing the
+session name as one.
+
+This exact-match lookup does NOT help a username long enough to get
+truncated by RoleSessionName's 64-character limit -- the truncated string
+won't exactly match the real (longer) UserName either, so that case is
+correctly rejected rather than "handled" (see
+test_find_email_by_username_does_not_prefix_match_a_truncated_username in
+test_sso.py, and find_email_by_username's own docstring). That's an
+intentional, accepted, fail-closed limitation, not a bug.
 """
 
 import json

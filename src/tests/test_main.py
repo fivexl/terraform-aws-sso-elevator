@@ -213,6 +213,42 @@ def test_handle_cli_access_request_rejects_non_positive_duration(main_module):
     assert result["statusCode"] == 400
 
 
+def test_handle_cli_access_request_rejects_float_duration(main_module):
+    """Regression test: int(2.7) silently truncates to 2 instead of being
+    rejected -- a JSON number (not the string the CLI always sends) should
+    be treated as invalid input, not quietly reinterpreted."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": 2.7},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_rejects_underscore_separated_duration(main_module):
+    """Regression test: Python's int("2_4") == 24 -- a digit string with an
+    underscore separator should be rejected outright, not silently
+    reinterpreted as a larger duration."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "2_4"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_rejects_non_string_account(main_module):
+    """Regression test: account_id used to flow straight into
+    re.fullmatch(...), which raises TypeError (not a clean 400) for
+    anything that isn't already a string."""
+    event = _cli_request_event(
+        body={"account": 111111111111, "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
 def test_handle_cli_access_request_rejects_duration_outside_the_configured_options(main_module):
     """Regression test for the actual bypass: a deployment can restrict
     everyone to an explicit short list of durations via

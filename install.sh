@@ -7,6 +7,9 @@
 # Env overrides:
 #   ELEVATOR_VERSION      Pin to a specific tag (e.g. elevator-v1.2.0) instead of latest.
 #   ELEVATOR_INSTALL_DIR  Install directory (default: $HOME/.local/bin).
+#   GITHUB_TOKEN          Used to list releases at the authenticated 5000/hr rate
+#                         limit instead of the unauthenticated 60/hr one. Only
+#                         consulted when ELEVATOR_VERSION isn't set.
 set -eu
 
 REPO="fivexl/terraform-aws-sso-elevator"
@@ -59,7 +62,20 @@ get_latest_version() {
   # published after the last CLI release would make it resolve to the wrong
   # one. List releases explicitly instead and take the first non-prerelease
   # elevator-v* tag, in the order the API returns them (newest first).
-  fields=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=30" 2>/dev/null \
+  # per_page=100 (the API's max) rather than 30, so this doesn't start
+  # missing the latest elevator-v* release once enough module releases
+  # accumulate ahead of it.
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    response=$(curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" "https://api.github.com/repos/${REPO}/releases?per_page=100") \
+      || die "failed to list releases from the GitHub API"
+  else
+    # Unauthenticated requests are capped at 60/hr per source IP -- set
+    # GITHUB_TOKEN to use the authenticated 5000/hr limit instead.
+    response=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=100") \
+      || die "failed to list releases from the GitHub API (if this is a rate limit, set GITHUB_TOKEN and retry)"
+  fi
+
+  fields=$(printf '%s' "$response" \
     | grep -E '"tag_name"|"prerelease"' \
     | sed -E 's/^[[:space:]]*"tag_name": *"([^"]*)".*/TAG \1/; s/^[[:space:]]*"prerelease": *(true|false).*/PRE \1/')
 
@@ -85,7 +101,7 @@ get_latest_version() {
 $fields
 EOF
 
-  [ -n "${version:-}" ] || die "could not resolve the latest elevator-v* release version"
+  [ -n "${version:-}" ] || die "the GitHub API call succeeded but no non-prerelease elevator-v* release was found"
   echo "$version"
 }
 
@@ -114,7 +130,17 @@ verify_archive_members() {
   done
 }
 
+check_required_commands() {
+  for cmd in curl tar; do
+    command -v "$cmd" >/dev/null 2>&1 || die "$cmd is required but not found on PATH"
+  done
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    die "sha256sum or shasum is required but neither was found on PATH"
+  fi
+}
+
 main() {
+  check_required_commands
   os=$(detect_os)
   arch=$(detect_arch)
   version="${ELEVATOR_VERSION:-$(get_latest_version)}"
@@ -123,6 +149,13 @@ main() {
   archive_name="${BINARY_NAME}-${os}-${arch}.tar.gz"
   base_url="https://github.com/${REPO}/releases/download/${version}"
 
+  # mkdir before mktemp so the staging dir lands on the same filesystem as
+  # the final install path on a fresh machine too (INSTALL_DIR not existing
+  # yet is the common case, not the exception) -- otherwise mktemp falls
+  # back to the system tmp dir, the mv below silently becomes a
+  # cross-device copy instead of an atomic rename, and an install
+  # interrupted mid-copy can leave a truncated binary at the destination.
+  mkdir -p "$INSTALL_DIR"
   work_dir=$(mktemp -d "${INSTALL_DIR}/.${BINARY_NAME}-install.XXXXXX" 2>/dev/null) \
     || work_dir=$(mktemp -d)
   trap 'rm -rf "$work_dir"' EXIT
@@ -137,13 +170,8 @@ main() {
   verify_archive_members "${work_dir}/${archive_name}"
 
   tar -xzf "${work_dir}/${archive_name}" -C "$work_dir" "$BINARY_NAME"
-  mkdir -p "$INSTALL_DIR"
   chmod +x "${work_dir}/${BINARY_NAME}"
   mv "${work_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
-
-  cat > "${INSTALL_DIR}/.${BINARY_NAME}.install.json" <<EOF
-{"installer": "install.sh", "version": "${version}", "os": "${os}", "arch": "${arch}"}
-EOF
 
   log "Installed ${BINARY_NAME} ${version} to ${INSTALL_DIR}/${BINARY_NAME}"
   case ":$PATH:" in

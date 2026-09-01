@@ -105,9 +105,16 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
                 "body": json.dumps({"message": "Request body must be valid JSON."}),
             }
 
+        # Coerced to "" rather than left as whatever JSON type the caller
+        # sent -- account_id in particular gets passed straight into
+        # re.fullmatch below, which raises TypeError (not a clean 400) on
+        # anything that isn't already a string, e.g. {"account": 123456789012}.
         account_id = body.get("account", "")
+        account_id = account_id if isinstance(account_id, str) else ""
         permission_set_name = body.get("permission_set", "")
+        permission_set_name = permission_set_name if isinstance(permission_set_name, str) else ""
         reason = body.get("reason", "")
+        reason = reason if isinstance(reason, str) else ""
         if not account_id or not permission_set_name or not reason:
             return {
                 "statusCode": 400,
@@ -142,10 +149,14 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
                 "body": json.dumps({"message": "permission_set must be a permission set this deployment is configured for."}),
             }
 
-        try:
-            hours = int(body.get("duration", ""))
-        except (TypeError, ValueError):
-            hours = 0
+        # A strict digit-string match rather than a bare int(...) call --
+        # Python's int() silently truncates a JSON *number* like 2.7 to 2,
+        # and accepts underscore-separated digit strings like "2_4" as 24.
+        # Both end up bounded by the configured-duration check right below
+        # regardless, but neither is a value this API should be quietly
+        # reinterpreting on an authorization-relevant field.
+        duration_value = body.get("duration", "")
+        hours = int(duration_value) if isinstance(duration_value, str) and re.fullmatch(r"\d+", duration_value) else 0
         if hours <= 0 or not _duration_within_policy(cfg, hours):
             return {
                 "statusCode": 400,
