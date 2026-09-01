@@ -144,9 +144,49 @@ def test_handle_cli_access_request_rejects_non_positive_duration(main_module):
     assert result["statusCode"] == 400
 
 
+def test_handle_cli_access_request_rejects_duration_outside_the_configured_options(main_module):
+    """Regression test for the actual bypass: a deployment can restrict
+    everyone to an explicit short list of durations via
+    permission_duration_list_override, in which case
+    max_permissions_duration_time is documented as ignored. The CLI must
+    honor that same list, not just its own looser upper bound."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "24"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    restricted_options = [
+        main_module.slack_helpers.Option(text=main_module.slack_helpers.PlainTextObject(text="00:30"), value="00:30"),
+        main_module.slack_helpers.Option(text=main_module.slack_helpers.PlainTextObject(text="01:00"), value="01:00"),
+    ]
+    with patch.object(main_module.slack_helpers, "get_max_duration_block", return_value=restricted_options):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_accepts_duration_matching_a_configured_option(main_module):
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    restricted_options = [
+        main_module.slack_helpers.Option(text=main_module.slack_helpers.PlainTextObject(text="00:30"), value="00:30"),
+        main_module.slack_helpers.Option(text=main_module.slack_helpers.PlainTextObject(text="01:00"), value="01:00"),
+    ]
+    fake_requester = MagicMock(id="U_REQ", email="req@example.com")
+    with (
+        patch.object(main_module.slack_helpers, "get_max_duration_block", return_value=restricted_options),
+        patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
+        patch.object(main_module, "process_access_request"),
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result["statusCode"] == 200
+
+
 def test_handle_cli_access_request_success_calls_process_access_request(main_module):
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "2"},
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     fake_requester = MagicMock(id="U_REQ", email="req@example.com")
@@ -177,7 +217,7 @@ def test_handle_cli_access_request_rejects_verified_identity_with_no_slack_accou
     import slack_sdk.errors
 
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "2"},
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     with (
@@ -192,7 +232,7 @@ def test_handle_cli_access_request_rejects_verified_identity_with_no_slack_accou
 
 def test_handle_cli_access_request_reports_unexpected_errors(main_module):
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "2"},
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     with patch.object(main_module.slack_helpers, "get_user_by_email", side_effect=RuntimeError("boom")):

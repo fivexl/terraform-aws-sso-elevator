@@ -98,14 +98,15 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
             hours = int(body.get("duration", ""))
         except (TypeError, ValueError):
             hours = 0
-        if hours <= 0 or hours > cfg.max_permissions_duration_time:
+        if hours <= 0 or not _duration_within_policy(cfg, hours):
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps(
                     {
                         "message": (
-                            f"duration must be a positive integer number of hours, no greater than {cfg.max_permissions_duration_time}."
+                            "duration must be a positive integer number of hours, matching one of the durations this "
+                            "deployment allows (see the Slack request modal's duration dropdown)."
                         )
                     }
                 ),
@@ -149,6 +150,27 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
             "headers": {"content-type": "application/json"},
             "body": json.dumps({"message": "An unexpected error occurred while processing the request."}),
         }
+
+
+def _duration_within_policy(cfg: config.Config, hours: int) -> bool:
+    """Whether hours is a duration this deployment actually allows, per the
+    exact same policy the Slack modal's dropdown enforces
+    (slack_helpers.get_max_duration_block) -- not max_permissions_duration_time
+    alone, which vars.tf documents as ignored once
+    permission_duration_list_override is set. Checking against
+    max_permissions_duration_time directly let the CLI accept durations a
+    deployment had restricted Slack users to a short explicit list for.
+
+    The CLI's duration is whole hours only, so it can only ever match a
+    whole-hour ("H:00") entry in that list -- parsed as total minutes
+    rather than compared as a string, since override entries aren't
+    required to be zero-padded (vars.tf's validation regex is `\\d+:[0-5]\\d`)."""
+    requested_minutes = hours * 60
+    for option in slack_helpers.get_max_duration_block(cfg):
+        entry_hours, entry_minutes = option.value.split(":")
+        if int(entry_hours) * 60 + int(entry_minutes) == requested_minutes:
+            return True
+    return False
 
 
 user_view_map = {}
