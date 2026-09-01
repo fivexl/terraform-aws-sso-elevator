@@ -62,7 +62,9 @@ Flags (for the default request-submission command):
   --reason            Reason for the access request (required)
   --endpoint          SSO Elevator API invoke URL — overrides the saved
                       config file and ELEVATOR_ENDPOINT for this call only
-  --region            AWS region for SigV4 signing — defaults to the
+  --region            AWS region for SigV4 signing — if omitted, parsed from
+                      --endpoint's own hostname when it's a standard
+                      execute-api.<region>.amazonaws.com URL, else the
                       resolved AWS config region, falling back to us-east-1
 
 Configuration, in precedence order (highest first):

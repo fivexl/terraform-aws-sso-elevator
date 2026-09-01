@@ -13,13 +13,63 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 )
+
+// accountIDRE matches a well-formed 12-digit AWS account ID. Checked
+// client-side purely so a typo'd account ID fails immediately instead of
+// round-tripping to the server for the identical rejection.
+var accountIDRE = regexp.MustCompile(`^\d{12}$`)
+
+// executeAPIRegionRE matches API Gateway's own default invoke URL, which
+// deterministically encodes the region the API is deployed in --
+// <api-id>.execute-api.<region>.amazonaws.com[.cn]. Custom domains don't
+// match this and fall back to --region / the AWS config region / us-east-1.
+var executeAPIRegionRE = regexp.MustCompile(`\.execute-api\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$`)
+
+// resolveSigningRegion picks the region to SigV4-sign with. A signature
+// signed for the wrong region always fails API Gateway's AWS_IAM authorizer
+// with SignatureDoesNotMatch, and the caller's own AWS profile/config region
+// has no necessary relationship to where this particular API happens to be
+// deployed -- so once an explicit --region override is ruled out, a region
+// parsed straight out of the endpoint's own hostname is more reliable than
+// falling through to the profile region or a hardcoded default.
+func resolveSigningRegion(flagRegion, endpoint, configRegion string) string {
+	if flagRegion != "" {
+		return flagRegion
+	}
+	if u, err := url.Parse(endpoint); err == nil {
+		if m := executeAPIRegionRE.FindStringSubmatch(u.Hostname()); m != nil {
+			return m[1]
+		}
+	}
+	if configRegion != "" {
+		return configRegion
+	}
+	return "us-east-1"
+}
+
+// validateEndpointScheme rejects anything but https. A SigV4-signed request
+// carries the caller's Authorization header and, for temporary credentials,
+// X-Amz-Security-Token -- sending either over plain HTTP would put a live
+// session token on the wire in the clear.
+func validateEndpointScheme(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("parse endpoint URL %q: %w", endpoint, err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("endpoint must use https://, got %q -- a signed request must never be sent over plain HTTP", endpoint)
+	}
+	return nil
+}
 
 // requestTimeout bounds a single attempt. HTTP APIs cap the API Gateway to
 // Lambda integration at 30s, so this is set just above that ceiling — long
@@ -68,10 +118,17 @@ func runRequest(args []string) {
 	region := fs.String("region", "", "AWS region for SigV4 signing (defaults to the resolved AWS config region, falling back to us-east-1)")
 	fs.Parse(args)
 
+	if fs.NArg() > 0 {
+		log.Fatalf("unrecognized argument(s): %v (all inputs are flags -- did you mean one of --account/--permission-set/--duration/--reason?)", fs.Args())
+	}
+
 	if *account == "" || *permissionSet == "" || *duration == "" || *reason == "" {
 		fmt.Fprintln(fs.Output(), "Usage: elevator --account ID --permission-set NAME --duration HOURS --reason TEXT [--endpoint URL]")
 		fs.PrintDefaults()
 		log.Fatal("--account, --permission-set, --duration, and --reason are required")
+	}
+	if !accountIDRE.MatchString(*account) {
+		log.Fatalf("--account must be a 12-digit AWS account ID, got %q", *account)
 	}
 	if hours, err := strconv.Atoi(*duration); err != nil || hours <= 0 {
 		log.Fatalf("--duration must be a positive integer number of hours, got %q", *duration)
@@ -94,6 +151,9 @@ func runRequest(args []string) {
 	if endpoint == "" {
 		log.Fatal("no --endpoint given, ELEVATOR_ENDPOINT not set, and none saved — run `elevator configure --endpoint URL` once, pass --endpoint, or set ELEVATOR_ENDPOINT")
 	}
+	if err := validateEndpointScheme(endpoint); err != nil {
+		log.Fatal(err)
+	}
 
 	ctx := context.Background()
 
@@ -102,13 +162,7 @@ func runRequest(args []string) {
 		log.Fatalf("load AWS config: %v", err)
 	}
 
-	resolvedRegion := *region
-	if resolvedRegion == "" {
-		resolvedRegion = awsCfg.Region
-	}
-	if resolvedRegion == "" {
-		resolvedRegion = "us-east-1"
-	}
+	resolvedRegion := resolveSigningRegion(*region, endpoint, awsCfg.Region)
 
 	creds, err := awsCfg.Credentials.Retrieve(ctx)
 	if err != nil {

@@ -48,15 +48,39 @@ func saveConfig(cfg cliConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create config directory: %w", err)
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", fmt.Errorf("write config file %s: %w", path, err)
+	// Written to a temp file in the same directory, then renamed over the
+	// real path, rather than os.WriteFile's truncate-then-write: a crash
+	// mid-write, or two `elevator configure` runs racing each other, could
+	// otherwise leave config.json truncated or interleaved -- the next
+	// command would then fail to parse it, or silently lose the saved
+	// endpoint. Same-directory is required for the rename to be atomic:
+	// os.Rename only guarantees that within a single filesystem/volume.
+	tmp, err := os.CreateTemp(dir, "config-*.json.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create temp config file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("write temp config file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close temp config file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		return "", fmt.Errorf("set config file permissions: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return "", fmt.Errorf("rename temp config file to %s: %w", path, err)
 	}
 	return path, nil
 }
@@ -69,6 +93,10 @@ func runConfigure(args []string) {
 	fs.Usage = func() { usage(fs.Output()) }
 	endpoint := fs.String("endpoint", "", "SSO Elevator API invoke URL to save for future commands (required)")
 	fs.Parse(args)
+
+	if fs.NArg() > 0 {
+		log.Fatalf("unrecognized argument(s): %v (did you mean --endpoint %s?)", fs.Args(), fs.Arg(0))
+	}
 
 	if *endpoint == "" {
 		fmt.Fprintln(fs.Output(), "Usage: elevator configure --endpoint URL")

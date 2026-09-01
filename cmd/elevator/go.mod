@@ -1,6 +1,6 @@
 module github.com/fivexl/terraform-aws-sso-elevator/cmd/elevator
 
-go 1.27
+go 1.24
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.5

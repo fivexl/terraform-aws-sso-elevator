@@ -6,6 +6,70 @@ import (
 	"testing"
 )
 
+func TestValidateEndpointSchemeRejectsPlainHTTP(t *testing.T) {
+	if err := validateEndpointScheme("http://example.execute-api.us-east-1.amazonaws.com/default/access-requester-cli"); err == nil {
+		t.Fatal("expected an error for a plain-http endpoint, a SigV4-signed request must never be sent over it")
+	}
+}
+
+func TestValidateEndpointSchemeAcceptsHTTPS(t *testing.T) {
+	if err := validateEndpointScheme("https://example.execute-api.us-east-1.amazonaws.com/default/access-requester-cli"); err != nil {
+		t.Fatalf("unexpected error for a valid https endpoint: %v", err)
+	}
+}
+
+func TestValidateEndpointSchemeRejectsUnparseableURL(t *testing.T) {
+	if err := validateEndpointScheme("://not a url"); err == nil {
+		t.Fatal("expected an error for an unparseable endpoint")
+	}
+}
+
+func TestResolveSigningRegion(t *testing.T) {
+	cases := []struct {
+		name        string
+		flagRegion  string
+		endpoint    string
+		configRegion string
+		want        string
+	}{
+		{
+			name:     "derives region from a real execute-api endpoint",
+			endpoint: "https://abc123.execute-api.eu-west-1.amazonaws.com/default/access-requester-cli",
+			want:     "eu-west-1",
+		},
+		{
+			name:       "explicit --region overrides an endpoint that would otherwise resolve differently",
+			flagRegion: "ap-southeast-2",
+			endpoint:   "https://abc123.execute-api.eu-west-1.amazonaws.com/default/access-requester-cli",
+			want:       "ap-southeast-2",
+		},
+		{
+			name:         "falls back to the AWS config region for a custom domain endpoint",
+			endpoint:     "https://elevator.example.com/access-requester-cli",
+			configRegion: "sa-east-1",
+			want:         "sa-east-1",
+		},
+		{
+			name:     "falls back to us-east-1 when nothing else resolves",
+			endpoint: "https://elevator.example.com/access-requester-cli",
+			want:     "us-east-1",
+		},
+		{
+			name:     "derives region from an execute-api.amazonaws.com.cn endpoint",
+			endpoint: "https://abc123.execute-api.cn-north-1.amazonaws.com.cn/default/access-requester-cli",
+			want:     "cn-north-1",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := resolveSigningRegion(c.flagRegion, c.endpoint, c.configRegion)
+			if got != c.want {
+				t.Errorf("resolveSigningRegion(%q, %q, %q) = %q, want %q", c.flagRegion, c.endpoint, c.configRegion, got, c.want)
+			}
+		})
+	}
+}
+
 // TestDoNotFollowRedirectsStopsAt3xx is a regression test for the actual bug:
 // a SigV4-signed request must never be replayed to a redirect target. A
 // 307/308 replays the full signed request (Authorization header, session
