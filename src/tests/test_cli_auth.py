@@ -65,6 +65,25 @@ def _no_such_entity() -> botocore.exceptions.ClientError:
     )
 
 
+def _throttled() -> botocore.exceptions.ClientError:
+    return botocore.exceptions.ClientError(
+        error_response={"Error": {"Code": "Throttling", "Message": "Rate exceeded"}},
+        operation_name="GetRole",
+    )
+
+
+def _unrecognized_5xx() -> botocore.exceptions.ClientError:
+    # A 5xx whose error code isn't in the transient-code allowlist -- only
+    # _is_transient's HTTP-status fallback can catch this one.
+    return botocore.exceptions.ClientError(
+        error_response={
+            "Error": {"Code": "SomeUnmappedServiceError", "Message": "unavailable"},
+            "ResponseMetadata": {"HTTPStatusCode": 503},
+        },
+        operation_name="GetRole",
+    )
+
+
 def extract_identity(user_arn: str, identity_store_client=None):
     """extract_identity always takes an identity store client + id now --
     this wrapper lets most call sites in this file omit the boilerplate."""
@@ -212,6 +231,25 @@ def test_extract_identity_rejects_role_that_no_longer_exists(mock_iam_client, mo
     mock_iam_client.get_role.side_effect = _no_such_entity()
 
     assert extract_identity(EMAIL_ARN) is None
+    mock_find_email_by_username.assert_not_called()
+
+
+def test_extract_identity_raises_transient_error_on_throttling(mock_iam_client, mock_find_email_by_username):
+    """A throttled iam:GetRole says nothing about whether the role is
+    genuinely SSO-provisioned -- it must not be treated the same as
+    NoSuchEntity/AccessDenied (which return None, a real rejection)."""
+    mock_iam_client.get_role.side_effect = _throttled()
+
+    with pytest.raises(cli_auth.TransientIAMError):
+        extract_identity(SPOOFED_PREFIX_ARN)
+    mock_find_email_by_username.assert_not_called()
+
+
+def test_extract_identity_raises_transient_error_on_unrecognized_5xx(mock_iam_client, mock_find_email_by_username):
+    mock_iam_client.get_role.side_effect = _unrecognized_5xx()
+
+    with pytest.raises(cli_auth.TransientIAMError):
+        extract_identity(SPOOFED_PREFIX_ARN)
     mock_find_email_by_username.assert_not_called()
 
 

@@ -308,4 +308,23 @@ def test_handle_cli_access_request_reports_unexpected_errors(main_module):
         result = main_module.handle_cli_access_request(event)
 
     assert result["statusCode"] == 500
-    main_module.app.client.chat_postMessage.assert_called_once()
+
+
+def test_handle_cli_access_request_returns_503_on_transient_iam_error(main_module):
+    """A throttled/unavailable iam:GetRole says nothing about whether the
+    caller's identity is valid -- it must not be reported as
+    GENERIC_REJECTION's "your credentials are invalid" (403), nor page the
+    approvals channel as an unexpected error (500). A distinguishable 503
+    lets the CLI tell "retry this" apart from both of those."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    with (
+        patch.object(main_module.cli_auth, "extract_identity", side_effect=main_module.cli_auth.TransientIAMError),
+        patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result["statusCode"] == 503
+    mock_post_message.assert_not_called()

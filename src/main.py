@@ -77,7 +77,21 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
         user_arn = iam_context.get("userArn", "")
         logger.debug("Authorizer IAM userArn", extra={"user_arn": user_arn})
 
-        identity_email = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id) if user_arn else None
+        try:
+            identity_email = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id) if user_arn else None
+        except cli_auth.TransientIAMError:
+            # IAM couldn't answer iam:GetRole right now (throttled, a 5xx,
+            # briefly unavailable) -- this says nothing about whether the
+            # caller's identity is valid, so it shouldn't be reported as
+            # GENERIC_REJECTION's "your credentials are invalid", nor paged
+            # to the approvals channel as an unexpected error. A 503 tells
+            # the caller this is worth retrying.
+            logger.warning("Transient IAM error while verifying CLI identity; asking the caller to retry")
+            return {
+                "statusCode": 503,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": "Could not verify your identity right now due to a transient AWS error. Please try again."}),
+            }
         if not identity_email:
             logger.info("Rejected CLI request: could not verify a signed identity with an email")
             return cli_auth.GENERIC_REJECTION
