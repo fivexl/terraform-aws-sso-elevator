@@ -50,3 +50,32 @@ func TestDoNotFollowRedirectsStopsAt3xx(t *testing.T) {
 		})
 	}
 }
+
+// TestParseSubmissionResponse is a regression test: OK was decoded and then
+// never read, so a 2xx body of {"ok":false,...} printed "✓ Request
+// submitted." — a false positive.
+func TestParseSubmissionResponse(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		wantFailed  bool
+		wantMessage string
+	}{
+		{name: "ok true", body: `{"ok":true,"message":"posted for approval"}`, wantFailed: false, wantMessage: "posted for approval"},
+		{name: "ok false", body: `{"ok":false,"message":"duplicate request"}`, wantFailed: true, wantMessage: "duplicate request"},
+		{name: "ok omitted entirely is not treated as false", body: `{"message":"legacy server"}`, wantFailed: false, wantMessage: "legacy server"},
+		{name: "non-json body falls back to the raw body, never flagged failed", body: `not json`, wantFailed: false, wantMessage: "not json"},
+		{name: "json with no message falls back to the raw body", body: `{"ok":true}`, wantFailed: false, wantMessage: `{"ok":true}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			failed, message := parseSubmissionResponse([]byte(c.body))
+			if failed != c.wantFailed {
+				t.Errorf("failed = %v, want %v", failed, c.wantFailed)
+			}
+			if message != c.wantMessage {
+				t.Errorf("message = %q, want %q", message, c.wantMessage)
+			}
+		})
+	}
+}

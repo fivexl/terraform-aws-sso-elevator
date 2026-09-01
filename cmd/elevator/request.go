@@ -201,13 +201,9 @@ func isDialError(err error) bool {
 // so this deliberately does NOT claim a human decision is pending — only
 // that this command hasn't waited for or confirmed the actual outcome.
 func printSubmissionResult(account, permissionSet, duration string, respBody []byte) {
-	var parsed struct {
-		OK      bool   `json:"ok"`
-		Message string `json:"message"`
-	}
-	serverMessage := string(respBody)
-	if err := json.Unmarshal(respBody, &parsed); err == nil && parsed.Message != "" {
-		serverMessage = parsed.Message
+	serverFailed, serverMessage := parseSubmissionResponse(respBody)
+	if serverFailed {
+		log.Fatalf("request was not submitted: %s", serverMessage)
 	}
 
 	fmt.Printf(`✓ Request submitted.
@@ -221,4 +217,24 @@ else to click Approve/Deny. Check Slack, or the account's IAM Identity
 Center assignments, to confirm the actual outcome before assuming access
 has been granted.
 `, account, permissionSet, duration, serverMessage)
+}
+
+// parseSubmissionResponse reports whether the server explicitly flagged
+// this request as not actually submitted, despite the 2xx status that got
+// us here, plus the best available message to show for it. OK is a *bool,
+// not bool, so a response that omits "ok" entirely isn't mistaken for an
+// explicit false — only "ok": false is treated as a real failure signal.
+func parseSubmissionResponse(respBody []byte) (failed bool, message string) {
+	var parsed struct {
+		OK      *bool  `json:"ok"`
+		Message string `json:"message"`
+	}
+	message = string(respBody)
+	if json.Unmarshal(respBody, &parsed) != nil {
+		return false, message
+	}
+	if parsed.Message != "" {
+		message = parsed.Message
+	}
+	return parsed.OK != nil && !*parsed.OK, message
 }
