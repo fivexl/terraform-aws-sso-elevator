@@ -119,6 +119,17 @@ def test_extract_identity_accepts_valid_sso_session_with_region_segment(mock_iam
     assert extract_identity(EMAIL_ARN) == "requester@example.com"
 
 
+def test_extract_identity_accepts_govcloud_partition(mock_iam_client, mock_find_email_by_username):
+    """A hardcoded "aws" partition would reject 100% of requests in
+    GovCloud/China with the same generic message a genuinely invalid ARN
+    gets -- the regex must also match arn:aws-us-gov:/arn:aws-cn:."""
+    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
+    mock_find_email_by_username.return_value = "requester@example.com"
+    govcloud_arn = "arn:aws-us-gov:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/requester@example.com"
+
+    assert extract_identity(govcloud_arn) == "requester@example.com"
+
+
 def test_extract_identity_accepts_ad_style_username_with_no_at_sign(mock_iam_client, mock_find_email_by_username):
     """The fix this module exists for: RoleSessionName being an AD-style
     username (no '@' at all) is a legitimate SSO session, not something to

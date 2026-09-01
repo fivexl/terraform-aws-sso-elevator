@@ -40,7 +40,13 @@ import sso
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
 
-_ASSUMED_ROLE_ARN_RE = re.compile(r"^arn:aws:sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)$")
+# Matches all three real AWS partitions (aws, aws-cn, aws-us-gov) -- a
+# hardcoded "aws" would reject 100% of requests in GovCloud/China with the
+# same generic "not associated with an SSO session" message a genuinely
+# invalid ARN gets, giving an operator there nothing to go on.
+_ASSUMED_ROLE_ARN_RE = re.compile(
+    r"^arn:(?:aws|aws-cn|aws-us-gov):sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)$"
+)
 
 # The path prefix IAM Identity Center provisions its own roles under — this
 # is the part of a role's identity AWS itself enforces (documented as

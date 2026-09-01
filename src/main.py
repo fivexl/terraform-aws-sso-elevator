@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import timedelta
 from typing import Callable
 
@@ -66,7 +67,13 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
     """
     logger.info("Handling CLI access request")
     try:
-        iam_context = (event.get("requestContext") or {}).get("authorizer", {}).get("iam", {}) or {}
+        # Each hop uses `or {}` rather than a .get(..., {}) default, since a
+        # key can be present with an explicit JSON null value -- a default
+        # only kicks in when the key is missing entirely, so
+        # "authorizer": null would otherwise reach .get("iam") on None and
+        # raise, turning a routine unverified-identity case into a 500 with
+        # a Slack post instead of the clean 403 it should be.
+        iam_context = ((event.get("requestContext") or {}).get("authorizer") or {}).get("iam") or {}
         user_arn = iam_context.get("userArn", "")
         logger.debug("Authorizer IAM userArn", extra={"user_arn": user_arn})
 
@@ -92,6 +99,33 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "account, permission_set, and reason are all required and must be non-empty."}),
+            }
+
+        # The Slack modal can't submit a malformed account or an unlisted
+        # permission set at all -- both fields are populated selects built
+        # from cfg.accounts/cfg.permission_sets, not free text. The CLI's
+        # JSON body has no such constraint, so a malformed account ID or a
+        # made-up permission set name would otherwise reach
+        # organizations.describe_account() downstream, well after the
+        # decision has already been made, and unwind to the generic
+        # exception handler -- a 500 plus a Slack post into the approvals
+        # channel for what's just bad caller input.
+        # cfg.accounts/cfg.permission_sets can themselves literally contain
+        # "*" (a statement configured for any account/permission set), so
+        # membership has to allow that wildcard rather than require an
+        # exact match against it -- access_control's own statement matching
+        # treats "*" the same way.
+        if not re.fullmatch(r"\d{12}", account_id) or not ({"*", account_id} & cfg.accounts):
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": "account must be a 12-digit AWS account ID this deployment is configured for."}),
+            }
+        if not ({"*", permission_set_name} & cfg.permission_sets):
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": "permission_set must be a permission set this deployment is configured for."}),
             }
 
         try:

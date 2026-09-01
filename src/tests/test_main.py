@@ -119,6 +119,18 @@ def test_handle_cli_access_request_rejects_missing_authorizer_context(main_modul
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
+def test_handle_cli_access_request_rejects_explicit_null_authorizer(main_module):
+    """Regression test: a JSON key present with an explicit null value is
+    not the same as a missing key -- `{}.get("authorizer", {})` only
+    applies its default when the key is absent, so "authorizer": null
+    used to reach .get("iam") on None and raise, turning this into a 500
+    with a Slack post instead of the same clean 403 a missing key gets."""
+    event = _cli_request_event(body={"account": "111111111111"})
+    event["requestContext"]["authorizer"] = None
+    result = main_module.handle_cli_access_request(event)
+    assert result == main_module.cli_auth.GENERIC_REJECTION
+
+
 def test_handle_cli_access_request_rejects_untrusted_arn(main_module):
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "2"},
@@ -132,6 +144,63 @@ def test_handle_cli_access_request_rejects_invalid_json_body(main_module):
     event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
     event["body"] = "{not json"
     result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_rejects_malformed_account_id(main_module):
+    """Unlike the Slack modal (a populated select of real accounts), the
+    CLI's JSON body has no format constraint on account -- a malformed
+    value used to reach organizations.describe_account() well after the
+    decision was made, unwinding to the generic 500 handler and posting to
+    the approvals channel for what's just bad input."""
+    event = _cli_request_event(
+        body={"account": "not-an-account-id", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_rejects_account_outside_configured_statements(main_module):
+    """With a real (non-wildcard) set of configured accounts, a
+    well-formatted but unlisted account ID must still be rejected."""
+    event = _cli_request_event(
+        body={"account": "999999999999", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    restricted_cfg = main_module.cfg.model_copy(update={"accounts": frozenset(["111111111111"])})
+    with patch.object(main_module, "cfg", restricted_cfg):
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_accepts_wildcard_configured_account(main_module):
+    """cfg.accounts can itself literally be {"*"} (a statement configured
+    for any account) -- membership must treat that as "anything goes",
+    matching access_control's own wildcard statement matching, not require
+    an exact (impossible) match against the literal "*"."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    assert main_module.cfg.accounts == {"*"}  # sanity check on the fixture's own config
+    fake_requester = MagicMock(id="U_REQ", email="req@example.com")
+    with (
+        patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
+        patch.object(main_module, "process_access_request"),
+    ):
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 200
+
+
+def test_handle_cli_access_request_rejects_permission_set_outside_configured_statements(main_module):
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "NotConfigured", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    restricted_cfg = main_module.cfg.model_copy(update={"permission_sets": frozenset(["FullOrgAdmin"])})
+    with patch.object(main_module, "cfg", restricted_cfg):
+        result = main_module.handle_cli_access_request(event)
     assert result["statusCode"] == 400
 
 

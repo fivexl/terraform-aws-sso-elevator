@@ -480,4 +480,14 @@ variable "cli_sso_role_name_prefix" {
   description = "Required prefix on a CLI caller's assumed-role name for the request to be accepted as an SSO-provisioned session."
   type        = string
   default     = "AWSReservedSSO_"
+
+  # src/config.py rejects "" at load time, and main.py calls get_config() at
+  # module import -- so an empty value here wouldn't just break the CLI
+  # route, it would crash the Lambda's import and take the Slack path down
+  # with it. Catching this at `terraform plan`/`apply` is a lot cheaper than
+  # finding out from a broken deployment.
+  validation {
+    condition     = var.cli_sso_role_name_prefix != ""
+    error_message = "cli_sso_role_name_prefix must not be empty -- it would disable the check entirely (str.startswith(\"\") is always true) and crash the Lambda's config load, breaking the Slack path too."
+  }
 }
