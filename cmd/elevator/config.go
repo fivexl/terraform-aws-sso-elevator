@@ -103,6 +103,9 @@ func runConfigure(args []string) {
 		fs.PrintDefaults()
 		log.Fatal("--endpoint is required")
 	}
+	if err := validateEndpointScheme(*endpoint); err != nil {
+		log.Fatal(err)
+	}
 
 	path, err := saveConfig(cliConfig{Endpoint: *endpoint})
 	if err != nil {

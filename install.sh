@@ -48,10 +48,15 @@ validate_version() {
   case "$1" in
     */*) die "invalid version format: $1 (must not contain '/')" ;;
   esac
-  case "$1" in
-    elevator-v[0-9]*.[0-9]*.[0-9]*) return 0 ;;
-    *) die "invalid version format: $1 (expected elevator-vX.Y.Z)" ;;
-  esac
+  # A shell case glob can't express "one or more digits" -- [0-9]* means
+  # "a digit, then anything", so the previous version of this check accepted
+  # e.g. "elevator-v1$(id).0.0" or "elevator-v9EVIL.9EVIL.9EVIL". No working
+  # injection was ever found downstream (every expansion here is quoted and
+  # there's no eval), but the comment above claiming a "strict" shape was a
+  # false safety claim, not just a redundant one. grep -E gives a real
+  # anchored regex, actually requiring digit-only version components.
+  echo "$1" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$' \
+    || die "invalid version format: $1 (expected elevator-vX.Y.Z or elevator-vX.Y.Z-suffix)"
 }
 
 get_latest_version() {
