@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,11 +29,11 @@ func TestValidateEndpointSchemeRejectsUnparseableURL(t *testing.T) {
 
 func TestResolveSigningRegion(t *testing.T) {
 	cases := []struct {
-		name        string
-		flagRegion  string
-		endpoint    string
+		name         string
+		flagRegion   string
+		endpoint     string
 		configRegion string
-		want        string
+		want         string
 	}{
 		{
 			name:     "derives region from a real execute-api endpoint",
@@ -141,5 +144,139 @@ func TestParseSubmissionResponse(t *testing.T) {
 				t.Errorf("message = %q, want %q", message, c.wantMessage)
 			}
 		})
+	}
+}
+
+// TestIsDialError is a regression test for the single invariant that keeps a
+// connection-level failure from ever being retried past the point where a
+// duplicate submission (and duplicate auto-grant, for a self-approving
+// caller) becomes possible: only a failure to establish the connection at
+// all is safe to retry, since nothing has reached the server yet.
+func TestIsDialError(t *testing.T) {
+	t.Run("real dial failure to a closed port is a dial error", func(t *testing.T) {
+		// Listen then immediately close, rather than a hardcoded port
+		// number, so nothing else on the test runner could coincidentally
+		// be listening there.
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		addr := l.Addr().String()
+		l.Close()
+
+		_, dialErr := net.Dial("tcp", addr)
+		if dialErr == nil {
+			t.Fatal("expected an error connecting to a just-closed port")
+		}
+		if !isDialError(dialErr) {
+			t.Errorf("isDialError(%v) = false, want true for a real connection-refused error", dialErr)
+		}
+	})
+
+	t.Run("a net.OpError with a non-dial Op is not a dial error", func(t *testing.T) {
+		// This is what a failure *after* the connection was already
+		// established looks like -- by this point the request may already
+		// be sitting in the Lambda, so it must not be treated as safe to
+		// retry the same way a dial failure is.
+		err := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}
+		if isDialError(err) {
+			t.Error("isDialError = true, want false for an Op other than \"dial\"")
+		}
+	})
+
+	t.Run("a plain non-net error is not a dial error", func(t *testing.T) {
+		if isDialError(errors.New("some other failure")) {
+			t.Error("isDialError = true, want false for a non-*net.OpError")
+		}
+	})
+
+	t.Run("nil error is not a dial error", func(t *testing.T) {
+		if isDialError(nil) {
+			t.Error("isDialError(nil) = true, want false")
+		}
+	})
+}
+
+func TestResolveEndpoint(t *testing.T) {
+	cases := []struct {
+		name                                      string
+		flagEndpoint, envEndpoint, configEndpoint string
+		want                                      string
+	}{
+		{name: "flag wins over env and config", flagEndpoint: "https://flag", envEndpoint: "https://env", configEndpoint: "https://config", want: "https://flag"},
+		{name: "env wins over config when flag is unset", envEndpoint: "https://env", configEndpoint: "https://config", want: "https://env"},
+		{name: "falls back to config when neither flag nor env is set", configEndpoint: "https://config", want: "https://config"},
+		{name: "empty when nothing is configured anywhere", want: ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := resolveEndpoint(c.flagEndpoint, c.envEndpoint, c.configEndpoint)
+			if got != c.want {
+				t.Errorf("resolveEndpoint(%q, %q, %q) = %q, want %q", c.flagEndpoint, c.envEndpoint, c.configEndpoint, got, c.want)
+			}
+		})
+	}
+}
+
+func TestValidateDurationHours(t *testing.T) {
+	for _, v := range []string{"1", "2", "24", "100"} {
+		if err := validateDurationHours(v); err != nil {
+			t.Errorf("validateDurationHours(%q) = %v, want nil", v, err)
+		}
+	}
+	for _, v := range []string{"0", "-1", "1.5", "abc", "", "2h", "2 "} {
+		if err := validateDurationHours(v); err == nil {
+			t.Errorf("validateDurationHours(%q) = nil, want an error", v)
+		}
+	}
+}
+
+func TestAccountIDRE(t *testing.T) {
+	for _, v := range []string{"123456789012", "000000000000"} {
+		if !accountIDRE.MatchString(v) {
+			t.Errorf("accountIDRE.MatchString(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"12345678901", "1234567890123", "12345678901a", "", "123456789012 ", " 123456789012"} {
+		if accountIDRE.MatchString(v) {
+			t.Errorf("accountIDRE.MatchString(%q) = true, want false", v)
+		}
+	}
+}
+
+// TestRequestPayloadJSONShape locks in the wire contract src/main.py's
+// handle_cli_access_request actually parses (body.get("account"),
+// body.get("permission_set"), body.get("duration"), body.get("reason")) --
+// a renamed Go struct tag here would silently break every field the server
+// reads without any test on either side catching it.
+func TestRequestPayloadJSONShape(t *testing.T) {
+	body, err := json.Marshal(requestPayload{
+		Account:       "123456789012",
+		PermissionSet: "AdminAccess",
+		Duration:      "2",
+		Reason:        "testing",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	want := map[string]any{
+		"account":        "123456789012",
+		"permission_set": "AdminAccess",
+		"duration":       "2",
+		"reason":         "testing",
+	}
+	for key, wantVal := range want {
+		if got, ok := decoded[key]; !ok || got != wantVal {
+			t.Errorf("field %q = %v, want %v", key, decoded[key], wantVal)
+		}
+	}
+	if len(decoded) != len(want) {
+		t.Errorf("got %d top-level fields %v, want exactly %v", len(decoded), decoded, want)
 	}
 }

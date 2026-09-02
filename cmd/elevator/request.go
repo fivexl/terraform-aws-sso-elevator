@@ -71,6 +71,32 @@ func validateEndpointScheme(endpoint string) error {
 	return nil
 }
 
+// validateDurationHours reports whether s is a positive integer number of
+// hours. The validated string itself, not a parsed int, is what actually
+// gets sent to the server (main.py does its own int() parse) -- this only
+// exists to fail fast client-side rather than round-trip a bad value.
+func validateDurationHours(s string) error {
+	hours, err := strconv.Atoi(s)
+	if err != nil || hours <= 0 {
+		return fmt.Errorf("--duration must be a positive integer number of hours, got %q", s)
+	}
+	return nil
+}
+
+// resolveEndpoint picks the API endpoint by precedence, highest first:
+// --endpoint flag, ELEVATOR_ENDPOINT env var (for scripts/automation that
+// can't run the interactive `configure` step), then the saved config file.
+// Returns "" if none of the three provide one.
+func resolveEndpoint(flagEndpoint, envEndpoint, configEndpoint string) string {
+	if flagEndpoint != "" {
+		return flagEndpoint
+	}
+	if envEndpoint != "" {
+		return envEndpoint
+	}
+	return configEndpoint
+}
+
 // requestTimeout bounds a single attempt. HTTP APIs cap the API Gateway to
 // Lambda integration at 30s, so this is set just above that ceiling — long
 // enough that the server, not this client, is what times out first.
@@ -130,24 +156,15 @@ func runRequest(args []string) {
 	if !accountIDRE.MatchString(*account) {
 		log.Fatalf("--account must be a 12-digit AWS account ID, got %q", *account)
 	}
-	if hours, err := strconv.Atoi(*duration); err != nil || hours <= 0 {
-		log.Fatalf("--duration must be a positive integer number of hours, got %q", *duration)
+	if err := validateDurationHours(*duration); err != nil {
+		log.Fatal(err)
 	}
 
-	// Endpoint resolution, highest precedence first: --endpoint flag,
-	// ELEVATOR_ENDPOINT env var (for scripts/automation that can't run the
-	// interactive `configure` step), then the saved config file.
-	endpoint := *endpointFlag
-	if endpoint == "" {
-		endpoint = os.Getenv("ELEVATOR_ENDPOINT")
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
 	}
-	if endpoint == "" {
-		cfg, err := loadConfig()
-		if err != nil {
-			log.Fatalf("load config: %v", err)
-		}
-		endpoint = cfg.Endpoint
-	}
+	endpoint := resolveEndpoint(*endpointFlag, os.Getenv("ELEVATOR_ENDPOINT"), cfg.Endpoint)
 	if endpoint == "" {
 		log.Fatal("no --endpoint given, ELEVATOR_ENDPOINT not set, and none saved — run `elevator configure --endpoint URL` once, pass --endpoint, or set ELEVATOR_ENDPOINT")
 	}

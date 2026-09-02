@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -77,6 +78,37 @@ func TestSaveConfigOverwritesExistingConfig(t *testing.T) {
 	}
 	if cfg.Endpoint != "https://new.example.com" {
 		t.Errorf("got endpoint %q, want the second save to have replaced the first", cfg.Endpoint)
+	}
+}
+
+func TestSaveConfigSetsRestrictivePermissions(t *testing.T) {
+	// Unix permission bits (0600/0700) aren't meaningful on Windows -- NTFS
+	// doesn't map onto them the same way, and CI only ever runs this on
+	// ubuntu-latest/macos-latest (cli-ci.yml), where this is real coverage.
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file permission bits aren't meaningful on Windows")
+	}
+	dir := withTempHome(t)
+
+	path, err := saveConfig(cliConfig{Endpoint: "https://example.com"})
+	if err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat config file: %v", err)
+	}
+	if perm := fileInfo.Mode().Perm(); perm != 0o600 {
+		t.Errorf("config file permissions = %o, want 0600 -- it holds nothing else on the machine has any business reading", perm)
+	}
+
+	dirInfo, err := os.Stat(filepath.Join(dir, ".elevator"))
+	if err != nil {
+		t.Fatalf("stat config dir: %v", err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o700 {
+		t.Errorf("config dir permissions = %o, want 0700", perm)
 	}
 }
 

@@ -11,6 +11,7 @@ linters:
         # error handling.
         - (io.Closer).Close
         - (*os.File).Close
+        - (net.Listener).Close
         - os.Remove
         - fmt.Fprint
         - fmt.Fprintln
