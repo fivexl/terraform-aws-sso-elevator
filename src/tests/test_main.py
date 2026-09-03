@@ -311,8 +311,12 @@ def test_handle_cli_access_request_accepts_a_duration_not_exactly_matching_any_c
 
 
 def test_handle_cli_access_request_success_calls_process_access_request(main_module):
+    # 47 is deliberately not a "round" number (not a multiple of 30, not an
+    # hour) -- this is the actual proof that the granted duration is exactly
+    # what was requested, not rounded/approximated to the nearest option a
+    # human would pick from the Slack dropdown.
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "47"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     fake_requester = MagicMock(id="U_REQ", email="req@example.com")
@@ -329,6 +333,7 @@ def test_handle_cli_access_request_success_calls_process_access_request(main_mod
     assert called_kwargs["request"].permission_set_name == "FullOrgAdmin"
     assert called_kwargs["request"].reason == "debugging"
     assert called_kwargs["request"].requester_slack_id == "U_REQ"
+    assert called_kwargs["request"].permission_duration == main_module.timedelta(minutes=47)
     assert called_kwargs["requester"] is fake_requester
     assert result["statusCode"] == 200
 
