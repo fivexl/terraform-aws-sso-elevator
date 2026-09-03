@@ -28,7 +28,7 @@ def slack_helpers_module():
     sys.modules.pop("slack_helpers", None)
 
 
-def _content_fields(sh, extra_texts: list[str] | None = None) -> list[dict]:
+def _content_fields(extra_texts: list[str] | None = None) -> list[dict]:
     fields = [
         {"text": "Requester: <@U_REQ>"},
         {"text": "Account: 111111111111 #111111111111"},
@@ -52,13 +52,13 @@ def _button_click_values(fields: list[dict]) -> dict:
 
 def test_find_in_fields_optional_returns_none_when_missing(slack_helpers_module):
     sh = slack_helpers_module
-    fields = _content_fields(sh)
+    fields = _content_fields()
     assert sh.ButtonClickedPayload.find_in_fields_optional(fields, "Source") is None
 
 
 def test_find_in_fields_optional_returns_value_when_present(slack_helpers_module):
     sh = slack_helpers_module
-    fields = _content_fields(sh, ["Source: CLI"])
+    fields = _content_fields(["Source: CLI"])
     assert sh.ButtonClickedPayload.find_in_fields_optional(fields, "Source") == "CLI"
 
 
@@ -67,7 +67,7 @@ def test_button_clicked_payload_defaults_to_slack_for_messages_without_source_fi
     existed has no "Source" field at all -- validate_payload must not raise, and must
     fall back to the pre-CLI defaults rather than losing the click entirely."""
     sh = slack_helpers_module
-    values = _button_click_values(_content_fields(sh))
+    values = _button_click_values(_content_fields())
     payload = sh.ButtonClickedPayload.model_validate(values)
     assert payload.request.request_source == "slack"
     assert payload.request.verified_arn == "NA"
@@ -76,7 +76,7 @@ def test_button_clicked_payload_defaults_to_slack_for_messages_without_source_fi
 def test_button_clicked_payload_recovers_cli_provenance(slack_helpers_module):
     sh = slack_helpers_module
     arn = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com"
-    values = _button_click_values(_content_fields(sh, ["Source: CLI", f"Verified ARN: {arn}"]))
+    values = _button_click_values(_content_fields(["Source: CLI", f"Verified ARN: {arn}"]))
     payload = sh.ButtonClickedPayload.model_validate(values)
     assert payload.request.request_source == "cli"
     assert payload.request.verified_arn == arn
@@ -84,8 +84,9 @@ def test_button_clicked_payload_recovers_cli_provenance(slack_helpers_module):
 
 def test_build_approval_request_message_blocks_omits_source_fields_for_slack(slack_helpers_module):
     sh = slack_helpers_module
-    with patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)), patch.object(
-        sh, "get_user", return_value=MagicMock(email="req@example.com")
+    with (
+        patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
+        patch.object(sh, "get_user", return_value=MagicMock(email="req@example.com")),
     ):
         blocks = sh.build_approval_request_message_blocks(
             requester_slack_id="U_REQ",
@@ -105,8 +106,9 @@ def test_build_approval_request_message_blocks_omits_source_fields_for_slack(sla
 def test_build_approval_request_message_blocks_adds_cli_badge(slack_helpers_module):
     sh = slack_helpers_module
     arn = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com"
-    with patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)), patch.object(
-        sh, "get_user", return_value=MagicMock(email="req@example.com")
+    with (
+        patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
+        patch.object(sh, "get_user", return_value=MagicMock(email="req@example.com")),
     ):
         blocks = sh.build_approval_request_message_blocks(
             requester_slack_id="U_REQ",

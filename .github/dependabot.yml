@@ -1,6 +1,6 @@
 version: 2
 updates:
-  - package-ecosystem: "poetry"
+  - package-ecosystem: "uv"
     directory: "/src"
     schedule:
       interval: "weekly"
@@ -11,7 +11,7 @@ updates:
       - "python"
       - "src"
 
-  - package-ecosystem: "poetry"
+  - package-ecosystem: "uv"
     directory: "/layer"
     schedule:
       interval: "weekly"
