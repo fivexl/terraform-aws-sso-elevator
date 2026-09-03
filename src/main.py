@@ -56,7 +56,7 @@ def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
     return slack_handler.handle(event, context)
 
 
-def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
+def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, PLR0915
     """Handle a signed CLI request for AWS access, submitted via the AWS_IAM-authenticated
     CLI_ACCESS_REQUEST_PATH route instead of the Slack modal.
 
@@ -92,7 +92,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
         logger.debug("Authorizer IAM userArn", extra={"user_arn": user_arn})
 
         try:
-            identity_email = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id) if user_arn else None
+            identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id) if user_arn else None
         except cli_auth.TransientIAMError:
             # IAM couldn't answer iam:GetRole right now (throttled, a 5xx,
             # briefly unavailable) -- this says nothing about whether the
@@ -106,8 +106,26 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "Could not verify your identity right now due to a transient AWS error. Please try again."}),
             }
-        if not identity_email:
+        if not identity:
             logger.info("Rejected CLI request: could not verify a signed identity with an email")
+            return cli_auth.GENERIC_REJECTION
+        identity_email, identity_user_id, list_of_users = identity
+
+        # Defense-in-depth against round-1 finding #6 (session name not
+        # bound to any real SSO account assignment): iam:GetRole above
+        # proves role_name is genuinely IAM Identity Center-provisioned, but
+        # says nothing about whether this specific user was ever actually
+        # assigned anything on this account -- a session under a
+        # reserved-path role that's still technically valid but was
+        # orphaned (e.g. after every permission set assignment for this
+        # user was revoked) would otherwise still pass. One cheap API call,
+        # no new privilege beyond a read: require at least one real account
+        # assignment for this UserId on this deployment's account.
+        if not sso.has_account_assignment(sso_client, cfg.sso_instance_arn, identity_user_id, cfg.cli_expected_account_id):
+            logger.warning(
+                "Rejected CLI request: verified identity has no SSO account assignment on this account",
+                extra={"user_id": identity_user_id},
+            )
             return cli_auth.GENERIC_REJECTION
 
         try:
@@ -117,6 +135,17 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "Request body must be valid JSON."}),
+            }
+        # A syntactically valid JSON document isn't necessarily an object --
+        # e.g. "[]" or "42" both pass json.loads above, and body.get below
+        # would then raise AttributeError, unwinding to the blanket
+        # exception handler as a 500 plus a Slack post for what's just bad
+        # caller input.
+        if not isinstance(body, dict):
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": "Request body must be a JSON object."}),
             }
 
         # Coerced to "" rather than left as whatever JSON type the caller
@@ -135,28 +164,54 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "account, permission_set, and reason are all required and must be non-empty."}),
             }
+        # Slack's section-block text fields cap at 2000 chars
+        # (build_approval_request_message_blocks embeds reason in one), and
+        # slack_sdk doesn't validate this client-side -- an oversized reason
+        # reaches chat_postMessage, gets rejected with invalid_blocks, and
+        # unwinds to the same 500-plus-Slack-post blanket handler. The Slack
+        # modal is implicitly bounded by its own input widget; the CLI isn't.
+        max_reason_length = 2000
+        if len(reason) > max_reason_length:
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": f"reason must be at most {max_reason_length} characters."}),
+            }
 
         # The Slack modal can't submit a malformed account or an unlisted
         # permission set at all -- both fields are populated selects built
-        # from cfg.accounts/cfg.permission_sets, not free text. The CLI's
-        # JSON body has no such constraint, so a malformed account ID or a
-        # made-up permission set name would otherwise reach
+        # from the *resolved* account/permission-set lists below, not free
+        # text. The CLI's JSON body has no such constraint, so a malformed
+        # account ID or a made-up permission set name would otherwise reach
         # organizations.describe_account() downstream, well after the
         # decision has already been made, and unwind to the generic
         # exception handler -- a 500 plus a Slack post into the approvals
         # channel for what's just bad caller input.
-        # cfg.accounts/cfg.permission_sets can themselves literally contain
-        # "*" (a statement configured for any account/permission set), so
-        # membership has to allow that wildcard rather than require an
-        # exact match against it -- access_control's own statement matching
-        # treats "*" the same way.
-        if not re.fullmatch(r"\d{12}", account_id) or not ({"*", account_id} & cfg.accounts):
+        #
+        # cfg.accounts/cfg.permission_sets can themselves literally be {"*"}
+        # (a statement configured for "any account"/"any permission set"),
+        # so membership can't be a literal-string check against that
+        # config value the way it can for a concrete list -- it has to be
+        # checked against what "*" actually expands to. Using the same
+        # cached, config-aware resolution the Slack modal's own dropdowns
+        # are built from (organizations.get_accounts_from_config_with_cache /
+        # sso.get_permission_sets_from_config_with_cache) keeps this exactly
+        # as strict as what the modal can offer: any ID that isn't a real,
+        # existing account/permission set is rejected here, before this
+        # reaches organizations.describe_account() or access_control at all.
+        # No separate \d{12} format check needed here: a real AWS account ID
+        # is always exactly 12 digits, so real_account_ids (built from an
+        # actual Organizations account list) can never contain anything a
+        # format check would catch that membership doesn't already reject.
+        real_account_ids = {ac.id for ac in organizations.get_accounts_from_config_with_cache(org_client, s3_client, cfg)}
+        if account_id not in real_account_ids:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "account must be a 12-digit AWS account ID this deployment is configured for."}),
             }
-        if not ({"*", permission_set_name} & cfg.permission_sets):
+        real_permission_set_names = {ps.name for ps in sso.get_permission_sets_from_config_with_cache(sso_client, s3_client, cfg)}
+        if permission_set_name not in real_permission_set_names:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
@@ -203,6 +258,45 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
             # for which emails have a Slack account in this workspace.
             logger.info(f"No Slack user found for verified CLI identity {identity_email!r}")
             return cli_auth.GENERIC_REJECTION
+
+        # Email round-trip / UserId threading: identity_user_id above is the
+        # UserId this specific, IAM-authenticated session was actually
+        # verified against (matched by session_name, not by email at all).
+        # But everything downstream of this point -- execute_decision's own
+        # account-assignment call -- re-derives a UserId independently, by
+        # looking requester.email (Slack's own profile email, not something
+        # this function threads through) back up in the Identity Store.
+        # That's a second, independent lookup this PR's CLI path adds on top
+        # of shared code, and if it ever resolved to someone other than the
+        # user actually verified, the grant would go to the wrong person.
+        # Checked here with the strict, primary-email-only matcher (not
+        # get_user_principal_id_by_email's secondary-domain fallback --
+        # deliberately: that fallback is exactly the mechanism the
+        # collision fix above closes off, so it must not be trusted here to
+        # confirm this cross-check).
+        #
+        # Reuses list_of_users from the identity tuple above rather than
+        # calling sso.list_users(...) again -- that's the exact full
+        # paginated Identity Store scan cli_auth.extract_identity's own
+        # comment calls "the call on this path most likely to throttle", and
+        # a second, unguarded call here would both double that cost per
+        # request and reintroduce the transient-error gap (ClientError/
+        # BotoCoreError -> 500 + Slack post) extract_identity was
+        # specifically hardened against.
+        try:
+            requester_user_id = sso.find_user_principal_id_by_email_strict(requester.email, list_of_users)
+        except SSOUserNotFound:
+            # An ambiguous requester email can't be confirmed either way --
+            # treated the same as an outright mismatch below, not as an
+            # unexpected error.
+            requester_user_id = None
+        if requester_user_id != identity_user_id:
+            logger.warning(
+                "Rejected CLI request: requester's Slack email does not resolve back to the verified identity",
+                extra={"identity_user_id": identity_user_id, "requester_user_id": requester_user_id},
+            )
+            return cli_auth.GENERIC_REJECTION
+
         request = slack_helpers.RequestForAccess(
             permission_set_name=permission_set_name,
             account_id=account_id,
@@ -213,7 +307,15 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
             verified_arn=user_arn,
         )
 
-        process_access_request(request=request, requester=requester, client=app.client)
+        decision = process_access_request(request=request, requester=requester, client=app.client)
+
+        if decision.reason in DENIED_DECISION_REASONS:
+            logger.info("CLI request was refused", extra={"decision_reason": decision.reason.value})
+            return {
+                "statusCode": 200,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"ok": False, "message": f"Request was not submitted for approval: {decision.reason.value}."}),
+            }
 
         return {
             "statusCode": 200,
@@ -574,7 +676,7 @@ def process_access_request(  # noqa: PLR0915, PLR0912
     request: slack_helpers.RequestForAccess,
     requester: entities.slack.User,
     client: WebClient,
-) -> None:
+) -> access_control.AccessRequestDecision:
     """Decide on, post for approval (or auto-execute), and notify about an access request.
 
     Shared by both intake paths: the Slack modal submission (handle_request_for_access_submittion,
@@ -679,6 +781,49 @@ def process_access_request(  # noqa: PLR0915, PLR0912
             dm_text = "You are not allowed to request access to this Permission Set & Account."
             color_coding_emoji = cfg.bad_result_emoji
 
+    # execute_decision runs before every notification below -- the thread
+    # reply, the DM, and the header's chat_update -- not just before the
+    # last of the three. For an auto-grant decision (ApprovalNotRequired/
+    # SelfApproval), text/dm_text/color_coding_emoji are already set to their
+    # "will be approved automatically" / good_result_emoji wording purely
+    # from the *decision* above, before the grant has actually been
+    # attempted. Sending any of these three before running the real AWS
+    # calls in execute_decision meant a failure there (a stale/bogus
+    # permission set name, IAM Identity Center throttling, anything) left
+    # the thread reply and/or DM permanently reading "will be approved
+    # automatically" with no correction, even once the header's own
+    # chat_update was fixed to reflect the real outcome -- a reader
+    # following the thread, or the requester's DM, would see no indication
+    # the grant actually failed. Overriding text/dm_text/color_coding_emoji
+    # here, before any of the three sends below, keeps all of them
+    # consistent with each other and with what actually happened.
+    #
+    # For RequiresApproval, decision.grant is still False here (nothing has
+    # been approved yet), so execute_decision's own `if not decision.grant:
+    # return False` makes this a no-op -- this reordering only changes
+    # behavior for the two auto-grant reasons above.
+    grant_error: Exception | None = None
+    try:
+        access_control.execute_decision(
+            decision=decision,
+            permission_set_name=request.permission_set_name,
+            account_id=request.account_id,
+            permission_duration=request.permission_duration,
+            approver=requester,
+            requester=requester,
+            reason=request.reason,
+            request_source=request.request_source,
+            verified_arn=request.verified_arn,
+        )
+    except Exception as e:  # noqa: BLE001
+        grant_error = e
+        logger.exception(
+            "execute_decision failed -- overriding the message to reflect the actual outcome", extra={"decision": decision.dict()}
+        )
+        color_coding_emoji = cfg.bad_result_emoji
+        text = f"An error occurred while granting access: {e}"
+        dm_text = text
+
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
     logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
@@ -703,19 +848,7 @@ def process_access_request(  # noqa: PLR0915, PLR0912
         text=text,
     )
 
-    access_control.execute_decision(
-        decision=decision,
-        permission_set_name=request.permission_set_name,
-        account_id=request.account_id,
-        permission_duration=request.permission_duration,
-        approver=requester,
-        requester=requester,
-        reason=request.reason,
-        request_source=request.request_source,
-        verified_arn=request.verified_arn,
-    )
-
-    if decision.grant:
+    if decision.grant and grant_error is None:
         client.chat_postMessage(
             channel=cfg.slack_channel_id,
             text=f"Permissions granted to <@{requester.id}>",
@@ -726,6 +859,27 @@ def process_access_request(  # noqa: PLR0915, PLR0912
                 channel=requester.id,
                 text="Your request was processed, permissions granted.",
             )
+
+    if grant_error is not None:
+        # Re-raised after the message above already reflects the failure --
+        # both callers (handle_request_for_access_submittion's @handle_errors,
+        # handle_cli_access_request's own blanket handler) still need to know
+        # this happened, e.g. to report a 500 to a CLI caller.
+        raise grant_error
+
+    return decision
+
+
+# Reasons process_access_request refuses a request outright rather than
+# queuing/granting it -- distinct from RequiresApproval/ApprovalNotRequired/
+# SelfApproval, which all mean the request is (or will be) actioned.
+DENIED_DECISION_REASONS = frozenset(
+    {
+        access_control.DecisionReason.RequesterNotAllowed,
+        access_control.DecisionReason.NoStatements,
+        access_control.DecisionReason.NoApprovers,
+    }
+)
 
 
 @handle_errors

@@ -17,6 +17,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
@@ -46,7 +47,12 @@ func resolveSigningRegion(flagRegion, endpoint, configRegion string) string {
 		return flagRegion
 	}
 	if u, err := url.Parse(endpoint); err == nil {
-		if m := executeAPIRegionRE.FindStringSubmatch(u.Hostname()); m != nil {
+		// url.Parse doesn't lowercase the host, and executeAPIRegionRE is
+		// lowercase-only -- without this, a pasted/typed
+		// HTTPS://A.EXECUTE-API.EU-WEST-1.AMAZONAWS.COM would silently miss
+		// the match and fall through to configRegion/us-east-1, signing for
+		// the wrong region with no indication why.
+		if m := executeAPIRegionRE.FindStringSubmatch(strings.ToLower(u.Hostname())); m != nil {
 			return m[1]
 		}
 	}
@@ -67,6 +73,13 @@ func validateEndpointScheme(endpoint string) error {
 	}
 	if u.Scheme != "https" {
 		return fmt.Errorf("endpoint must use https://, got %q -- a signed request must never be sent over plain HTTP", endpoint)
+	}
+	// url.Parse alone doesn't reject "https:/foo", "https://" or
+	// "https:///path" -- Scheme still comes out "https" for all three, so a
+	// single-slash paste error (a realistic mistake) would otherwise pass
+	// this check and get persisted by `configure` with exit 0.
+	if u.Host == "" {
+		return fmt.Errorf("endpoint must include a host, got %q", endpoint)
 	}
 	return nil
 }
@@ -112,6 +125,11 @@ const requestTimeout = 35 * time.Second
 // retry can't double it up.
 const maxConnectAttempts = 3
 
+// maxResponseBodyBytes bounds how much of the response this reads into
+// memory — generous for the JSON body the server actually sends, but not
+// unbounded.
+const maxResponseBodyBytes = 1 << 20 // 1 MiB
+
 // doNotFollowRedirects makes any 3xx response the final response instead of
 // being followed. A SigV4-signed request must never be replayed to a
 // different URL: the default CheckRedirect follows up to 10 redirects, and
@@ -145,7 +163,7 @@ func runRequest(args []string) {
 	duration := fs.String("duration", "", "How long access is needed, in minutes (required)")
 	reason := fs.String("reason", "", "Reason for the access request (required)")
 	endpointFlag := fs.String("endpoint", "", "SSO Elevator API invoke URL (overrides ELEVATOR_ENDPOINT and the saved config file if set)")
-	region := fs.String("region", "", "AWS region for SigV4 signing (defaults to the resolved AWS config region, falling back to us-east-1)")
+	region := fs.String("region", "", "AWS region for SigV4 signing (defaults to the region parsed from --endpoint's own hostname if it's an API Gateway default invoke URL, else the resolved AWS config region, falling back to us-east-1)")
 	fs.Parse(args)
 
 	if fs.NArg() > 0 {
@@ -164,11 +182,20 @@ func runRequest(args []string) {
 		log.Fatal(err)
 	}
 
-	cfg, err := loadConfig()
-	if err != nil {
-		log.Fatalf("load config: %v", err)
+	// The config file is only read when neither --endpoint nor
+	// ELEVATOR_ENDPOINT supplied a value -- resolveEndpoint's precedence is
+	// flag > env > saved config, so a corrupt or unreadable
+	// ~/.elevator/config.json must not fatal a request that never needed it.
+	envEndpoint := os.Getenv("ELEVATOR_ENDPOINT")
+	var configEndpoint string
+	if *endpointFlag == "" && envEndpoint == "" {
+		cfg, err := loadConfig()
+		if err != nil {
+			log.Fatalf("load config: %v", err)
+		}
+		configEndpoint = cfg.Endpoint
 	}
-	endpoint := resolveEndpoint(*endpointFlag, os.Getenv("ELEVATOR_ENDPOINT"), cfg.Endpoint)
+	endpoint := resolveEndpoint(*endpointFlag, envEndpoint, configEndpoint)
 	if endpoint == "" {
 		log.Fatal("no --endpoint given, ELEVATOR_ENDPOINT not set, and none saved — run `elevator configure --endpoint URL` once, pass --endpoint, or set ELEVATOR_ENDPOINT")
 	}
@@ -214,22 +241,48 @@ func runRequest(args []string) {
 	}
 
 	fmt.Printf("Credential source: %s\n", creds.Source)
+	// Printed so a custom-domain wrong-region 403 (SignatureDoesNotMatch)
+	// is actually diagnosable -- resolveSigningRegion's fallback chain isn't
+	// visible anywhere else, and a custom domain doesn't get the free
+	// region hint an API Gateway default invoke URL's hostname gives.
+	fmt.Printf("Signing region: %s\n", resolvedRegion)
 	fmt.Printf("POST %s\n\n", endpoint)
 
 	httpClient := &http.Client{Timeout: requestTimeout, CheckRedirect: doNotFollowRedirects}
 	resp, err := sendWithConnectRetry(httpClient, req)
 	if err != nil {
+		// sendWithConnectRetry only returns an error after either exhausting
+		// its dial-error retries or hitting a non-dial failure -- isDialError
+		// tells these apart here the same way it does inside that function,
+		// since only a non-dial failure means the request might have reached
+		// the server. Telling users to audit Slack for a request that
+		// provably never left the machine trains them to ignore the warning
+		// in the one case it actually matters.
+		if isDialError(err) {
+			log.Fatalf("send request: %v (the connection was never established, so this request was never sent -- safe to retry)", err)
+		}
 		log.Fatalf("send request: %v (if this was a timeout waiting for a response, check Slack or the account's IAM Identity Center assignments before retrying — the request may have already gone through)", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// A well-behaved server's JSON response is nowhere near this size --
+	// this only bounds how much a misbehaving or malicious endpoint (e.g. a
+	// custom --endpoint pointed somewhere unexpected) can make this process
+	// buffer into memory.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		log.Fatalf("read response: %v", err)
 	}
 
 	if resp.StatusCode >= 300 {
 		fmt.Printf("Status: %s\n", resp.Status)
+		if loc := resp.Header.Get("Location"); loc != "" {
+			// doNotFollowRedirects stops here specifically so a signed
+			// request is never replayed automatically -- printing where it
+			// would have gone is what makes that stop diagnosable instead
+			// of just a bare, unexplained non-2xx status.
+			fmt.Printf("Location: %s\n", loc)
+		}
 		fmt.Printf("Body:\n%s\n", string(respBody))
 		log.Fatalf("request failed with status %s", resp.Status)
 	}

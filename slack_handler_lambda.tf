@@ -194,7 +194,14 @@ data "aws_iam_policy_document" "slack_handler" {
     effect = "Allow"
     actions = [
       "sso:CreateAccountAssignment",
-      "sso:DescribeAccountAssignmentCreationStatus"
+      "sso:DescribeAccountAssignmentCreationStatus",
+      # Read-only, granted for src/main.py's CLI defense-in-depth check:
+      # iam:GetRole (below) only proves a CLI session's role is genuinely
+      # IAM Identity Center-provisioned, not that this specific user was
+      # ever actually assigned anything on this account -- this makes that
+      # check redundant rather than load-bearing, requiring at least one
+      # real account assignment before trusting a session.
+      "sso:ListAccountAssignmentsForPrincipal"
     ]
     resources = [
       "arn:aws:sso:::instance/*",

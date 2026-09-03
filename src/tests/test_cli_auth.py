@@ -122,9 +122,9 @@ def mock_find_email_by_username():
 
 def test_extract_identity_accepts_valid_sso_session(mock_iam_client, mock_find_email_by_username):
     mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_find_email_by_username.return_value = "requester@example.com"
+    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
 
-    assert extract_identity(EMAIL_ARN) == "requester@example.com"
+    assert extract_identity(EMAIL_ARN) == ("requester@example.com", "u-1", {"Users": []})
     mock_find_email_by_username.assert_called_once_with({"Users": []}, "requester@example.com")
 
 
@@ -133,9 +133,9 @@ def test_extract_identity_accepts_valid_sso_session_with_region_segment(mock_iam
     roles with an extra region segment in the path -- must still be
     accepted, not just the no-region shape."""
     mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH_WITH_REGION)
-    mock_find_email_by_username.return_value = "requester@example.com"
+    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
 
-    assert extract_identity(EMAIL_ARN) == "requester@example.com"
+    assert extract_identity(EMAIL_ARN) == ("requester@example.com", "u-1", {"Users": []})
 
 
 def test_extract_identity_accepts_govcloud_partition(mock_iam_client, mock_find_email_by_username):
@@ -143,10 +143,22 @@ def test_extract_identity_accepts_govcloud_partition(mock_iam_client, mock_find_
     GovCloud/China with the same generic message a genuinely invalid ARN
     gets -- the regex must also match arn:aws-us-gov:/arn:aws-cn:."""
     mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_find_email_by_username.return_value = "requester@example.com"
+    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
     govcloud_arn = "arn:aws-us-gov:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/requester@example.com"
 
-    assert extract_identity(govcloud_arn) == "requester@example.com"
+    assert extract_identity(govcloud_arn) == ("requester@example.com", "u-1", {"Users": []})
+
+
+def test_extract_identity_accepts_china_partition(mock_iam_client, mock_find_email_by_username):
+    """Companion to the GovCloud test above -- the docstring there claims
+    both arn:aws-us-gov: and arn:aws-cn: are matched, but only the GovCloud
+    ARN was actually exercised. arn:aws-cn: is the third real AWS partition
+    _ASSUMED_ROLE_ARN_RE is supposed to accept."""
+    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
+    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
+    china_arn = "arn:aws-cn:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/requester@example.com"
+
+    assert extract_identity(china_arn) == ("requester@example.com", "u-1", {"Users": []})
 
 
 def test_extract_identity_accepts_ad_style_username_with_no_at_sign(mock_iam_client, mock_find_email_by_username):
@@ -155,9 +167,9 @@ def test_extract_identity_accepts_ad_style_username_with_no_at_sign(mock_iam_cli
     reject outright -- it must be resolved through the Identity Store,
     same as any other username."""
     mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_find_email_by_username.return_value = "j.smith@company.com"
+    mock_find_email_by_username.return_value = ("j.smith@company.com", "u-2")
 
-    assert extract_identity(USERNAME_ARN) == "j.smith@company.com"
+    assert extract_identity(USERNAME_ARN) == ("j.smith@company.com", "u-2", {"Users": []})
     mock_find_email_by_username.assert_called_once_with({"Users": []}, "jsmith")
 
 
@@ -250,6 +262,55 @@ def test_extract_identity_raises_transient_error_on_unrecognized_5xx(mock_iam_cl
 
     with pytest.raises(cli_auth.TransientIAMError):
         extract_identity(SPOOFED_PREFIX_ARN)
+    mock_find_email_by_username.assert_not_called()
+
+
+def test_extract_identity_raises_transient_error_on_get_role_connection_failure(mock_iam_client, mock_find_email_by_username):
+    """A connect/read-timeout or endpoint-resolution failure (BotoCoreError,
+    not ClientError -- there's no HTTP response at all) says nothing about
+    whether the role is genuinely SSO-provisioned, the same as a throttled
+    ClientError above."""
+    mock_iam_client.get_role.side_effect = botocore.exceptions.EndpointConnectionError(endpoint_url="https://iam.amazonaws.com")
+
+    with pytest.raises(cli_auth.TransientIAMError):
+        extract_identity(SPOOFED_PREFIX_ARN)
+    mock_find_email_by_username.assert_not_called()
+
+
+def test_extract_identity_raises_transient_error_on_list_users_throttling(mock_iam_client, mock_list_users, mock_find_email_by_username):
+    """sso.list_users is a full paginated Identity Store scan -- the call on
+    this path most likely to throttle -- and previously had no error
+    handling at all, unwinding to the generic 500-plus-Slack-post handler."""
+    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
+    mock_list_users.side_effect = _throttled()
+
+    with pytest.raises(cli_auth.TransientIAMError):
+        extract_identity(EMAIL_ARN)
+    mock_find_email_by_username.assert_not_called()
+
+
+def test_extract_identity_raises_transient_error_on_list_users_connection_failure(
+    mock_iam_client, mock_list_users, mock_find_email_by_username
+):
+    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
+    mock_list_users.side_effect = botocore.exceptions.EndpointConnectionError(endpoint_url="https://identitystore.amazonaws.com")
+
+    with pytest.raises(cli_auth.TransientIAMError):
+        extract_identity(EMAIL_ARN)
+    mock_find_email_by_username.assert_not_called()
+
+
+def test_extract_identity_propagates_non_transient_list_users_error(mock_iam_client, mock_list_users, mock_find_email_by_username):
+    """Unlike a transient failure, a non-transient ClientError from
+    list_users (e.g. this Lambda's own IAM policy unexpectedly missing
+    identitystore:ListUsers) is a real misconfiguration, not a signal about
+    the caller's identity -- it must propagate rather than being silently
+    swallowed into a rejection or a retry signal."""
+    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
+    mock_list_users.side_effect = _access_denied()
+
+    with pytest.raises(botocore.exceptions.ClientError):
+        extract_identity(EMAIL_ARN)
     mock_find_email_by_username.assert_not_called()
 
 

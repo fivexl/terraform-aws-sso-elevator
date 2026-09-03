@@ -4,15 +4,17 @@ Submit a temporary AWS access request without Slack.
 
 ## Why this exists
 
-The normal SSO Elevator flow happens entirely in Slack: you post a request, an approver clicks Approve, and the module grants a temporary permission set. That works well for a person, but it's awkward for a script, a CI job, or an AI coding agent that can't click a button — they need a command that submits the same request and reports a clear, machine-readable result. `elevator` signs the request with your own local AWS credentials and posts it directly to the module's `POST /access-requester-cli` route; API Gateway's `AWS_IAM` authorizer verifies that signature itself, and the Lambda extracts your identity from the verified request context (`src/cli_auth.py`) before running it through the exact same approval pipeline a Slack-submitted request goes through — same approvers, same self-approval rules, same audit log.
+The normal SSO Elevator flow happens entirely in Slack: you post a request, an approver clicks Approve, and the module grants a temporary permission set. That works well for a person, but it's awkward for a script, a CI job, or an AI coding agent that can't click a button — they need a command that submits the same request and reports a clear result via its exit code (0 on success, non-zero otherwise) and human-readable output on stdout/stderr. There's no `--json` / structured-output mode yet, so a caller that needs to parse the result programmatically (rather than just check the exit code) has to parse this prose output itself. `elevator` signs the request with your own local AWS credentials and posts it directly to the module's `POST /access-requester-cli` route; API Gateway's `AWS_IAM` authorizer verifies that signature itself, and the Lambda extracts your identity from the verified request context (`src/cli_auth.py`) before running it through the exact same approval pipeline a Slack-submitted request goes through — same approvers, same self-approval rules, same audit log.
 
 Your AWS identity also needs `execute-api:Invoke` permission on this route in the account the module is deployed into — typical member-account SSO credentials (e.g. a plain `ReadOnly` session in a different account) will not have it, and you'll see a `403` if it's missing. Check with whoever manages your SSO permission sets if you're not sure you have it.
 
 ## Install
 
-Homebrew and the install script below only support macOS and Linux (`.goreleaser.yaml` builds for `goos: [darwin, linux]`, and `install.sh` rejects any other OS). On Windows, use [Build from source](#build-from-source) instead.
+Prebuilt binaries only cover macOS and Linux (`.goreleaser.yaml` builds for `goos: [darwin, linux]`, and `install.sh` rejects any other OS). On Windows, use [Build from source](#build-from-source) instead.
 
-### Homebrew (recommended)
+### Homebrew (macOS only, recommended on macOS)
+
+Homebrew casks — the format `elevator` ships as — are a macOS-only concept; Homebrew itself refuses to install one on Linux. Linux users should use the [install script](#install-script) below instead.
 
 ```bash
 brew tap fivexl/homebrew-tap

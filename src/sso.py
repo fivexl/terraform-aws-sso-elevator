@@ -273,6 +273,25 @@ def list_user_account_assignments(
     return account_assignments
 
 
+def has_account_assignment(client: SSOAdminClient, instance_arn: str, principal_id: str, account_id: str) -> bool:
+    """Whether principal_id (a UserId) has at least one real SSO account
+    assignment on account_id -- used as a defense-in-depth check that a
+    verified CLI session actually corresponds to someone with a live
+    assignment, rather than e.g. a reserved-path role that's still valid but
+    was orphaned after every assignment for this user was revoked.
+
+    One call, not paginated: a single hit is proof enough of "at least one",
+    so there's no reason to walk every page the way list_user_account_assignments
+    above does when it needs the full set."""
+    response = client.list_account_assignments_for_principal(
+        InstanceArn=instance_arn,
+        PrincipalId=principal_id,
+        PrincipalType="USER",
+        Filter={"AccountId": account_id},
+    )
+    return bool(response.get("AccountAssignments"))
+
+
 def parse_permission_set(td: type_defs.DescribePermissionSetResponseTypeDef) -> entities.aws.PermissionSet:
     ps = td.get("PermissionSet", {})
     return entities.aws.PermissionSet.model_validate(
@@ -350,17 +369,26 @@ def list_users(client: IdentityStoreClient, identity_store_id: str) -> dict:
     return r
 
 
-def find_email_by_username(list_of_users: dict, username: str) -> str | None:
-    """Look up a user's real, registered email by their exact IAM Identity Center
-    username (the UserName attribute — what IAM Identity Center actually sets an
-    SSO session's RoleSessionName to, which is not always an email address itself:
-    it can be an AD sAMAccountName, or a long email truncated to RoleSessionName's
-    64-character limit). Returns None if no user has that exact username — this
-    does not attempt a prefix or fuzzy match on a possibly-truncated username,
-    since that could resolve to the wrong person.
+def find_email_by_username(list_of_users: dict, username: str) -> tuple[str, str] | None:
+    """Look up a user's real, registered email (and their UserId) by their exact
+    IAM Identity Center username (the UserName attribute — what IAM Identity
+    Center actually sets an SSO session's RoleSessionName to, which is not
+    always an email address itself: it can be an AD sAMAccountName, or a long
+    email truncated to RoleSessionName's 64-character limit). Returns None if
+    no user has that exact username — this does not attempt a prefix or fuzzy
+    match on a possibly-truncated username, since that could resolve to the
+    wrong person.
+
+    The UserId is returned alongside the email (not just the email alone, as
+    this originally did) so a caller that already trusts *this specific
+    lookup* -- e.g. cli_auth.extract_identity, which matched it by an
+    IAM-authenticated session's own session name -- can carry that UserId
+    forward as the identity it verified, rather than re-deriving a UserId
+    later via an independent, unauthenticated-by-comparison email lookup
+    that could in principle resolve to someone else.
 
     Takes an already-fetched list_users() result rather than fetching its own,
-    mirroring _find_user_principal_id_by_email's shape below — list_users does a
+    mirroring find_user_principal_id_by_email_strict's shape below — list_users does a
     full paginated scan of the identity store, so a caller making more than one
     lookup against it in the same request (e.g. this plus
     get_user_principal_id_by_email for group-statement resolution) should fetch
@@ -370,13 +398,12 @@ def find_email_by_username(list_of_users: dict, username: str) -> str | None:
             continue
         emails = user.get("Emails", [])
         primary = next((e["Value"] for e in emails if e.get("Primary")), None)
-        if primary:
-            return primary
-        return emails[0]["Value"] if emails else None
+        email = primary if primary else (emails[0]["Value"] if emails else None)
+        return (email, user["UserId"]) if email else None
     return None
 
 
-def _find_user_principal_id_by_email(email: str, list_of_users: dict) -> str | None:
+def find_user_principal_id_by_email_strict(email: str, list_of_users: dict) -> str | None:
     try:
         # Matched case-insensitively (AWS SSO email lookups aren't
         # case-sensitive), so two different identity store users whose emails
@@ -397,7 +424,15 @@ def _find_user_principal_id_by_email(email: str, list_of_users: dict) -> str | N
                 "Multiple SSO users share this email case-insensitively -- refusing to pick one",
                 extra={"email": email, "candidate_user_ids": sorted(matching_user_ids)},
             )
-            return None
+            # Raising here (rather than returning None, as the "not found"
+            # case below does) is deliberate: get_user_principal_id_by_email
+            # treats a None return as "try the next secondary fallback
+            # domain", which for a collision would mean resolving to a
+            # third, unrelated user's email instead of stopping at the
+            # ambiguity -- vars.tf already calls that fallback "STRONGLY
+            # DISCOURAGED", so an ambiguous primary-email lookup must
+            # terminate the whole lookup, not hand it to the fallback.
+            raise errors.SSOUserNotFound(f"Multiple SSO users share the email {email!r} case-insensitively; refusing to pick one")
         if matching_user_ids:
             user_id = next(iter(matching_user_ids))
             logger.info("Found SSO user", extra={"user_id": user_id})
@@ -426,7 +461,7 @@ def get_user_principal_id_by_email(
 
     try:
         logger.debug("Attempting to find user by primary email", extra={"email": email})
-        if user_id := _find_user_principal_id_by_email(email, list_of_users):
+        if user_id := find_user_principal_id_by_email_strict(email, list_of_users):
             return user_id, False
 
         logger.debug(
@@ -437,7 +472,7 @@ def get_user_principal_id_by_email(
         for domain in secondary_fallback_email_domains:
             secondary_domain_email = first_part + domain
 
-            if user_id := _find_user_principal_id_by_email(secondary_domain_email, list_of_users):
+            if user_id := find_user_principal_id_by_email_strict(secondary_domain_email, list_of_users):
                 logger.info("Found user using secondary domain", extra={"candidate_email": secondary_domain_email, "original_email": email})
                 logger.debug("User found", extra={"user_id": user_id})
                 return user_id, True

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestValidateEndpointSchemeRejectsPlainHTTP(t *testing.T) {
@@ -24,6 +27,18 @@ func TestValidateEndpointSchemeAcceptsHTTPS(t *testing.T) {
 func TestValidateEndpointSchemeRejectsUnparseableURL(t *testing.T) {
 	if err := validateEndpointScheme("://not a url"); err == nil {
 		t.Fatal("expected an error for an unparseable endpoint")
+	}
+}
+
+// TestValidateEndpointSchemeRejectsMissingHost is a regression test: url.Parse
+// still reports Scheme "https" for each of these single-slash paste errors,
+// so a check that only looked at Scheme let `configure` persist garbage with
+// exit 0.
+func TestValidateEndpointSchemeRejectsMissingHost(t *testing.T) {
+	for _, endpoint := range []string{"https:/foo", "https://", "https:///path"} {
+		if err := validateEndpointScheme(endpoint); err == nil {
+			t.Errorf("validateEndpointScheme(%q) = nil, want an error for a missing host", endpoint)
+		}
 	}
 }
 
@@ -62,6 +77,15 @@ func TestResolveSigningRegion(t *testing.T) {
 			endpoint: "https://abc123.execute-api.cn-north-1.amazonaws.com.cn/default/access-requester-cli",
 			want:     "cn-north-1",
 		},
+		{
+			// Regression test: url.Parse doesn't lowercase the host, and the
+			// underlying regex is lowercase-only -- an uppercase (e.g.
+			// pasted straight from the AWS console) endpoint used to miss
+			// the match entirely and silently fall through to us-east-1.
+			name:     "derives region from an execute-api endpoint regardless of case",
+			endpoint: "HTTPS://ABC123.EXECUTE-API.EU-WEST-1.AMAZONAWS.COM/default/access-requester-cli",
+			want:     "eu-west-1",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -80,9 +104,16 @@ func TestResolveSigningRegion(t *testing.T) {
 // rewritten to a bodyless GET, whose 200 would otherwise be read here as a
 // successful submission even though nothing was actually sent.
 func TestDoNotFollowRedirectsStopsAt3xx(t *testing.T) {
-	redirectTargetHit := false
+	// atomic.Bool, not a plain bool: written from the target server's own
+	// handler goroutine, read from the test goroutine. -race only passes on
+	// a plain bool here because the handler never actually runs in the
+	// passing case (the redirect isn't followed) -- if the regression this
+	// guards against ever returns, the handler starts running concurrently
+	// with the read below, and a plain bool turns that into a race report
+	// instead of this test's own assertion message.
+	var redirectTargetHit atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		redirectTargetHit = true
+		redirectTargetHit.Store(true)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer target.Close()
@@ -95,7 +126,7 @@ func TestDoNotFollowRedirectsStopsAt3xx(t *testing.T) {
 		http.StatusPermanentRedirect, // 308
 	} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
-			redirectTargetHit = false
+			redirectTargetHit.Store(false)
 			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, target.URL, code)
 			}))
@@ -111,7 +142,7 @@ func TestDoNotFollowRedirectsStopsAt3xx(t *testing.T) {
 			if resp.StatusCode != code {
 				t.Fatalf("got status %d, want the redirect's own %d (it should not have been followed)", resp.StatusCode, code)
 			}
-			if redirectTargetHit {
+			if redirectTargetHit.Load() {
 				t.Fatal("the redirect target was hit -- the signed request was replayed to it")
 			}
 		})
@@ -195,6 +226,29 @@ func TestIsDialError(t *testing.T) {
 			t.Error("isDialError(nil) = true, want false")
 		}
 	})
+}
+
+// TestSendWithConnectRetryDoesNotRetryAfterTheServerWasReached is a
+// regression test for the invariant TestIsDialError only checks in
+// isolation: sendWithConnectRetry itself must not retry once the connection
+// was actually established, even though the request then failed (here, by
+// timing out waiting for a response) -- retrying past that point risks a
+// duplicate submission (and duplicate auto-grant, for a self-approving
+// caller), since the first attempt may already have reached the Lambda.
+func TestSendWithConnectRetryDoesNotRetryAfterTheServerWasReached(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		time.Sleep(200 * time.Millisecond) // outlast the client timeout
+	}))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader([]byte(`{}`)))
+	if _, err := sendWithConnectRetry(&http.Client{Timeout: 50 * time.Millisecond}, req); err == nil {
+		t.Fatal("expected a timeout")
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("server hit %d times, want exactly 1", n)
+	}
 }
 
 func TestResolveEndpoint(t *testing.T) {

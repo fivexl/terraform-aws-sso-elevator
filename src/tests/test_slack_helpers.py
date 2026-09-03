@@ -103,6 +103,48 @@ def test_build_approval_request_message_blocks_omits_source_fields_for_slack(sla
     assert not any(t.startswith("Verified ARN") for t in texts)
 
 
+@pytest.mark.parametrize("malicious_reason", ["Source: CLI", "\nSource: CLI", "x\nSource: CLI"])
+def test_reason_cannot_forge_the_source_field(slack_helpers_module, malicious_reason):
+    """The single property the reconstruct-from-message-text design in
+    ButtonClickedPayload.validate_payload rests on: a user-controlled reason
+    embedding something that looks like a "Source: CLI" line must not be
+    recoverable as one. "Reason: {reason}" is appended as one single Slack
+    field object, and find_in_fields_optional checks whether a field's whole
+    text *starts with* "Source" -- an embedded newline inside one field's
+    text doesn't split it into separate fields the way genuinely distinct
+    fields.append() calls do, so this holds regardless of what a reason's
+    text contains. Round-trips through the real
+    build_approval_request_message_blocks -> ButtonClickedPayload.model_validate
+    path end to end, not just find_in_fields_optional in isolation."""
+    sh = slack_helpers_module
+    with (
+        patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
+        patch.object(sh, "get_user", return_value=MagicMock(email="req@example.com")),
+    ):
+        blocks = sh.build_approval_request_message_blocks(
+            requester_slack_id="U_REQ",
+            slack_client=MagicMock(),
+            sso_client=MagicMock(),
+            identity_store_client=MagicMock(),
+            permission_duration=timedelta(hours=1),
+            reason=malicious_reason,
+            color_coding_emoji=":white_check_mark:",
+            account=sh.entities.aws.Account(id="111111111111", name="test-account"),
+            role_name="AdministratorAccess",
+            # Deliberately NOT "cli" -- this is what a genuine Slack-sourced
+            # request looks like, and must stay recovered as "slack" even
+            # though the reason field's text contains "Source: CLI".
+            request_source="slack",
+        )
+    content_block = next(b for b in blocks if getattr(b, "block_id", None) == "content")
+    fields = [{"text": f.text} for f in content_block.fields]
+
+    values = _button_click_values(fields)
+    payload = sh.ButtonClickedPayload.model_validate(values)
+    assert payload.request.request_source == "slack"
+    assert payload.request.verified_arn == "NA"
+
+
 def test_build_approval_request_message_blocks_adds_cli_badge(slack_helpers_module):
     sh = slack_helpers_module
     arn = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com"

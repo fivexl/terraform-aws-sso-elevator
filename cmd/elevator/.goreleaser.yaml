@@ -8,7 +8,15 @@ before:
     # plain strings (no dir:/cmd: object form here), so `go -C` (Go 1.20+)
     # is used instead of shell `cd` to avoid depending on hook shell
     # semantics.
-    - go -C cmd/elevator mod tidy
+    #
+    # -diff, not a plain `mod tidy`: cli-release.yml's --skip=validate
+    # disables GoReleaser's dirty-tree check, so a bare `mod tidy` that
+    # silently mutated go.mod/go.sum here would ship a binary built from a
+    # module graph that was never committed, tested, or vuln-scanned --
+    # cli-ci.yml already runs `go mod tidy -diff` and rejects that state, so
+    # failing loudly here instead of mutating just makes this hook agree
+    # with that gate rather than possibly rubber-stamping past it.
+    - go -C cmd/elevator mod tidy -diff
 
 builds:
   - main: .
@@ -75,6 +83,18 @@ homebrew_casks:
     license: Apache-2.0
     binaries:
       - elevator
+    # Homebrew casks are unsigned/unnotarized here (see the notarize: note
+    # above), and unlike install.sh's curl+tar path, a `brew install` fetch
+    # does set the com.apple.quarantine extended attribute -- which without
+    # this hook hits Gatekeeper's hard "Apple could not verify this app"
+    # block on first run, not a dismissible warning. This removes it the
+    # same way install.sh avoids triggering it in the first place.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/elevator"]
+          end
 
 release:
   github:

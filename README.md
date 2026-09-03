@@ -477,9 +477,13 @@ To fix the Security Hub issue when migrating to API Gateway, manually delete the
 ## CLI tool
 Access requests can also be submitted from the command line, without Slack, via the `POST /access-requester-cli` route — signed directly with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. This route is off by default; set `enable_access_requester_cli = true` to add it. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
 
+The image referenced by the default `ecr_repo_tag` predates this route; until a module release ships with CLI support, also set `use_pre_created_image = false` or pin `ecr_repo_tag` to a release that includes it.
+
 Each caller's AWS identity also needs `execute-api:Invoke` permission on this route — without it, API Gateway itself rejects the request with a `403` before the Lambda ever runs. Use the `requester_api_execution_arn_cli` module output as the policy's `Resource` when granting it.
 
 **Trust model warning:** the requester Lambda itself does not re-verify the caller's identity beyond what API Gateway's `AWS_IAM` authorizer already established. This means anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway entirely and invoke it directly with a forged event, which is equivalent to granting themselves any configured permission set as any user. Keep `lambda:InvokeFunction` on this function restricted to API Gateway's own invocation role — do not grant it to anyone as a general-purpose IAM permission. The Lambda does check that the event's `requestContext.apiId` matches this deployment's API Gateway as a defense-in-depth measure, but that value is not secret (it's visible via `DescribeApi`/Terraform state to anyone with read access), so it only stops an accidental or naive direct invocation, not a deliberate one.
+
+The CLI route isn't currently usable outside the standard `aws` partition: this module's IAM policies hardcode `arn:aws:` throughout, so a GovCloud/China caller's otherwise-valid SSO session fails at the Lambda's own `iam:GetRole` call and is rejected with the same generic message an invalid session gets.
 
 # Deployment and Usage
 

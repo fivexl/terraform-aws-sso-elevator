@@ -112,6 +112,34 @@ func TestSaveConfigSetsRestrictivePermissions(t *testing.T) {
 	}
 }
 
+func TestSaveConfigTightensPreExistingConfigDirPermissions(t *testing.T) {
+	// Regression test: os.MkdirAll's mode argument only applies to
+	// directories it actually creates -- per its own docs, "if path is
+	// already a directory, MkdirAll does nothing" -- so a pre-existing
+	// ~/.elevator at looser permissions (e.g. 0755 from an older version of
+	// this tool, or umask effects) used to never get tightened.
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file permission bits aren't meaningful on Windows")
+	}
+	dir := withTempHome(t)
+	configDir := filepath.Join(dir, ".elevator")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("pre-create config dir: %v", err)
+	}
+
+	if _, err := saveConfig(cliConfig{Endpoint: "https://example.com"}); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+
+	dirInfo, err := os.Stat(configDir)
+	if err != nil {
+		t.Fatalf("stat config dir: %v", err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o700 {
+		t.Errorf("config dir permissions = %o, want 0700 -- a pre-existing looser directory must be tightened, not left alone", perm)
+	}
+}
+
 func TestLoadConfigReturnsZeroValueWhenFileDoesNotExist(t *testing.T) {
 	withTempHome(t)
 

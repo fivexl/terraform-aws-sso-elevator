@@ -48,6 +48,17 @@ validate_version() {
   case "$1" in
     */*) die "invalid version format: $1 (must not contain '/')" ;;
   esac
+  # grep matches per line, not the whole input -- "$(printf 'garbage\nelevator-v1.2.3')"
+  # would pass the anchored check below (its second line matches on its own)
+  # even though the value as a whole isn't a clean tag string. curl happens
+  # to fail safe on a URL containing a raw newline, but that's incidental,
+  # not something this function should rely on -- reject a newline outright,
+  # the same way "/" is rejected above.
+  nl='
+'
+  case "$1" in
+    *"$nl"*) die "invalid version format: $1 (must not contain a newline)" ;;
+  esac
   # A shell case glob can't express "one or more digits" -- [0-9]* means
   # "a digit, then anything", so the previous version of this check accepted
   # e.g. "elevator-v1$(id).0.0" or "elevator-v9EVIL.9EVIL.9EVIL". No working
@@ -55,8 +66,16 @@ validate_version() {
   # there's no eval), but the comment above claiming a "strict" shape was a
   # false safety claim, not just a redundant one. grep -E gives a real
   # anchored regex, actually requiring digit-only version components.
-  echo "$1" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$' \
-    || die "invalid version format: $1 (expected elevator-vX.Y.Z or elevator-vX.Y.Z-suffix)"
+  #
+  # The suffix pattern follows SemVer 2.0's own grammar (dot-separated
+  # alphanumeric-or-hyphen identifiers for prerelease, optionally followed by
+  # a "+"-prefixed build-metadata block of the same shape) rather than the
+  # narrower version that used to reject legitimate tags like
+  # "elevator-v1.2.3-rc-1" (a hyphen inside the prerelease identifier itself)
+  # and "elevator-v1.2.3+build.7" (build metadata) -- both are tags
+  # cli-release.yml's own validate-tag job (elevator-v* only) would accept.
+  echo "$1" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
+    || die "invalid version format: $1 (expected elevator-vX.Y.Z, optionally with a -prerelease and/or +build suffix)"
 }
 
 get_latest_version() {
@@ -80,26 +99,37 @@ get_latest_version() {
       || die "failed to list releases from the GitHub API (if this is a rate limit, set GITHUB_TOKEN and retry)"
   fi
 
+  # Unauthenticated requests never returned draft releases at all, so
+  # filtering on "prerelease" alone was sufficient. Now that GITHUB_TOKEN is
+  # supported (for the higher rate limit), a token with read access to this
+  # repo makes drafts visible too -- and a draft has "prerelease": false, so
+  # it would win this scan ahead of the real latest release, then 404 when
+  # main() tries to download its assets from the public releases/download
+  # URL (draft assets aren't published there). "draft" is tracked the same
+  # way "prerelease" already was, and both must be false to accept a tag.
   fields=$(printf '%s' "$response" \
-    | grep -E '"tag_name"|"prerelease"' \
-    | sed -E 's/^[[:space:]]*"tag_name": *"([^"]*)".*/TAG \1/; s/^[[:space:]]*"prerelease": *(true|false).*/PRE \1/')
+    | grep -E '"tag_name"|"draft"|"prerelease"' \
+    | sed -E 's/^[[:space:]]*"tag_name": *"([^"]*)".*/TAG \1/; s/^[[:space:]]*"draft": *(true|false).*/DRAFT \1/; s/^[[:space:]]*"prerelease": *(true|false).*/PRE \1/')
 
   version=""
   tag=""
+  draft=""
   while IFS= read -r line; do
     case "$line" in
-      "TAG "*) tag="${line#TAG }" ;;
+      "TAG "*) tag="${line#TAG }"; draft="" ;;
+      "DRAFT "*) draft="${line#DRAFT }" ;;
       "PRE "*)
         pre="${line#PRE }"
         case "$tag" in
           elevator-v*)
-            if [ "$pre" = "false" ]; then
+            if [ "$pre" = "false" ] && [ "$draft" = "false" ]; then
               version="$tag"
               break
             fi
             ;;
         esac
         tag=""
+        draft=""
         ;;
     esac
   done <<EOF
@@ -121,6 +151,31 @@ verify_checksum() {
     actual=$(shasum -a 256 "$file" | awk '{print $1}')
   fi
   [ "$expected" = "$actual" ] || die "checksum mismatch for $(basename "$file") — expected $expected, got $actual"
+}
+
+# verify_attestation checks the archive against the SLSA build-provenance
+# attestation cli-release.yml publishes for it (actions/attest-build-provenance,
+# Sigstore-backed via GitHub's own OIDC identity, no separate signing keys).
+# This is the actual authenticity root checksums.txt itself can't be: both
+# the archive and checksums.txt are fetched unauthenticated from the same
+# release, so a checksum match alone only proves "these two downloads agree
+# with each other", not that either came from the real CI run. Best-effort
+# by design -- gh is not a listed dependency of this installer (only curl,
+# tar, and sha256sum/shasum are, per check_required_commands), so this can't
+# be a hard requirement without breaking installs for everyone who doesn't
+# have it. When gh genuinely fails to confirm the attestation (as opposed to
+# simply being absent), that's treated as a real integrity failure, the same
+# as a checksum mismatch above.
+verify_attestation() {
+  file="$1"
+  if ! command -v gh >/dev/null 2>&1; then
+    log "note: gh CLI not found on PATH — skipping build-provenance attestation verification (only the checksum above was verified)"
+    return 0
+  fi
+  if ! gh attestation verify "$file" --repo "$REPO" >/dev/null 2>&1; then
+    die "build-provenance attestation verification failed for $(basename "$file") — refusing to install (run 'gh attestation verify $file --repo $REPO' for details)"
+  fi
+  log "Verified build-provenance attestation for $(basename "$file")"
 }
 
 # verify_archive_members whitelists tar entries as regular files only,
@@ -172,6 +227,7 @@ main() {
     || die "failed to download ${base_url}/checksums.txt"
 
   verify_checksum "${work_dir}/${archive_name}" "${work_dir}/checksums.txt"
+  verify_attestation "${work_dir}/${archive_name}"
   verify_archive_members "${work_dir}/${archive_name}"
 
   tar -xzf "${work_dir}/${archive_name}" -C "$work_dir" "$BINARY_NAME"

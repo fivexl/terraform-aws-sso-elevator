@@ -52,6 +52,16 @@ func saveConfig(cfg cliConfig) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create config directory: %w", err)
 	}
+	// MkdirAll's mode argument only applies to directories it actually
+	// creates -- per its own docs, "if path is already a directory,
+	// MkdirAll does nothing", silently leaving a pre-existing ~/.elevator
+	// at whatever looser permissions it already had (e.g. 0755 from an
+	// older version of this tool, or from umask effects) rather than the
+	// 0700 the line above claims. Chmod unconditionally so this is
+	// self-healing on every `configure` run, not just the first one.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", fmt.Errorf("set config directory permissions: %w", err)
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode config: %w", err)
@@ -72,6 +82,16 @@ func saveConfig(cfg cliConfig) (string, error) {
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return "", fmt.Errorf("write temp config file: %w", err)
+	}
+	// Without this, the write above can still be sitting in the OS's page
+	// cache when the rename below returns -- the rename itself is atomic,
+	// but a crash before the kernel independently flushes that page to disk
+	// could still leave a zero-length or partially-written file readable
+	// under the real path afterward, undermining the exact crash-protection
+	// property this temp-file-then-rename approach exists for.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("sync temp config file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return "", fmt.Errorf("close temp config file: %w", err)
