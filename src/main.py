@@ -67,6 +67,20 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
     """
     logger.info("Handling CLI access request")
     try:
+        # Defense-in-depth, not a real access control: this only blocks a
+        # direct lambda:InvokeFunction call that doesn't bother forging
+        # requestContext.apiId (an accidental or naive one), not a
+        # deliberate one -- a direct invoker controls the entire event JSON,
+        # so this value is guessable (visible via DescribeApi/Terraform
+        # state to anyone with read access), not secret. The real trust
+        # boundary is the IAM policy on who may invoke this Lambda at all;
+        # see the README's CLI section. cli_expected_api_id defaults to ""
+        # when the CLI route doesn't exist, which a real event's apiId can
+        # never equal, so this also fails closed for that case for free.
+        if (event.get("requestContext") or {}).get("apiId") != cfg.cli_expected_api_id:
+            logger.info("Rejected CLI request: requestContext.apiId did not match this deployment's API Gateway")
+            return cli_auth.GENERIC_REJECTION
+
         # Each hop uses `or {}` rather than a .get(..., {}) default, since a
         # key can be present with an explicit JSON null value -- a default
         # only kicks in when the key is missing entirely, so

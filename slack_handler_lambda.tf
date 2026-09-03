@@ -72,12 +72,22 @@ module "access_requester_slack_handler" {
       CONFIG_S3_KEY                               = "config/approval-config.json"
       CACHE_ENABLED                               = var.cache_enabled
     },
-    # Only set when the CLI route actually exists — main.py's CLI handler
-    # is unreachable without it, so these would otherwise be unused config
-    # for a disabled feature.
-    var.enable_access_requester_cli ? {
+    # Only set when the CLI route actually exists. Gated on both flags, not
+    # enable_access_requester_cli alone: create_api_gateway = false means
+    # module.http_api has count = 0, so referencing module.http_api[0] below
+    # would fail outright with that combination -- which is also correct
+    # user-facing behavior for it, since enable_access_requester_cli = true
+    # with create_api_gateway = false previously applied cleanly while
+    # silently creating no route at all (these vars set, nothing to use
+    # them, no error anywhere).
+    var.create_api_gateway && var.enable_access_requester_cli ? {
       CLI_EXPECTED_ACCOUNT_ID  = local.cli_expected_account_id
       CLI_SSO_ROLE_NAME_PREFIX = var.cli_sso_role_name_prefix
+      # Defense-in-depth against a naive/accidental direct lambda:InvokeFunction
+      # call bypassing API Gateway entirely -- not a real access control, since
+      # a deliberate forgery can just set this field too. See src/config.py's
+      # cli_expected_api_id docstring.
+      CLI_EXPECTED_API_ID = module.http_api[0].api_id
     } : {}
   )
 

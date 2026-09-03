@@ -479,6 +479,8 @@ Access requests can also be submitted from the command line, without Slack, via 
 
 Each caller's AWS identity also needs `execute-api:Invoke` permission on this route — without it, API Gateway itself rejects the request with a `403` before the Lambda ever runs. Use the `requester_api_execution_arn_cli` module output as the policy's `Resource` when granting it.
 
+**Trust model warning:** the requester Lambda itself does not re-verify the caller's identity beyond what API Gateway's `AWS_IAM` authorizer already established. This means anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway entirely and invoke it directly with a forged event, which is equivalent to granting themselves any configured permission set as any user. Keep `lambda:InvokeFunction` on this function restricted to API Gateway's own invocation role — do not grant it to anyone as a general-purpose IAM permission. The Lambda does check that the event's `requestContext.apiId` matches this deployment's API Gateway as a defense-in-depth measure, but that value is not secret (it's visible via `DescribeApi`/Terraform state to anyone with read access), so it only stops an accidental or naive direct invocation, not a deliberate one.
+
 # Deployment and Usage
 
 The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.

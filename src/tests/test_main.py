@@ -55,14 +55,18 @@ def main_module():
     sys.modules.pop("group", None)
 
 
-def _cli_request_event(body: dict | None = None, user_arn: str | None = None) -> dict:
+def _cli_request_event(body: dict | None = None, user_arn: str | None = None, api_id: str | None = "test-api-id") -> dict:
     """An event shaped like what handle_cli_access_request itself consumes.
     routeKey/rawPath aren't relevant here, since these tests call
     handle_cli_access_request directly rather than going through
-    lambda_handler's dispatch (that's covered separately, below)."""
+    lambda_handler's dispatch (that's covered separately, below).
+
+    api_id defaults to conftest.py's mock_env cli_expected_api_id value, so
+    every test below passes the apiId check for free unless it's overridden
+    -- that check is exercised on its own, separately."""
     event = {
         "body": json.dumps(body) if body is not None else None,
-        "requestContext": {},
+        "requestContext": {"apiId": api_id} if api_id is not None else {},
     }
     if user_arn is not None:
         event["requestContext"]["authorizer"] = {"iam": {"userArn": user_arn}}
@@ -111,6 +115,34 @@ def test_lambda_handler_routes_other_route_keys_to_bolt(main_module):
 # ---------------------------------------------------------------------------
 # handle_cli_access_request
 # ---------------------------------------------------------------------------
+
+
+def test_handle_cli_access_request_rejects_mismatched_api_id(main_module):
+    """Defense-in-depth check: an event whose requestContext.apiId doesn't
+    match this deployment's own API Gateway (conftest.py's mock_env sets
+    cli_expected_api_id to "test-api-id") must be rejected before identity
+    verification even runs -- this is what catches a direct
+    lambda:InvokeFunction call that didn't bother forging this field."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+        api_id="some-other-api-id",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result == main_module.cli_auth.GENERIC_REJECTION
+
+
+def test_handle_cli_access_request_rejects_missing_api_id(main_module):
+    """A direct lambda:InvokeFunction call that omits requestContext.apiId
+    entirely (rather than forging a wrong one) must also be rejected --
+    None must never accidentally equal cli_expected_api_id."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+        api_id=None,
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
 def test_handle_cli_access_request_rejects_missing_authorizer_context(main_module):

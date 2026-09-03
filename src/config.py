@@ -143,6 +143,15 @@ class Config(BaseSettings):
     cli_expected_account_id: str = ""
     cli_sso_role_name_prefix: str = "AWSReservedSSO_"
 
+    # Defense-in-depth only, not a real access control: a direct-invoke caller
+    # controls the entire event JSON, so this value is guessable, not secret
+    # (it's visible via DescribeApi/Terraform state to anyone with read
+    # access). It only blocks a naive/accidental direct lambda:InvokeFunction
+    # that doesn't bother setting requestContext.apiId -- it does not stop a
+    # deliberate forgery. The real trust boundary is the IAM policy deciding
+    # who can invoke this Lambda at all; see the README's CLI section.
+    cli_expected_api_id: str = ""
+
     @field_validator("cli_sso_role_name_prefix")
     @classmethod
     def cli_sso_role_name_prefix_must_not_be_empty(cls, value: str) -> str:  # noqa: ANN101
