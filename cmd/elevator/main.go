@@ -50,7 +50,7 @@ SSO Elevator API; API Gateway's AWS_IAM authorizer verifies the signature
 and the Lambda extracts your identity from it — no separate login step.
 
 Usage:
-  elevator --account ID --permission-set NAME --duration HOURS --reason TEXT [flags]
+  elevator --account ID --permission-set NAME --duration MINUTES --reason TEXT [flags]
   elevator configure --endpoint URL
   elevator version
   elevator help | -h | --help
@@ -58,7 +58,9 @@ Usage:
 Flags (for the default request-submission command):
   --account           AWS account ID to request access to (required)
   --permission-set    Permission set name to request (required)
-  --duration          How long access is needed, in hours (required)
+  --duration          How long access is needed, in minutes (required) —
+                      any positive whole number, not limited to the specific
+                      options the Slack request modal's dropdown shows
   --reason            Reason for the access request (required)
   --endpoint          SSO Elevator API invoke URL — overrides the saved
                       config file and ELEVATOR_ENDPOINT for this call only
@@ -78,7 +80,7 @@ by this tool directly; set AWS_PROFILE as you would for any AWS CLI command.
 
 Example:
   elevator configure --endpoint https://xxxx.execute-api.us-east-1.amazonaws.com/default/access-requester-cli
-  elevator --account 123456789012 --permission-set ReadOnly --duration 2 --reason "debugging prod issue"
+  elevator --account 123456789012 --permission-set ReadOnly --duration 120 --reason "debugging prod issue"
 
 What happens after you run it: a successful submission means the request
 was received and posted to the approval workflow in Slack — it does NOT

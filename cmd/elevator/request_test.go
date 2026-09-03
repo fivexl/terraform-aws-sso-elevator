@@ -218,15 +218,18 @@ func TestResolveEndpoint(t *testing.T) {
 	}
 }
 
-func TestValidateDurationHours(t *testing.T) {
-	for _, v := range []string{"1", "2", "24", "100"} {
-		if err := validateDurationHours(v); err != nil {
-			t.Errorf("validateDurationHours(%q) = %v, want nil", v, err)
+func TestValidateDurationMinutes(t *testing.T) {
+	// No 30-minute-increment requirement, and no client-side upper bound --
+	// any positive whole number is valid here; the server enforces the
+	// actual configured maximum.
+	for _, v := range []string{"1", "2", "24", "47", "100", "1440"} {
+		if err := validateDurationMinutes(v); err != nil {
+			t.Errorf("validateDurationMinutes(%q) = %v, want nil", v, err)
 		}
 	}
 	for _, v := range []string{"0", "-1", "1.5", "abc", "", "2h", "2 "} {
-		if err := validateDurationHours(v); err == nil {
-			t.Errorf("validateDurationHours(%q) = nil, want an error", v)
+		if err := validateDurationMinutes(v); err == nil {
+			t.Errorf("validateDurationMinutes(%q) = nil, want an error", v)
 		}
 	}
 }

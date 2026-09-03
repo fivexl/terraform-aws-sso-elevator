@@ -225,6 +225,21 @@ def test_handle_cli_access_request_rejects_float_duration(main_module):
     assert result["statusCode"] == 400
 
 
+def test_handle_cli_access_request_rejects_absurdly_long_duration_string(main_module):
+    """Regression test: a several-thousand-digit duration string used to
+    pass the old \\d+ regex, then crash int() at CPython's ~4300-digit
+    conversion limit -- an uncaught ValueError that unwound to the generic
+    exception handler as a 500 plus a Slack post, instead of this clean 400.
+    The {1,7} length cap (up to 9,999,999 minutes, ~19 years) rejects it
+    before int() ever runs."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "9" * 5000},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
 def test_handle_cli_access_request_rejects_underscore_separated_duration(main_module):
     """Regression test: Python's int("2_4") == 24 -- a digit string with an
     underscore separator should be rejected outright, not silently
@@ -249,14 +264,14 @@ def test_handle_cli_access_request_rejects_non_string_account(main_module):
     assert result["statusCode"] == 400
 
 
-def test_handle_cli_access_request_rejects_duration_outside_the_configured_options(main_module):
-    """Regression test for the actual bypass: a deployment can restrict
-    everyone to an explicit short list of durations via
-    permission_duration_list_override, in which case
-    max_permissions_duration_time is documented as ignored. The CLI must
-    honor that same list, not just its own looser upper bound."""
+def test_handle_cli_access_request_rejects_duration_above_the_configured_maximum(main_module):
+    """Regression test for the original bypass: a deployment can restrict
+    everyone via permission_duration_list_override, in which case
+    max_permissions_duration_time is documented as ignored. The CLI must be
+    bounded by that same maximum (here, 60 minutes -- the "01:00" entry),
+    not just its own looser upper bound."""
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "24"},
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "61"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
     )
     restricted_options = [
@@ -269,9 +284,15 @@ def test_handle_cli_access_request_rejects_duration_outside_the_configured_optio
     assert result["statusCode"] == 400
 
 
-def test_handle_cli_access_request_accepts_duration_matching_a_configured_option(main_module):
+def test_handle_cli_access_request_accepts_a_duration_not_exactly_matching_any_configured_option(main_module):
+    """Unlike the Slack dropdown, the CLI isn't limited to the *specific*
+    entries a deployment's duration options list -- per an explicit design
+    decision (the 30-minute increments are a Slack UI constraint, not a real
+    one), any whole number of minutes up to the configured maximum is valid.
+    45 minutes is accepted here even though neither "00:30" nor "01:00" is
+    exactly 45 minutes, since both are within the 60-minute maximum."""
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "45"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     restricted_options = [

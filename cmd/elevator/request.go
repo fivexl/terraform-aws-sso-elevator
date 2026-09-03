@@ -71,14 +71,18 @@ func validateEndpointScheme(endpoint string) error {
 	return nil
 }
 
-// validateDurationHours reports whether s is a positive integer number of
-// hours. The validated string itself, not a parsed int, is what actually
+// validateDurationMinutes reports whether s is a positive integer number of
+// minutes. The validated string itself, not a parsed int, is what actually
 // gets sent to the server (main.py does its own int() parse) -- this only
-// exists to fail fast client-side rather than round-trip a bad value.
-func validateDurationHours(s string) error {
-	hours, err := strconv.Atoi(s)
-	if err != nil || hours <= 0 {
-		return fmt.Errorf("--duration must be a positive integer number of hours, got %q", s)
+// exists to fail fast client-side rather than round-trip a bad value. Not
+// rounded to any increment (e.g. 30 minutes) -- that was only ever a Slack
+// dropdown display constraint, not a real limit on the underlying revoke
+// timer, so the server accepts any whole minute value up to its configured
+// maximum.
+func validateDurationMinutes(s string) error {
+	minutes, err := strconv.Atoi(s)
+	if err != nil || minutes <= 0 {
+		return fmt.Errorf("--duration must be a positive integer number of minutes, got %q", s)
 	}
 	return nil
 }
@@ -138,7 +142,7 @@ func runRequest(args []string) {
 	fs.Usage = func() { usage(fs.Output()) }
 	account := fs.String("account", "", "AWS account ID to request access to (required)")
 	permissionSet := fs.String("permission-set", "", "Permission set name to request (required)")
-	duration := fs.String("duration", "", "How long access is needed, in hours (required)")
+	duration := fs.String("duration", "", "How long access is needed, in minutes (required)")
 	reason := fs.String("reason", "", "Reason for the access request (required)")
 	endpointFlag := fs.String("endpoint", "", "SSO Elevator API invoke URL (overrides ELEVATOR_ENDPOINT and the saved config file if set)")
 	region := fs.String("region", "", "AWS region for SigV4 signing (defaults to the resolved AWS config region, falling back to us-east-1)")
@@ -149,14 +153,14 @@ func runRequest(args []string) {
 	}
 
 	if *account == "" || *permissionSet == "" || *duration == "" || *reason == "" {
-		fmt.Fprintln(fs.Output(), "Usage: elevator --account ID --permission-set NAME --duration HOURS --reason TEXT [--endpoint URL]")
+		fmt.Fprintln(fs.Output(), "Usage: elevator --account ID --permission-set NAME --duration MINUTES --reason TEXT [--endpoint URL]")
 		fs.PrintDefaults()
 		log.Fatal("--account, --permission-set, --duration, and --reason are required")
 	}
 	if !accountIDRE.MatchString(*account) {
 		log.Fatalf("--account must be a 12-digit AWS account ID, got %q", *account)
 	}
-	if err := validateDurationHours(*duration); err != nil {
+	if err := validateDurationMinutes(*duration); err != nil {
 		log.Fatal(err)
 	}
 
@@ -278,7 +282,7 @@ func printSubmissionResult(account, permissionSet, duration string, respBody []b
 	}
 
 	fmt.Printf(`✓ Request submitted.
-  Account: %s · Permission set: %s · Duration: %sh
+  Account: %s · Permission set: %s · Duration: %sm
   Server response: %s
 
 This command does NOT wait for or confirm a decision. Your request has

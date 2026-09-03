@@ -64,12 +64,12 @@ Credentials and region come from the standard AWS SDK chain — `AWS_PROFILE`, `
 ## Use
 
 ```bash
-elevator --account 123456789012 --permission-set ReadOnly --duration 2 --reason "debugging prod issue"
+elevator --account 123456789012 --permission-set ReadOnly --duration 120 --reason "debugging prod issue"
 ```
 
 - `--account` — AWS account ID to request access to (required)
 - `--permission-set` — Permission set name to request (required)
-- `--duration` — How long access is needed, as a positive integer number of hours (required)
+- `--duration` — How long access is needed, as a positive integer number of minutes (required). Any whole number of minutes is valid, up to whatever maximum this deployment allows — not limited to the specific options the Slack request modal's dropdown shows.
 - `--reason` — Reason for the access request (required)
 - `--endpoint` — SSO Elevator API invoke URL for this call only, overriding `ELEVATOR_ENDPOINT` and the saved config file (see [Configure](#configure))
 - `--region` — AWS region for SigV4 signing; if omitted, it's parsed from `--endpoint`'s own hostname when that's a standard `execute-api.<region>.amazonaws.com` URL, else the resolved AWS config region, falling back to `us-east-1`

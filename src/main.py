@@ -149,23 +149,29 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
                 "body": json.dumps({"message": "permission_set must be a permission set this deployment is configured for."}),
             }
 
-        # A strict digit-string match rather than a bare int(...) call --
-        # Python's int() silently truncates a JSON *number* like 2.7 to 2,
-        # and accepts underscore-separated digit strings like "2_4" as 24.
-        # Both end up bounded by the configured-duration check right below
-        # regardless, but neither is a value this API should be quietly
-        # reinterpreting on an authorization-relevant field.
+        # A strict, length-bounded digit-string match rather than a bare
+        # int(...) call -- Python's int() silently truncates a JSON *number*
+        # like 2.7 to 2, and accepts underscore-separated digit strings like
+        # "2_4" as 24; neither is a value this API should be quietly
+        # reinterpreting on an authorization-relevant field. The {1,7} cap
+        # (up to 9,999,999 minutes, ~19 years -- far beyond any real
+        # duration) exists only to keep an attacker-supplied digit string
+        # short enough that int() can't be used to hang the Lambda: CPython
+        # rejects converting a >4300-digit string to int at all, and that
+        # unbounded ValueError isn't a case this handler catches, so a huge
+        # digit string used to reach the generic exception handler as a 500
+        # plus a Slack post instead of a clean 400 here.
         duration_value = body.get("duration", "")
-        hours = int(duration_value) if isinstance(duration_value, str) and re.fullmatch(r"\d+", duration_value) else 0
-        if hours <= 0 or not _duration_within_policy(cfg, hours):
+        minutes = int(duration_value) if isinstance(duration_value, str) and re.fullmatch(r"\d{1,7}", duration_value) else 0
+        if minutes <= 0 or minutes > _max_allowed_minutes(cfg):
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps(
                     {
                         "message": (
-                            "duration must be a positive integer number of hours, matching one of the durations this "
-                            "deployment allows (see the Slack request modal's duration dropdown)."
+                            f"duration must be a positive integer number of minutes, no greater than "
+                            f"{_max_allowed_minutes(cfg)} (this deployment's configured maximum)."
                         )
                     }
                 ),
@@ -188,7 +194,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
             account_id=account_id,
             reason=reason,
             requester_slack_id=requester.id,
-            permission_duration=timedelta(hours=hours),
+            permission_duration=timedelta(minutes=minutes),
             request_source="cli",
             verified_arn=user_arn,
         )
@@ -213,25 +219,26 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911
         }
 
 
-def _duration_within_policy(cfg: config.Config, hours: int) -> bool:
-    """Whether hours is a duration this deployment actually allows, per the
-    exact same policy the Slack modal's dropdown enforces
-    (slack_helpers.get_max_duration_block) -- not max_permissions_duration_time
-    alone, which vars.tf documents as ignored once
-    permission_duration_list_override is set. Checking against
-    max_permissions_duration_time directly let the CLI accept durations a
-    deployment had restricted Slack users to a short explicit list for.
+def _max_allowed_minutes(cfg: config.Config) -> int:
+    """The longest duration (in minutes) this deployment allows anyone to
+    request -- derived from whichever policy governs the Slack dropdown's
+    own upper bound (slack_helpers.get_max_duration_block), whether that's
+    an explicit permission_duration_list_override or the computed
+    max_permissions_duration_time increments. Not max_permissions_duration_time
+    alone, which vars.tf documents as ignored once the override is set --
+    reading it directly let the CLI accept durations a deployment had
+    restricted Slack users to a shorter explicit list for.
 
-    The CLI's duration is whole hours only, so it can only ever match a
-    whole-hour ("H:00") entry in that list -- parsed as total minutes
-    rather than compared as a string, since override entries aren't
-    required to be zero-padded (vars.tf's validation regex is `\\d+:[0-5]\\d`)."""
-    requested_minutes = hours * 60
-    for option in slack_helpers.get_max_duration_block(cfg):
-        entry_hours, entry_minutes = option.value.split(":")
-        if int(entry_hours) * 60 + int(entry_minutes) == requested_minutes:
-            return True
-    return False
+    Unlike the Slack modal, the CLI isn't limited to the *specific* entries
+    that dropdown shows (e.g. only 30/60/90-minute options) -- per an
+    explicit decision that Slack's 30-minute increments are a dropdown-size
+    constraint, not a real one (the underlying revoke timer accepts any
+    value), the CLI may request any whole number of minutes up to this max."""
+    return max(
+        int(entry_hours) * 60 + int(entry_minutes)
+        for option in slack_helpers.get_max_duration_block(cfg)
+        for entry_hours, entry_minutes in [option.value.split(":")]
+    )
 
 
 user_view_map = {}
