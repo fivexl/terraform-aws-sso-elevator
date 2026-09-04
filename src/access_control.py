@@ -295,6 +295,7 @@ def execute_decision(  # noqa: PLR0913
     reason: str,
     request_source: str = "slack",
     verified_arn: str = "NA",
+    verified_user_id: str = "NA",
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -303,9 +304,26 @@ def execute_decision(  # noqa: PLR0913
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
-    sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
-    )
+    if request_source == "cli" and verified_user_id != "NA":
+        # Grant against the exact UserId the CLI's SigV4-verified session was
+        # actually checked against at submission time (cli_auth.extract_identity,
+        # cross-checked again by handle_cli_access_request's email round-trip),
+        # not a fresh, independent lookup by requester.email -- re-resolving
+        # here is a *second* identity resolution that could disagree with the
+        # one actually verified (a directory change between submit and
+        # approve, or a primary-email lookup that legitimately falls through
+        # to a different person via the secondary-domain fallback), silently
+        # granting to someone other than the verified caller. If
+        # verified_user_id no longer names a real Identity Store user,
+        # create_account_assignment_and_wait_for_result below fails outright
+        # rather than silently substituting a different, currently-resolvable
+        # user -- fail closed instead of granting to the wrong person.
+        sso_user_principal_id = verified_user_id
+        secondary_domain_was_used = False
+    else:
+        sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
+            identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
+        )
 
     account_assignment = sso.UserAccountAssignment(
         instance_arn=sso_instance.arn,

@@ -11,6 +11,7 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import botocore.exceptions
 import pytest
 
 # Stand-ins for the deployment's real (Organizations/Identity Center) account
@@ -19,7 +20,10 @@ import pytest
 # Every account/permission-set name the tests below expect to be *accepted*
 # must be listed here.
 _REAL_ACCOUNTS = [SimpleNamespace(id="111111111111", name="acct-111111111111")]
-_REAL_PERMISSION_SETS = [SimpleNamespace(name="Foo"), SimpleNamespace(name="FullOrgAdmin")]
+_REAL_PERMISSION_SETS = [
+    SimpleNamespace(name="Foo", arn="arn:aws:sso:::permissionSet/ssoins-1/ps-foo"),
+    SimpleNamespace(name="FullOrgAdmin", arn="arn:aws:sso:::permissionSet/ssoins-1/ps-fullorgadmin"),
+]
 
 
 def _fake_accounts_from_config(_org_client, _s3_client, cfg):
@@ -62,10 +66,13 @@ def main_module():
     uses the same "req@example.com" identity throughout; the mismatch case
     is exercised on its own, separately.
 
-    list_account_assignments_for_principal is stubbed to report one real
-    assignment on the deployment account, since handle_cli_access_request
-    now requires at least one before proceeding -- the empty/no-assignment
-    case is exercised on its own, separately.
+    get_paginator dispatches by operation name (list_users vs.
+    list_account_assignments) since the shared client backs both calls --
+    a single flat paginate() stub can't serve both shapes at once.
+    list_account_assignments is stubbed to report one real assignment (for
+    the "u-req" identity every test below verifies), since
+    handle_cli_access_request now requires at least one before proceeding
+    -- the empty/no-assignment case is exercised on its own, separately.
 
     organizations.get_accounts_from_config_with_cache and
     sso.get_permission_sets_from_config_with_cache are patched to the fake
@@ -86,19 +93,26 @@ def main_module():
     ):
         shared_client = MagicMock()
         shared_client.get_role.return_value = {"Role": {"Path": "/aws-reserved/sso.amazonaws.com/", "RoleName": "irrelevant-for-this-test"}}
-        shared_client.get_paginator.return_value.paginate.return_value = [
-            {"Users": [{"UserId": "u-req", "UserName": "req@example.com", "Emails": [{"Value": "req@example.com", "Primary": True}]}]}
-        ]
-        shared_client.list_account_assignments_for_principal.return_value = {
-            "AccountAssignments": [
-                {
-                    "AccountId": "111111111111",
-                    "PermissionSetArn": "arn:aws:sso:::permissionSet/ssoins-1/ps-1",
-                    "PrincipalId": "u-req",
-                    "PrincipalType": "USER",
-                }
-            ]
-        }
+
+        def _paginator_for(operation_name, **_kwargs):
+            paginator = MagicMock()
+            if operation_name == "list_users":
+                paginator.paginate.return_value = [
+                    {
+                        "Users": [
+                            {"UserId": "u-req", "UserName": "req@example.com", "Emails": [{"Value": "req@example.com", "Primary": True}]}
+                        ]
+                    }
+                ]
+            elif operation_name == "list_account_assignments":
+                paginator.paginate.return_value = [
+                    {"AccountAssignments": [{"AccountId": "111111111111", "PrincipalId": "u-req", "PrincipalType": "USER"}]}
+                ]
+            else:
+                paginator.paginate.return_value = []
+            return paginator
+
+        shared_client.get_paginator.side_effect = _paginator_for
         mock_boto3_session.return_value.client.return_value = shared_client
         mock_default_session.return_value.client.return_value = shared_client
         mock_app_cls.return_value = MagicMock()
@@ -242,9 +256,95 @@ def test_handle_cli_access_request_rejects_identity_with_no_account_assignment(m
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
     )
-    with patch.object(main_module.sso_client, "list_account_assignments_for_principal", return_value={"AccountAssignments": []}):
+    with patch.object(main_module.sso, "has_account_assignment", return_value=False):
         result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
+
+
+def test_handle_cli_access_request_calls_has_account_assignment_with_the_resolved_account_and_permission_set_arn(main_module):
+    """Regression test: has_account_assignment moved from
+    list_account_assignments_for_principal (documented by AWS as callable
+    only from the IAM Identity Center *management* account -- unusable in
+    this module's own recommended delegated-admin deployment) to
+    list_account_assignments (per account + permission set, no such
+    restriction) -- which needs the real permission_set_arn, not just the
+    name, so this pins that has_account_assignment is actually called with
+    the account/permission-set pair the request resolved to, not called
+    before that resolution happens."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    with patch.object(main_module.sso, "has_account_assignment", return_value=True) as mock_check:
+        result = main_module.handle_cli_access_request(event)
+    mock_check.assert_called_once_with(
+        main_module.sso_client,
+        main_module.cfg.sso_instance_arn,
+        "u-req",
+        "111111111111",
+        "arn:aws:sso:::permissionSet/ssoins-1/ps-fullorgadmin",
+    )
+    assert result != main_module.cli_auth.GENERIC_REJECTION
+
+
+def test_handle_cli_access_request_returns_503_on_transient_account_assignment_error(main_module):
+    """A throttled/unavailable list_account_assignments says nothing about
+    whether the assignment exists -- it must not be reported as
+    GENERIC_REJECTION's "your credentials are invalid" (403), nor page the
+    approvals channel as an unexpected error (500). A distinguishable 503
+    lets the CLI tell "retry this" apart from both of those."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    with (
+        patch.object(main_module.sso, "has_account_assignment", side_effect=main_module.sso.TransientSSOError),
+        patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
+    ):
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 503
+    mock_post_message.assert_not_called()
+
+
+def test_handle_cli_access_request_returns_503_on_transient_account_catalog_error(main_module):
+    """Regression test: get_accounts_from_config_with_cache and
+    get_permission_sets_from_config_with_cache are cache-backed, but that
+    only shields a *warm* cache -- with caching disabled or a cold cache, a
+    throttle propagates the raw botocore error. Like the has_account_assignment
+    transient case above, this must come back as a retryable 503, not the
+    blanket handler's 500 plus a Slack post."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    throttled = botocore.exceptions.ClientError(
+        error_response={"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}},
+        operation_name="ListAccounts",
+    )
+    with (
+        patch.object(main_module.organizations, "get_accounts_from_config_with_cache", side_effect=throttled),
+        patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
+    ):
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 503
+    mock_post_message.assert_not_called()
+
+
+def test_handle_cli_access_request_checks_duration_before_the_account_catalog(main_module):
+    """Regression test: the account/permission-set catalog lookups
+    (organizations:ListAccounts, sso:ListPermissionSets +
+    sso:DescribePermissionSet per entry) are the most expensive calls on this
+    path, behind a per-route throttle any SSO principal in the org can drive
+    at 1 rps sustained -- an invalid duration is the cheapest thing to reject
+    and must do so before paying for them, not after."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "not-a-number"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    with patch.object(main_module.organizations, "get_accounts_from_config_with_cache") as mock_get_accounts:
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+    mock_get_accounts.assert_not_called()
 
 
 def test_handle_cli_access_request_rejects_email_that_does_not_round_trip_to_the_verified_identity(main_module):
@@ -270,12 +370,13 @@ def test_handle_cli_access_request_rejects_email_that_does_not_round_trip_to_the
 
 
 def test_handle_cli_access_request_rejects_when_requesters_email_collides_in_the_identity_store(main_module):
-    """Regression test: find_user_principal_id_by_email_strict now raises
-    SSOUserNotFound on an email collision instead of returning None (see
-    test_sso.py) -- the round-trip cross-check above must treat that the
-    same as an outright mismatch (a clean, quiet GENERIC_REJECTION), not let
-    it propagate to the blanket exception handler as a 500 plus a Slack post
-    the way every other unexpected exception in this function does."""
+    """Regression test: find_user_principal_id_by_email_strict raises
+    AmbiguousSSOUser (a sibling of SSOUserNotFound, not a subclass -- see
+    test_sso.py) on an email collision instead of returning None -- the
+    round-trip cross-check above must catch that specific type and treat it
+    the same as an outright mismatch (a clean, quiet GENERIC_REJECTION), not
+    let it propagate to the blanket exception handler as a 500 plus a Slack
+    post the way every other unexpected exception in this function does."""
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
@@ -325,6 +426,21 @@ def test_handle_cli_access_request_rejects_oversized_reason(main_module):
     assert result["statusCode"] == 400
 
 
+def test_handle_cli_access_request_rejects_reason_that_only_overflows_once_wrapped(main_module):
+    """Regression test: the cap used to be a plain 2000, not 2000 minus the
+    length of the "Reason: " prefix slack_helpers.py wraps it in for that
+    Slack field -- a 1993-2000 character reason passed the old check but
+    still produced a field over Slack's real 2000-char limit once wrapped
+    (e.g. 1996 chars -> "Reason: " + 1996 chars = 2004), reaching
+    chat_postMessage and unwinding to the generic 500 handler."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x" * 1993, "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
 def test_handle_cli_access_request_rejects_wildcard_account_not_in_the_real_organization(main_module):
     """Regression test for the actual bypass: with cfg.accounts == {"*"},
     checking membership by literal set intersection ({"*", account_id} &
@@ -338,6 +454,27 @@ def test_handle_cli_access_request_rejects_wildcard_account_not_in_the_real_orga
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
     )
     assert main_module.cfg.accounts == {"*"}  # sanity check on the fixture's own config
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_rejects_wildcard_permission_set_not_in_the_real_catalog(main_module):
+    """Mirrors test_handle_cli_access_request_rejects_wildcard_account_not_in_the_real_organization
+    above, for the permission-set half of the same wildcard fix. That
+    account-side test would fail on a revert to the old {"*", value} &
+    cfg.<...> intersection check; the permission-set side had no equivalent
+    -- reverting main.py's real_permission_sets membership check back to a
+    literal set-intersection check left the entire suite green, since every
+    other test uses a restricted cfg.permission_sets the old check also
+    rejected correctly. A syntactically plausible but non-configured
+    permission set name (the modal's dropdown could never have offered it)
+    must be rejected here, not reach organizations.describe_account()/
+    access_control and surface as an approved-then-failed grant."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "AdministratorAccess-typo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_AdministratorAccess-typo/req@example.com",
+    )
+    assert main_module.cfg.permission_sets == {"*"}  # sanity check on the fixture's own config
     result = main_module.handle_cli_access_request(event)
     assert result["statusCode"] == 400
 
@@ -382,7 +519,7 @@ def test_handle_cli_access_request_accepts_wildcard_configured_account(main_modu
     fake_requester = MagicMock(id="U_REQ", email="req@example.com")
     with (
         patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
-        patch.object(main_module, "process_access_request"),
+        patch.object(main_module, "process_access_request", return_value=(MagicMock(), True)),
     ):
         result = main_module.handle_cli_access_request(event)
     assert result["statusCode"] == 200
@@ -447,6 +584,21 @@ def test_handle_cli_access_request_rejects_underscore_separated_duration(main_mo
     assert result["statusCode"] == 400
 
 
+def test_handle_cli_access_request_rejects_non_ascii_digits(main_module):
+    """Regression test: Python's re module matches \\d against every Unicode
+    decimal digit, not just ASCII, and int() accepts them too
+    (int("１０") == 10) -- a duration of fullwidth or Arabic-Indic
+    digit characters used to be silently reinterpreted as the equivalent
+    ASCII number instead of rejected, on a field the surrounding comment
+    already says must not be quietly reinterpreted."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "１０"},  # fullwidth "10"
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
 def test_handle_cli_access_request_rejects_non_string_account(main_module):
     """Regression test: account_id used to flow straight into
     re.fullmatch(...), which raises TypeError (not a clean 400) for
@@ -505,10 +657,30 @@ def test_handle_cli_access_request_respects_the_computed_max_duration_when_no_ov
     with (
         patch.object(main_module, "cfg", no_override_cfg),
         patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
-        patch.object(main_module, "process_access_request"),
+        patch.object(main_module, "process_access_request", return_value=(MagicMock(), True)),
     ):
         result = main_module.handle_cli_access_request(at_max_event)
     assert result["statusCode"] == 200
+
+
+def test_handle_cli_access_request_rejects_cleanly_when_max_duration_is_misconfigured_to_zero(main_module):
+    """Regression test: with no override and max_permissions_duration_time
+    == 0, get_max_duration_block's computed range is empty (range(1, 1)) --
+    _max_allowed_minutes used to call max() over that empty sequence with no
+    default, raising ValueError. That reached the blanket exception handler
+    as a 500 plus a Slack post on every single request, not just an
+    over-max one. A misconfigured deployment should get a clean 400
+    (duration must be no greater than 0), not a crash -- the real fix
+    (Terraform validation on max_permissions_duration_time) is what should
+    stop 0 from reaching here at all in practice."""
+    zero_max_cfg = main_module.cfg.model_copy(update={"permission_duration_list_override": [], "max_permissions_duration_time": 0})
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    with patch.object(main_module, "cfg", zero_max_cfg):
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
 
 
 def test_handle_cli_access_request_accepts_a_duration_not_exactly_matching_any_configured_option(main_module):
@@ -530,7 +702,7 @@ def test_handle_cli_access_request_accepts_a_duration_not_exactly_matching_any_c
     with (
         patch.object(main_module.slack_helpers, "get_max_duration_block", return_value=restricted_options),
         patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
-        patch.object(main_module, "process_access_request"),
+        patch.object(main_module, "process_access_request", return_value=(MagicMock(), True)),
     ):
         result = main_module.handle_cli_access_request(event)
 
@@ -547,9 +719,10 @@ def test_handle_cli_access_request_success_calls_process_access_request(main_mod
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     fake_requester = MagicMock(id="U_REQ", email="req@example.com")
+    fake_decision = SimpleNamespace(reason=main_module.access_control.DecisionReason.ApprovalNotRequired)
     with (
         patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester) as mock_get_user,
-        patch.object(main_module, "process_access_request") as mock_process,
+        patch.object(main_module, "process_access_request", return_value=(fake_decision, True)) as mock_process,
     ):
         result = main_module.handle_cli_access_request(event)
 
@@ -587,13 +760,40 @@ def test_handle_cli_access_request_reports_denied_decisions_as_not_ok(main_modul
     fake_decision = SimpleNamespace(reason=main_module.access_control.DecisionReason.RequesterNotAllowed)
     with (
         patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
-        patch.object(main_module, "process_access_request", return_value=fake_decision),
+        patch.object(main_module, "process_access_request", return_value=(fake_decision, False)),
     ):
         result = main_module.handle_cli_access_request(event)
 
     body = json.loads(result["body"])
     assert body["ok"] is False
     assert result["statusCode"] == 200  # a 2xx with ok:false -- the Go client checks the body, not the status, for this
+
+
+def test_handle_cli_access_request_reports_ok_false_when_requires_approval_finds_no_approvers(main_module):
+    """Regression test: process_access_request's RequiresApproval branch can
+    determine, only after calling find_approvers_in_slack, that none of the
+    configured approvers exist in Slack -- it keeps decision.reason ==
+    RequiresApproval (that's still the *policy* reason) but the request was
+    never actually posted for approval. Deriving ok/not-ok from decision.reason
+    alone (the old DENIED_DECISION_REASONS frozenset) missed this case
+    entirely and reported ok:true for a request nobody could ever approve;
+    the `succeeded` flag process_access_request now returns is what actually
+    caught it, so this asserts against that flag rather than the reason."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    fake_requester = MagicMock(id="U_REQ", email="req@example.com")
+    fake_decision = SimpleNamespace(reason=main_module.access_control.DecisionReason.RequiresApproval)
+    with (
+        patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
+        patch.object(main_module, "process_access_request", return_value=(fake_decision, False)),
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    body = json.loads(result["body"])
+    assert body["ok"] is False
+    assert result["statusCode"] == 200
 
 
 def test_handle_cli_access_request_rejects_verified_identity_with_no_slack_account(main_module):
@@ -747,7 +947,174 @@ def test_process_access_request_posts_granted_message_on_success(main_module):
         patch.object(main_module.slack_helpers.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
         patch.object(main_module.access_control, "execute_decision", return_value=True),
     ):
-        result = main_module.process_access_request(request=request, requester=requester, client=client)
+        result, succeeded = main_module.process_access_request(request=request, requester=requester, client=client)
 
     assert result is fake_decision
+    assert succeeded is True
     assert any("permissions granted" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
+
+
+def test_process_access_request_reports_not_succeeded_when_requires_approval_finds_no_approvers_in_slack(main_module):
+    """Regression test: a RequiresApproval decision whose approver emails
+    don't resolve to any real Slack user (find_approvers_in_slack returns an
+    empty list) leaves decision.reason == RequiresApproval -- that's still
+    the correct *policy* reason -- even though the request was never
+    actually posted for anyone to approve. `succeeded` must reflect that
+    (derived from color_coding_emoji, same as every other branch), not just
+    mirror decision.reason, or a caller like the CLI has no way to tell this
+    case apart from a genuinely pending approval."""
+    request = main_module.slack_helpers.RequestForAccess(
+        account_id="111111111111",
+        permission_set_name="FullOrgAdmin",
+        reason="testing",
+        requester_slack_id="U_REQ",
+        permission_duration=main_module.timedelta(hours=1),
+    )
+    requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ts": "123.456", "message": {"blocks": []}}
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+    client.users_info.return_value = MagicMock(
+        data={"user": {"id": "U_REQ", "profile": {"email": "email@domen.com"}, "real_name": "Test User"}}
+    )
+
+    fake_decision = main_module.access_control.AccessRequestDecision(
+        grant=False,
+        reason=main_module.access_control.DecisionReason.RequiresApproval,
+        based_on_statements=frozenset(),
+        approvers=frozenset(["approver@example.com"]),
+    )
+    fake_account = main_module.entities.aws.Account(id="111111111111", name="test-account")
+
+    with (
+        patch.object(main_module.access_control, "make_decision_on_access_request", return_value=fake_decision),
+        patch.object(main_module.organizations, "describe_account", return_value=fake_account),
+        patch.object(main_module.slack_helpers.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
+        patch.object(main_module.slack_helpers, "find_approvers_in_slack", return_value=([], ["approver@example.com"])),
+        patch.object(main_module.access_control, "execute_decision", return_value=False),
+    ):
+        result, succeeded = main_module.process_access_request(request=request, requester=requester, client=client)
+
+    assert result is fake_decision
+    assert result.reason == main_module.access_control.DecisionReason.RequiresApproval
+    assert succeeded is False
+    assert any("cannot be processed" in (c.kwargs.get("text") or "").lower() for c in client.chat_update.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# handle_button_click
+# ---------------------------------------------------------------------------
+#
+# No coverage existed for this function before -- it's the approver-clicks-
+# Approve path, and it had the exact same "recolor the message green before
+# the grant is attempted" bug process_access_request did, independently,
+# since the two functions don't share that part of their code. See
+# test_process_access_request_reflects_a_grant_failure_instead_of_claiming_success
+# above for the sibling bug on the self-approval/CLI path.
+
+
+def _button_click_content_fields() -> list[dict]:
+    return [
+        {"text": "Requester: <@U_REQ>"},
+        {"text": "Account: 111111111111 #111111111111"},
+        {"text": "Role name: FullOrgAdmin"},
+        {"text": "Reason: testing"},
+        {"text": "Permission duration: 1h 0m"},
+    ]
+
+
+def _button_click_body() -> dict:
+    return {
+        "actions": [{"value": "approve"}],
+        "user": {"id": "U_APPROVER"},
+        "message": {"ts": "12345.6789", "blocks": [{"block_id": "content", "fields": _button_click_content_fields()}]},
+        "channel": {"id": "C123"},
+    }
+
+
+def test_handle_button_click_reflects_a_grant_failure_instead_of_claiming_success(main_module):
+    """Regression test: chat_update (recoloring the message green and
+    saying "Permissions granted to @x by @y") previously ran before
+    execute_decision -- a failure there (a stale/bogus permission set name,
+    IAM Identity Center throttling, anything) left that message
+    permanently incorrect, with no visible correction (@handle_errors'
+    generic error post is a separate message, not a fix to this one).
+    execute_decision now runs first, so a failure can override the message
+    before it's ever posted."""
+    body = _button_click_body()
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+
+    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
+        patch.object(main_module.access_control, "execute_decision", side_effect=RuntimeError("boom: permission set not found")),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    update_call = client.chat_update.call_args
+    assert update_call is not None, "chat_update should still have run, with the failure reflected in it"
+    assert "error occurred" in update_call.kwargs["text"].lower()
+    assert not any("permissions granted" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
+    # The dedup cache must be cleared even on a caught failure -- otherwise
+    # this exact request is permanently stuck reporting "already in
+    # progress" to any retry.
+    assert main_module.cache_for_dublicate_requests == {}
+
+
+def test_handle_button_click_posts_granted_message_on_success(main_module):
+    """Companion to the failure-path test above: the reordering must not
+    break the ordinary success path."""
+    body = _button_click_body()
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+
+    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
+        patch.object(main_module.access_control, "execute_decision", return_value=True),
+    ):
+        result = main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    update_call = client.chat_update.call_args
+    assert update_call is not None
+    assert "permissions granted" in update_call.kwargs["text"].lower()
+    assert result is not None
+    assert main_module.cache_for_dublicate_requests == {}
+
+
+def test_handle_button_click_notification_failure_after_a_successful_grant_is_not_reported_as_failure(main_module):
+    """Regression test for the reorder's own regression: once
+    execute_decision succeeds, a Slack API failure while posting/updating
+    the resulting notifications must not propagate -- that would report
+    "this failed" for a request that actually succeeded, the inverted-truth
+    outcome the whole reordering exists to prevent, just from the
+    notification side rather than the ordering side."""
+    body = _button_click_body()
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+    client.chat_update.side_effect = RuntimeError("Slack is briefly unavailable")
+
+    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
+        patch.object(main_module.access_control, "execute_decision", return_value=True),
+    ):
+        # Must not raise: the grant succeeded, only the follow-up
+        # notification failed.
+        result = main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    assert result is None

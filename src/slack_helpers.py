@@ -47,6 +47,20 @@ class RequestForAccess(BaseModel):
     # to a Slack one, and approvers reviewing history can tell the two apart.
     request_source: Literal["slack", "cli"] = "slack"
     verified_arn: str = "NA"
+    # The Identity Store UserId the CLI's SigV4-verified session was actually
+    # checked against at submission time (cli_auth.extract_identity, then
+    # cross-checked again by handle_cli_access_request's email round-trip) --
+    # NOT just audit metadata like verified_arn above. execute_decision uses
+    # this directly as the grant's principal for a "cli" request, instead of
+    # re-resolving requester.email through a second, independent Identity
+    # Store lookup at approval time that could disagree with the identity
+    # actually verified at submission (a directory change in between, or a
+    # primary-email lookup that legitimately falls through to a different
+    # person via the secondary-domain fallback). "NA" for "slack" requests,
+    # which have no equivalent submission-time identity verification to
+    # thread through -- execute_decision falls back to the pre-existing
+    # email-based resolution for those, unchanged.
+    verified_user_id: str = "NA"
 
 
 class RequestForAccessView:
@@ -225,6 +239,26 @@ def humanize_timedelta(td: timedelta) -> str:
         return f"{days}d"
 
 
+def escape_mrkdwn(text: str) -> str:
+    """Escape the three characters Slack's mrkdwn parser treats specially,
+    per Slack's own documented escaping rule. Only ever needed for text a
+    requester actually typed (the reason field) -- every other field this
+    module builds is either a fixed string or a `<@ID>`/`<!...>` mention
+    this code constructs itself, and escaping those would break them.
+    `&` must be replaced first, or escaping `<`/`>` into `&lt;`/`&gt;` would
+    have its own `&` re-escaped into `&amp;lt;`/`&amp;gt;` a second time."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def unescape_mrkdwn(text: str) -> str:
+    """Inverse of escape_mrkdwn, for recovering the original reason text
+    when ButtonClickedPayload/ButtonGroupClickedPayload reconstruct a
+    request by scraping it back out of the posted message. `&amp;` must be
+    unescaped last, or an original `&lt;` (which was escaped to `&amp;lt;`)
+    would unescape to `&lt;` instead of `<`."""
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
 def unhumanize_timedelta(td_str: str) -> timedelta:
     days, hours, minutes = 0, 0, 0
     components = td_str.split()
@@ -253,19 +287,24 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
     show_buttons: bool = True,
     request_source: Literal["slack", "cli"] = "slack",
     verified_arn: str = "NA",
+    verified_user_id: str = "NA",
 ) -> list[Block]:
     fields = [
         MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
-        MarkdownTextObject(text=f"Reason: {reason}"),
+        MarkdownTextObject(text=f"Reason: {escape_mrkdwn(reason)}"),
         MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
     ]
     # Displayed so an approver can apply extra scrutiny to the newer CLI trust
     # path, and so ButtonClickedPayload.validate_payload can recover
-    # request_source/verified_arn when it reconstructs the request from this
-    # message's text -- they aren't otherwise persisted anywhere it can read.
+    # request_source/verified_arn/verified_user_id when it reconstructs the
+    # request from this message's text -- they aren't otherwise persisted
+    # anywhere it can read. Verified UserId is not just display: it's what
+    # execute_decision grants against for a CLI request, rather than
+    # re-resolving requester.email independently at approval time.
     if request_source == "cli":
         fields.append(MarkdownTextObject(text="Source: CLI"))
         fields.append(MarkdownTextObject(text=f"Verified ARN: {verified_arn}"))
+        fields.append(MarkdownTextObject(text=f"Verified UserId: {verified_user_id}"))
     _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identity_store_client,
         identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
@@ -373,11 +412,13 @@ class ButtonClickedPayload(BaseModel):
         permission_duration = unhumanize_timedelta(humanized_permission_duration)
         account = cls.find_in_fields(fields, "Account")
         account_id = account.split("#")[-1]
-        # "Source"/"Verified ARN" are only present on messages built after
-        # this field was added -- default to "slack"/"NA" so approval clicks
-        # on already-posted messages don't fail to parse.
+        # "Source"/"Verified ARN"/"Verified UserId" are only present on
+        # messages built after each field was added -- default to
+        # "slack"/"NA"/"NA" so approval clicks on already-posted messages
+        # don't fail to parse.
         request_source = cls.find_in_fields_optional(fields, "Source") or "slack"
         verified_arn = cls.find_in_fields_optional(fields, "Verified ARN") or "NA"
+        verified_user_id = cls.find_in_fields_optional(fields, "Verified UserId") or "NA"
         return {
             "action": jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),
@@ -388,25 +429,31 @@ class ButtonClickedPayload(BaseModel):
                 requester_slack_id=requester_slack_id,
                 account_id=account_id,
                 permission_set_name=cls.find_in_fields(fields, "Role name"),
-                reason=cls.find_in_fields(fields, "Reason"),
+                reason=unescape_mrkdwn(cls.find_in_fields(fields, "Reason")),
                 permission_duration=permission_duration,
                 request_source="cli" if request_source == "CLI" else "slack",
                 verified_arn=verified_arn,
+                verified_user_id=verified_user_id,
             ),
         }
 
     @staticmethod
     def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
+        # split(..., 1), not a bare split(": ") -- the latter splits on
+        # *every* ": " in the field's text, not just the one separating the
+        # key from its value, so e.g. "Reason: debugging: INC-42" used to
+        # come back as just "debugging" (index [1] of a 3-element split),
+        # silently dropping the rest of a free-text value like a reason.
         for field in fields:
             if field["text"].startswith(key):
-                return field["text"].split(": ")[1].strip()
+                return field["text"].split(": ", 1)[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
 
     @staticmethod
     def find_in_fields_optional(fields: list[dict[str, str]], key: str) -> str | None:
         for field in fields:
             if field["text"].startswith(key):
-                return field["text"].split(": ")[1].strip()
+                return field["text"].split(": ", 1)[1].strip()
         return None
 
 
@@ -685,7 +732,7 @@ class ButtonGroupClickedPayload(BaseModel):
             "request": RequestForGroupAccess(
                 requester_slack_id=requester_slack_id,
                 group_id=group_id,
-                reason=cls.find_in_fields(fields, "Reason"),
+                reason=unescape_mrkdwn(cls.find_in_fields(fields, "Reason")),
                 permission_duration=permission_duration,
             ),
         }
@@ -694,5 +741,5 @@ class ButtonGroupClickedPayload(BaseModel):
     def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
         for field in fields:
             if field["text"].startswith(key):
-                return field["text"].split(": ")[1].strip()
+                return field["text"].split(": ", 1)[1].strip()
         raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")

@@ -195,13 +195,19 @@ data "aws_iam_policy_document" "slack_handler" {
     actions = [
       "sso:CreateAccountAssignment",
       "sso:DescribeAccountAssignmentCreationStatus",
-      # Read-only, granted for src/main.py's CLI defense-in-depth check:
-      # iam:GetRole (below) only proves a CLI session's role is genuinely
-      # IAM Identity Center-provisioned, not that this specific user was
-      # ever actually assigned anything on this account -- this makes that
-      # check redundant rather than load-bearing, requiring at least one
-      # real account assignment before trusting a session.
-      "sso:ListAccountAssignmentsForPrincipal"
+      # Read-only, granted for src/main.py's CLI defense-in-depth check
+      # (sso.has_account_assignment): iam:GetRole (below) only proves a CLI
+      # session's role is genuinely IAM Identity Center-provisioned, not
+      # that this specific user was ever actually assigned this permission
+      # set on this account -- this makes that check redundant rather than
+      # load-bearing, requiring a real account assignment before trusting a
+      # session. Deliberately ListAccountAssignments, not
+      # ListAccountAssignmentsForPrincipal: AWS documents the latter as
+      # callable only from the IAM Identity Center management account, and
+      # this module's own docs recommend deploying in the delegated SSO
+      # administrator account, where that call always fails with
+      # AccessDeniedException.
+      "sso:ListAccountAssignments"
     ]
     resources = [
       "arn:aws:sso:::instance/*",

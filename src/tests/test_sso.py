@@ -107,7 +107,7 @@ def test_find_user_principal_id_by_email_strict_refuses_to_pick_between_case_col
         ]
     )
 
-    with pytest.raises(errors.SSOUserNotFound):
+    with pytest.raises(errors.AmbiguousSSOUser):
         sso.find_user_principal_id_by_email_strict("jane.smith@company.com", list_of_users)
 
 
@@ -134,7 +134,7 @@ def test_get_user_principal_id_by_email_does_not_fall_through_to_secondary_domai
     ]
     cfg = MagicMock(secondary_fallback_email_domains=["@fallback.com"])
 
-    with pytest.raises(errors.SSOUserNotFound):
+    with pytest.raises(errors.AmbiguousSSOUser):
         sso.get_user_principal_id_by_email(client, "d-1234567890", "jane.smith@company.com", cfg)
 
 

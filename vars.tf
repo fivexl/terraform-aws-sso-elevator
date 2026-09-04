@@ -244,6 +244,17 @@ variable "max_permissions_duration_time" {
   EOT
   type        = number
   default     = 24
+  validation {
+    # 0 (or negative) makes get_max_duration_block's computed range empty
+    # whenever permission_duration_list_override isn't set -- src/slack_helpers.py's
+    # duration dropdown then indexes into that empty list and crashes the
+    # request-access modal for every Slack user, and src/main.py's CLI
+    # duration check hits the same empty sequence. Both used to reach their
+    # generic exception handler (a 500, plus a Slack post) rather than fail
+    # here, at the one place a deployer could actually see why.
+    condition     = var.max_permissions_duration_time > 0
+    error_message = "max_permissions_duration_time must be greater than 0."
+  }
 }
 
 variable "permission_duration_list_override" {
@@ -252,6 +263,10 @@ variable "permission_duration_list_override" {
   Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes
   must be between 0-59, the number of hours can be any number.
   If this variable is set, the max_permission_duration_time is ignored.
+  Note for the CLI (enable_access_requester_cli): the CLI is not restricted to these specific entries the way the Slack dropdown
+  is -- it accepts any whole number of minutes up to the highest value in this list, treating the list as a ceiling rather than
+  an exact set of allowed durations. For example, an override of ["00:30", "08:00"] lets the CLI request any duration from 1
+  minute up to 8 hours, not just those two values.
   EOT
   type        = list(string)
   default     = []

@@ -74,6 +74,14 @@ sboms:
 
 homebrew_casks:
   - name: elevator
+    # "auto": GoReleaser skips publishing the cask when the tag itself
+    # carries a prerelease indicator (e.g. elevator-v1.0.0-rc1) -- without
+    # this, a release-candidate tag's cask would overwrite the stable
+    # cask fivexl/homebrew-tap's "brew install elevator" resolves to,
+    # since GoReleaser has no other notion of "don't publish this one" for
+    # a channel that isn't itself versioned per-release the way the
+    # GitHub release object is.
+    skip_upload: auto
     repository:
       owner: fivexl
       name: homebrew-tap

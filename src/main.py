@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import Callable
 
 import boto3
+import botocore.exceptions
 import slack_sdk.errors
 from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
@@ -19,7 +20,7 @@ import organizations
 import schedule
 import slack_helpers
 import sso
-from errors import SSOUserNotFound, handle_errors
+from errors import AmbiguousSSOUser, SSOUserNotFound, handle_errors
 
 logger = config.get_logger(service="main")
 
@@ -47,6 +48,20 @@ CLI_ACCESS_REQUEST_PATH = "/access-requester-cli"
 # regardless of the stage name, whereas rawPath's relationship to a named (non-$default)
 # stage's prefix isn't something to rely on without checking case by case.
 CLI_ACCESS_REQUEST_ROUTE_KEY = f"POST {CLI_ACCESS_REQUEST_PATH}"
+
+
+def _transient_aws_error_response() -> dict:
+    # Shared by every AWS call handle_cli_access_request makes that can fail
+    # for a reason saying nothing about whether the request itself is valid
+    # (throttling, a 5xx, a connectivity blip) -- a 503 tells the caller
+    # this is worth retrying, instead of either GENERIC_REJECTION's "your
+    # credentials are invalid" or the blanket handler's 500-plus-Slack-post
+    # for what's just AWS being temporarily unavailable.
+    return {
+        "statusCode": 503,
+        "headers": {"content-type": "application/json"},
+        "body": json.dumps({"message": "Could not verify your request right now due to a transient AWS error. Please try again."}),
+    }
 
 
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
@@ -101,32 +116,11 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             # to the approvals channel as an unexpected error. A 503 tells
             # the caller this is worth retrying.
             logger.warning("Transient IAM error while verifying CLI identity; asking the caller to retry")
-            return {
-                "statusCode": 503,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "Could not verify your identity right now due to a transient AWS error. Please try again."}),
-            }
+            return _transient_aws_error_response()
         if not identity:
             logger.info("Rejected CLI request: could not verify a signed identity with an email")
             return cli_auth.GENERIC_REJECTION
         identity_email, identity_user_id, list_of_users = identity
-
-        # Defense-in-depth against round-1 finding #6 (session name not
-        # bound to any real SSO account assignment): iam:GetRole above
-        # proves role_name is genuinely IAM Identity Center-provisioned, but
-        # says nothing about whether this specific user was ever actually
-        # assigned anything on this account -- a session under a
-        # reserved-path role that's still technically valid but was
-        # orphaned (e.g. after every permission set assignment for this
-        # user was revoked) would otherwise still pass. One cheap API call,
-        # no new privilege beyond a read: require at least one real account
-        # assignment for this UserId on this deployment's account.
-        if not sso.has_account_assignment(sso_client, cfg.sso_instance_arn, identity_user_id, cfg.cli_expected_account_id):
-            logger.warning(
-                "Rejected CLI request: verified identity has no SSO account assignment on this account",
-                extra={"user_id": identity_user_id},
-            )
-            return cli_auth.GENERIC_REJECTION
 
         try:
             body = json.loads(event.get("body") or "{}")
@@ -170,12 +164,63 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # reaches chat_postMessage, gets rejected with invalid_blocks, and
         # unwinds to the same 500-plus-Slack-post blanket handler. The Slack
         # modal is implicitly bounded by its own input widget; the CLI isn't.
-        max_reason_length = 2000
+        # The cap has to subtract the "Reason: " prefix reason gets wrapped
+        # in for that field, not just Slack's own 2000: a reason of, say,
+        # 1996 characters passed a plain 2000 check but produced a
+        # 2004-character field once wrapped, still overflowing.
+        reason_prefix = "Reason: "
+        max_reason_length = 2000 - len(reason_prefix)
         if len(reason) > max_reason_length:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": f"reason must be at most {max_reason_length} characters."}),
+            }
+
+        # A strict, length-bounded digit-string match rather than a bare
+        # int(...) call -- Python's int() silently truncates a JSON *number*
+        # like 2.7 to 2, and accepts underscore-separated digit strings like
+        # "2_4" as 24; neither is a value this API should be quietly
+        # reinterpreting on an authorization-relevant field. The {1,7} cap
+        # (up to 9,999,999 minutes, ~19 years -- far beyond any real
+        # duration) exists only to keep an attacker-supplied digit string
+        # short enough that int() can't be used to hang the Lambda: CPython
+        # rejects converting a >4300-digit string to int at all, and that
+        # unbounded ValueError isn't a case this handler catches, so a huge
+        # digit string used to reach the generic exception handler as a 500
+        # plus a Slack post instead of a clean 400 here.
+        #
+        # [0-9], not \d: Python's re module matches \d against every Unicode
+        # decimal digit, not just ASCII, and int() itself accepts them too
+        # (int("１０") == 10, int("١٠") == 10) -- so a duration value could
+        # already be silently "reinterpreted" from a non-ASCII digit string,
+        # exactly what the comment above says this strict match exists to
+        # avoid on an authorization-relevant field.
+        #
+        # Checked before the account/permission-set catalog lookups below
+        # (and before has_account_assignment further down), not after: those
+        # two lookups are themselves expensive -- organizations:ListAccounts
+        # or sso:ListPermissionSets plus one sso:DescribePermissionSet per
+        # entry, all behind a per-route throttle any SSO principal in the
+        # org can drive at 1 rps sustained -- and a malformed duration is
+        # the cheapest possible thing to reject first, before paying for
+        # AWS calls whose result this request is about to be rejected
+        # regardless of.
+        duration_value = body.get("duration", "")
+        minutes = int(duration_value) if isinstance(duration_value, str) and re.fullmatch(r"[0-9]{1,7}", duration_value) else 0
+        max_allowed_minutes = _max_allowed_minutes(cfg)
+        if minutes <= 0 or minutes > max_allowed_minutes:
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps(
+                    {
+                        "message": (
+                            f"duration must be a positive integer number of minutes, no greater than "
+                            f"{max_allowed_minutes} (this deployment's configured maximum)."
+                        )
+                    }
+                ),
             }
 
         # The Slack modal can't submit a malformed account or an unlisted
@@ -203,48 +248,59 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # is always exactly 12 digits, so real_account_ids (built from an
         # actual Organizations account list) can never contain anything a
         # format check would catch that membership doesn't already reject.
-        real_account_ids = {ac.id for ac in organizations.get_accounts_from_config_with_cache(org_client, s3_client, cfg)}
+        #
+        # Both catalog calls are cache-backed (with_cache_resilience), but
+        # that only shields a *warm* cache -- with caching disabled or a
+        # cold cache, a throttle/5xx propagates the raw botocore error, same
+        # as any other AWS call on this path.
+        try:
+            real_account_ids = {ac.id for ac in organizations.get_accounts_from_config_with_cache(org_client, s3_client, cfg)}
+            real_permission_sets = {ps.name: ps for ps in sso.get_permission_sets_from_config_with_cache(sso_client, s3_client, cfg)}
+        except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+            if not sso.is_transient_aws_error(e):
+                raise
+            logger.warning("Transient AWS error while fetching the account/permission-set catalog; asking the caller to retry")
+            return _transient_aws_error_response()
         if account_id not in real_account_ids:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "account must be a 12-digit AWS account ID this deployment is configured for."}),
             }
-        real_permission_set_names = {ps.name for ps in sso.get_permission_sets_from_config_with_cache(sso_client, s3_client, cfg)}
-        if permission_set_name not in real_permission_set_names:
+        if permission_set_name not in real_permission_sets:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "permission_set must be a permission set this deployment is configured for."}),
             }
+        permission_set_arn = real_permission_sets[permission_set_name].arn
 
-        # A strict, length-bounded digit-string match rather than a bare
-        # int(...) call -- Python's int() silently truncates a JSON *number*
-        # like 2.7 to 2, and accepts underscore-separated digit strings like
-        # "2_4" as 24; neither is a value this API should be quietly
-        # reinterpreting on an authorization-relevant field. The {1,7} cap
-        # (up to 9,999,999 minutes, ~19 years -- far beyond any real
-        # duration) exists only to keep an attacker-supplied digit string
-        # short enough that int() can't be used to hang the Lambda: CPython
-        # rejects converting a >4300-digit string to int at all, and that
-        # unbounded ValueError isn't a case this handler catches, so a huge
-        # digit string used to reach the generic exception handler as a 500
-        # plus a Slack post instead of a clean 400 here.
-        duration_value = body.get("duration", "")
-        minutes = int(duration_value) if isinstance(duration_value, str) and re.fullmatch(r"\d{1,7}", duration_value) else 0
-        if minutes <= 0 or minutes > _max_allowed_minutes(cfg):
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps(
-                    {
-                        "message": (
-                            f"duration must be a positive integer number of minutes, no greater than "
-                            f"{_max_allowed_minutes(cfg)} (this deployment's configured maximum)."
-                        )
-                    }
-                ),
-            }
+        # Defense-in-depth against round-1 finding #6 (session name not
+        # bound to any real SSO account assignment): iam:GetRole (inside
+        # extract_identity) proves role_name is genuinely IAM Identity
+        # Center-provisioned, but says nothing about whether this specific
+        # user was ever actually assigned this permission set on this
+        # account -- a session under a reserved-path role that's still
+        # technically valid but was orphaned (e.g. after this exact
+        # assignment was revoked) would otherwise still pass. Placed here,
+        # after catalog resolution, rather than right after identity
+        # verification: has_account_assignment needs the real
+        # permission_set_arn to query list_account_assignments (a
+        # per-account-and-permission-set call, not a principal-wide one --
+        # see its docstring for why), and that's only available once the
+        # caller's permission_set_name has already been resolved against
+        # the real catalog above.
+        try:
+            has_assignment = sso.has_account_assignment(sso_client, cfg.sso_instance_arn, identity_user_id, account_id, permission_set_arn)
+        except sso.TransientSSOError:
+            logger.warning("Transient AWS error while checking the account assignment; asking the caller to retry")
+            return _transient_aws_error_response()
+        if not has_assignment:
+            logger.warning(
+                "Rejected CLI request: verified identity has no SSO account assignment for this account/permission set",
+                extra={"user_id": identity_user_id, "account_id": account_id, "permission_set_arn": permission_set_arn},
+            )
+            return cli_auth.GENERIC_REJECTION
 
         try:
             requester = slack_helpers.get_user_by_email(app.client, identity_email)
@@ -285,8 +341,9 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # specifically hardened against.
         try:
             requester_user_id = sso.find_user_principal_id_by_email_strict(requester.email, list_of_users)
-        except SSOUserNotFound:
-            # An ambiguous requester email can't be confirmed either way --
+        except (SSOUserNotFound, AmbiguousSSOUser):
+            # Neither "nobody has this email" nor "more than one user has
+            # this email" can confirm the requester's identity -- both are
             # treated the same as an outright mismatch below, not as an
             # unexpected error.
             requester_user_id = None
@@ -305,11 +362,12 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             permission_duration=timedelta(minutes=minutes),
             request_source="cli",
             verified_arn=user_arn,
+            verified_user_id=identity_user_id,
         )
 
-        decision = process_access_request(request=request, requester=requester, client=app.client)
+        decision, succeeded = process_access_request(request=request, requester=requester, client=app.client)
 
-        if decision.reason in DENIED_DECISION_REASONS:
+        if not succeeded:
             logger.info("CLI request was refused", extra={"decision_reason": decision.reason.value})
             return {
                 "statusCode": 200,
@@ -349,11 +407,22 @@ def _max_allowed_minutes(cfg: config.Config) -> int:
     that dropdown shows (e.g. only 30/60/90-minute options) -- per an
     explicit decision that Slack's 30-minute increments are a dropdown-size
     constraint, not a real one (the underlying revoke timer accepts any
-    value), the CLI may request any whole number of minutes up to this max."""
+    value), the CLI may request any whole number of minutes up to this max.
+
+    default=0, not a bare max() over the generator: get_max_duration_block
+    returns an *empty* list when there's no override and
+    max_permissions_duration_time == 0 (its own computed range becomes
+    range(1, 1)) -- max() over an empty sequence with no default raises
+    ValueError, which used to reach the blanket exception handler as a 500
+    plus a Slack post on every single request, CLI and Slack both, for a
+    Terraform input this module never validated is positive."""
     return max(
-        int(entry_hours) * 60 + int(entry_minutes)
-        for option in slack_helpers.get_max_duration_block(cfg)
-        for entry_hours, entry_minutes in [option.value.split(":")]
+        (
+            int(entry_hours) * 60 + int(entry_minutes)
+            for option in slack_helpers.get_max_duration_block(cfg)
+            for entry_hours, entry_minutes in [option.value.split(":")]
+        ),
+        default=0,
     )
 
 
@@ -408,6 +477,19 @@ def build_initial_form_handler(
                 "Your request for AWS permissions failed because SSO Elevator could not find your user in SSO."
                 "This often happens if your AWS SSO email differs from your Slack email."
                 "Please check the SSO Elevator logs for more details.",
+            )
+            raise
+        except AmbiguousSSOUser:
+            # Distinct from SSOUserNotFound above: the requester *is* in SSO,
+            # just more than once for this email (case-insensitively), so
+            # the "could not find your user" message above would tell them
+            # the opposite of what happened.
+            client.chat_postMessage(
+                channel=cfg.slack_channel_id,
+                text=f"<@{body.get('user', {}).get('id') or 'UNKNOWN_USER'}>,"
+                "Your request for AWS permissions failed because more than one AWS SSO user shares your email "
+                "address (case-insensitively), and SSO Elevator can't tell which one you are."
+                "Contact whoever manages your AWS SSO users to resolve the email collision.",
             )
             raise
 
@@ -532,7 +614,13 @@ cache_for_dublicate_requests = {}
 
 
 @handle_errors
-def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # noqa: ARG001
+def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # noqa: ARG001, PLR0915
+    # Registered as a Bolt lazy listener below -- its return value isn't
+    # consumed by the framework, so the None the final best-effort
+    # notification block can now produce (if that whole block fails) isn't
+    # a behavior change, just an honest type for what was already possible
+    # in spirit (nothing here ever depended on getting a real SlackResponse
+    # back from this function).
     logger.info("Handling button click")
     try:
         payload = slack_helpers.ButtonClickedPayload.model_validate(body)
@@ -620,41 +708,85 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
 
     text = f"Permissions granted to <@{requester.id}> by <@{approver.id}>."
     dm_text = f"Your request was approved by <@{approver.id}>. Permissions granted."
+    color_coding_emoji = cfg.good_result_emoji
+
+    # execute_decision runs before the chat_update/notifications below, not
+    # after: the old order recolored the message green and said
+    # "Permissions granted" before the grant had actually been attempted,
+    # so a failure here (a stale/bogus permission set name, IAM Identity
+    # Center throttling, anything) left that message incorrect with no
+    # visible correction -- @handle_errors' own generic error post is a
+    # separate message, not a fix to this one. Same shape as the CLI/
+    # self-approval path in process_access_request, for the same reason.
+    grant_error: Exception | None = None
+    try:
+        access_control.execute_decision(
+            decision=decision,
+            permission_set_name=payload.request.permission_set_name,
+            account_id=payload.request.account_id,
+            permission_duration=payload.request.permission_duration,
+            approver=approver,
+            requester=requester,
+            reason=payload.request.reason,
+            request_source=payload.request.request_source,
+            verified_arn=payload.request.verified_arn,
+            verified_user_id=payload.request.verified_user_id,
+        )
+    except Exception as e:  # noqa: BLE001
+        grant_error = e
+        logger.exception(
+            "execute_decision failed -- overriding the message to reflect the actual outcome", extra={"decision": decision.dict()}
+        )
+        color_coding_emoji = cfg.bad_result_emoji
+        text = f"An error occurred while granting access: {e}"
+        dm_text = text
+
+    # The dedup cache is cleared once the outcome is decided (success or a
+    # caught failure), not only on the success path -- otherwise a failed
+    # execute_decision left this exact request permanently stuck reporting
+    # "already in progress" to any retry, since nothing else ever clears it.
+    cache_for_dublicate_requests.clear()
+
     blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
         blocks=payload.message["blocks"],
-        color_coding_emoji=cfg.good_result_emoji,
+        color_coding_emoji=color_coding_emoji,
     )
-
     blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
     blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
-    is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
-    client.chat_update(
-        channel=payload.channel_id,
-        ts=payload.thread_ts,
-        blocks=blocks,
-        text=text,
-    )
 
-    access_control.execute_decision(
-        decision=decision,
-        permission_set_name=payload.request.permission_set_name,
-        account_id=payload.request.account_id,
-        permission_duration=payload.request.permission_duration,
-        approver=approver,
-        requester=requester,
-        reason=payload.request.reason,
-        request_source=payload.request.request_source,
-        verified_arn=payload.request.verified_arn,
-    )
-    cache_for_dublicate_requests.clear()
-    if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
-        logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-        client.chat_postMessage(channel=requester.id, text=dm_text)
-    return client.chat_postMessage(
-        channel=payload.channel_id,
-        text=text,
-        thread_ts=payload.thread_ts,
-    )
+    # Best-effort from here, not re-raised: once execute_decision has
+    # either succeeded (access is live) or definitively failed (captured as
+    # grant_error above), a Slack API hiccup while posting/updating these
+    # notifications must never be reported as "this failed" on top of a
+    # grant that actually succeeded -- the exact inverted-truth outcome the
+    # reordering above exists to prevent, just from the notification side
+    # instead of the ordering side.
+    result: SlackResponse | None = None
+    try:
+        client.chat_update(
+            channel=payload.channel_id,
+            ts=payload.thread_ts,
+            blocks=blocks,
+            text=text,
+        )
+        if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
+            logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
+            client.chat_postMessage(channel=requester.id, text=dm_text)
+        result = client.chat_postMessage(
+            channel=payload.channel_id,
+            text=text,
+            thread_ts=payload.thread_ts,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to fully post/update notifications about this approval's outcome (best-effort, not re-raised)")
+
+    if grant_error is not None:
+        # Re-raised after the messages above already reflect the failure
+        # (best-effort -- see above) -- @handle_errors still needs to know
+        # this happened, to post its own generic error notification.
+        raise grant_error
+
+    return result
 
 
 def acknowledge_request(ack: Ack):  # noqa: ANN201
@@ -676,7 +808,7 @@ def process_access_request(  # noqa: PLR0915, PLR0912
     request: slack_helpers.RequestForAccess,
     requester: entities.slack.User,
     client: WebClient,
-) -> access_control.AccessRequestDecision:
+) -> tuple[access_control.AccessRequestDecision, bool]:
     """Decide on, post for approval (or auto-execute), and notify about an access request.
 
     Shared by both intake paths: the Slack modal submission (handle_request_for_access_submittion,
@@ -684,6 +816,10 @@ def process_access_request(  # noqa: PLR0915, PLR0912
     requester by the time they get here; everything past that point — the decision, the Slack
     approval message, discard/renotify scheduling, and auto-execution — is identical regardless of
     where the request came from, so it lives in one place rather than being duplicated.
+
+    Returns the decision alongside a `succeeded` bool: whether the request was actually granted or
+    successfully queued for approval, as opposed to e.g. RequiresApproval resolving zero approvers
+    in Slack -- which keeps decision.reason == RequiresApproval even though nothing was queued.
     """
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
@@ -711,6 +847,7 @@ def process_access_request(  # noqa: PLR0915, PLR0912
             color_coding_emoji=cfg.waiting_result_emoji,
             request_source=request.request_source,
             verified_arn=request.verified_arn,
+            verified_user_id=request.verified_user_id,
         ),
         channel=cfg.slack_channel_id,
         text=f"Request for access to {account.name} account from {requester.real_name}",
@@ -814,6 +951,7 @@ def process_access_request(  # noqa: PLR0915, PLR0912
             reason=request.reason,
             request_source=request.request_source,
             verified_arn=request.verified_arn,
+            verified_user_id=request.verified_user_id,
         )
     except Exception as e:  # noqa: BLE001
         grant_error = e
@@ -824,62 +962,73 @@ def process_access_request(  # noqa: PLR0915, PLR0912
         text = f"An error occurred while granting access: {e}"
         dm_text = text
 
-    is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+    # Everything below is notification about an outcome that's already
+    # final by this point (execute_decision either succeeded -- access is
+    # live -- or failed outright -- nothing was granted, captured as
+    # grant_error above). Wrapped as one best-effort block, not re-raised:
+    # once the grant itself succeeded, a Slack API hiccup while posting or
+    # updating a message must never surface to the caller as "the request
+    # failed" when access was actually granted -- that would be exactly the
+    # inverted-truth outcome grant_error's own reordering exists to
+    # prevent, just from the opposite direction. Only grant_error (raised
+    # below, after this block, unconditionally) can still make the
+    # caller-visible outcome a failure.
+    try:
+        is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
-    logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
-    client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
-    if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
-        logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-        client.chat_postMessage(
-            channel=requester.id,
-            text=f"""
-            {dm_text} You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
-            """,
-        )
-
-    blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-        blocks=slack_response["message"]["blocks"],
-        color_coding_emoji=color_coding_emoji,
-    )
-    client.chat_update(
-        channel=cfg.slack_channel_id,
-        ts=slack_response["ts"],
-        blocks=blocks,
-        text=text,
-    )
-
-    if decision.grant and grant_error is None:
-        client.chat_postMessage(
-            channel=cfg.slack_channel_id,
-            text=f"Permissions granted to <@{requester.id}>",
-            thread_ts=slack_response["ts"],
-        )
-        if not is_user_in_channel and cfg.send_dm_if_user_not_in_channel:
+        logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
+        client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
+        if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
+            logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
             client.chat_postMessage(
                 channel=requester.id,
-                text="Your request was processed, permissions granted.",
+                text=f"""
+                {dm_text} You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
+                """,
             )
 
+        blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+            blocks=slack_response["message"]["blocks"],
+            color_coding_emoji=color_coding_emoji,
+        )
+        client.chat_update(
+            channel=cfg.slack_channel_id,
+            ts=slack_response["ts"],
+            blocks=blocks,
+            text=text,
+        )
+
+        if decision.grant and grant_error is None:
+            client.chat_postMessage(
+                channel=cfg.slack_channel_id,
+                text=f"Permissions granted to <@{requester.id}>",
+                thread_ts=slack_response["ts"],
+            )
+            if not is_user_in_channel and cfg.send_dm_if_user_not_in_channel:
+                client.chat_postMessage(
+                    channel=requester.id,
+                    text="Your request was processed, permissions granted.",
+                )
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to fully post/update notifications about this request's outcome (best-effort, not re-raised)")
+
     if grant_error is not None:
-        # Re-raised after the message above already reflects the failure --
-        # both callers (handle_request_for_access_submittion's @handle_errors,
-        # handle_cli_access_request's own blanket handler) still need to know
-        # this happened, e.g. to report a 500 to a CLI caller.
+        # Re-raised after the messages above already reflect the failure
+        # (best-effort -- see above) -- both callers
+        # (handle_request_for_access_submittion's @handle_errors,
+        # handle_cli_access_request's own blanket handler) still need to
+        # know this happened, e.g. to report a 500 to a CLI caller.
         raise grant_error
 
-    return decision
-
-
-# Reasons process_access_request refuses a request outright rather than
-# queuing/granting it -- distinct from RequiresApproval/ApprovalNotRequired/
-# SelfApproval, which all mean the request is (or will be) actioned.
-DENIED_DECISION_REASONS = frozenset(
-    {
-        access_control.DecisionReason.RequesterNotAllowed,
-        access_control.DecisionReason.NoStatements,
-        access_control.DecisionReason.NoApprovers,
-    }
-)
+    # succeeded, not "decision.reason not in some hand-maintained denylist":
+    # color_coding_emoji is the single value every branch above (including
+    # the RequiresApproval/no-approvers-found sub-case, which keeps
+    # decision.reason == RequiresApproval even though the request could not
+    # be processed) already funnels its real outcome into -- deriving from
+    # it instead of duplicating that logic in a second set keeps the two
+    # from silently drifting apart the way DENIED_DECISION_REASONS did.
+    succeeded = color_coding_emoji != cfg.bad_result_emoji
+    return decision, succeeded
 
 
 @handle_errors

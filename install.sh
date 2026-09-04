@@ -164,12 +164,25 @@ verify_checksum() {
 # tar, and sha256sum/shasum are, per check_required_commands), so this can't
 # be a hard requirement without breaking installs for everyone who doesn't
 # have it. When gh genuinely fails to confirm the attestation (as opposed to
-# simply being absent), that's treated as a real integrity failure, the same
-# as a checksum mismatch above.
+# simply being absent, or simply not authenticated -- see below), that's
+# treated as a real integrity failure, the same as a checksum mismatch
+# above.
 verify_attestation() {
   file="$1"
   if ! command -v gh >/dev/null 2>&1; then
     log "note: gh CLI not found on PATH — skipping build-provenance attestation verification (only the checksum above was verified)"
+    return 0
+  fi
+  # gh being present doesn't mean it's usable for this: many machines
+  # (including GitHub's own hosted runners) ship gh preinstalled but never
+  # run `gh auth login`, and gh attestation verify then fails with an
+  # authentication prompt -- a tooling condition, not a sign the artifact
+  # is untrusted. Checked separately from the verify call itself so that
+  # distinction doesn't get lost: an unauthenticated gh degrades to the
+  # same "skip and note it" path as gh being absent entirely, rather than
+  # refusing an install that was never actually checked.
+  if ! gh auth status >/dev/null 2>&1; then
+    log "note: gh CLI is not authenticated (run 'gh auth login') — skipping build-provenance attestation verification (only the checksum above was verified)"
     return 0
   fi
   if ! gh attestation verify "$file" --repo "$REPO" >/dev/null 2>&1; then

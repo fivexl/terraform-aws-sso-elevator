@@ -18,8 +18,14 @@ on:
 # No top-level permissions block: each job below declares exactly what it
 # needs, rather than every job (including smoke, which only reads a public
 # release and never writes anything) inheriting contents: write.
+# Workflow-wide, not per-tag: every run in this workflow reads and writes
+# the same shared, external state (fivexl/homebrew-tap's cask file), not
+# just its own tag's GitHub release. Two different tags' releases running
+# concurrently could otherwise race on that same file -- one run's revert
+# (see "Revert homebrew-tap" below) could delete or overwrite the other
+# run's still-in-flight cask push.
 concurrency:
-  group: cli-release-${{ inputs.tag || github.ref_name }}
+  group: cli-release
   cancel-in-progress: false
 
 jobs:
@@ -35,24 +41,47 @@ jobs:
     # guards the dispatch input.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # This job only checks an input string against a shell case pattern --
-    # no checkout, no gh/git calls -- so it needs no GITHUB_TOKEN access at
-    # all, not just read-only.
-    permissions: {}
+    # gh api below reads whether a ref exists -- contents: read, not {}.
+    permissions:
+      contents: read
     steps:
       - name: Refuse a tag outside this workflow's own namespace
         env:
           TAG: ${{ inputs.tag }}
         run: |
           case "$TAG" in elevator-v*) ;; *) echo "::error::refusing non-CLI tag $TAG"; exit 1 ;; esac
+      - name: Refuse a ref that isn't actually a tag
+        # The shape check above only constrains the *name* -- actions/checkout
+        # resolves refs/heads/ before refs/tags/, so a branch literally named
+        # e.g. "elevator-v2" satisfies it and gets checked out by the
+        # goreleaser job below, building a release from arbitrary branch
+        # content and — since GoReleaser resolves "the previous tag" from
+        # whatever the real tag history is regardless of what ref was
+        # checked out — potentially overwriting the module's actual latest
+        # release. This asserts a real tag by that exact name exists,
+        # independent of how the later checkout's ref happens to resolve.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG is not an existing tag (a branch or other ref with this name doesn't count)"
+            exit 1
+          fi
 
   goreleaser:
     needs: [validate-tag]
-    # validate-tag only runs (and can fail) on workflow_dispatch; on a tag
-    # push it's skipped, and the default `needs` condition would otherwise
-    # skip this job too when its dependency is skipped rather than
-    # successful.
-    if: always() && needs.validate-tag.result != 'failure'
+    # !cancelled(), not always(): validate-tag only runs (and can fail) on
+    # workflow_dispatch, and on a tag push it's skipped -- the default
+    # `needs` condition would otherwise skip this job too when its
+    # dependency is skipped rather than successful, so this can't just omit
+    # an if: entirely. always() went further than that, though: it also
+    # returns true when the *run itself* was cancelled, so pressing Cancel
+    # on a workflow_dispatch run still published the release and pushed the
+    # cask. !cancelled() keeps the skip-tolerance this job needs without
+    # also overriding a cancellation.
+    if: "!cancelled() && needs.validate-tag.result != 'failure'"
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release and upload its assets
@@ -139,6 +168,13 @@ jobs:
     needs: goreleaser
     permissions:
       contents: read
+      # install.sh's verify_attestation shells out to `gh attestation
+      # verify`, which needs a token to call GitHub's API -- runner images
+      # ship gh preinstalled but not authenticated, and GITHUB_TOKEN is not
+      # automatically exposed to gh as GH_TOKEN, so without this (and the
+      # GH_TOKEN env below) every attestation check here failed with
+      # "gh auth login" required, not because the artifact was untrusted.
+      attestations: read
     strategy:
       fail-fast: false
       matrix:
@@ -175,9 +211,25 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+      - if: matrix.checkout == 'documented-oneliner'
+        name: Check whether main has install.sh yet
+        id: check_installer
+        # This leg only becomes meaningful once this PR merges install.sh
+        # into main -- until then, every release cut (including this PR's
+        # own pre-merge testing) checks out a main that has no install.sh at
+        # all, and this leg would fail for a reason having nothing to do
+        # with the artifact under test, triggering the tap revert and
+        # demote every single time. Skip it rather than fail the release.
+        run: |
+          if [ ! -f install.sh ]; then
+            echo "::warning::main does not have install.sh yet (expected until this PR merges) -- skipping the documented-oneliner smoke leg"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Install the published release and run it
+        if: "!(matrix.checkout == 'documented-oneliner' && steps.check_installer.outputs.skip == 'true')"
         env:
           ELEVATOR_VERSION: ${{ inputs.tag || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: sh install.sh
 
   publication-state:
@@ -204,6 +256,15 @@ jobs:
         # actually moved since then -- goreleaser can fail before ever
         # reaching the cask push, in which case there's nothing to revert.
         if: needs.smoke.result != 'success' && needs.goreleaser.outputs.tap-sha-before != ''
+        # continue-on-error: this step runs under `set -eu`, with no
+        # retry, against fivexl/homebrew-tap's API -- a rate limit or a
+        # transient 422 here must not also swallow the "Promote a good
+        # release, demote a broken one" step below, which is what actually
+        # marks *this* repo's own release as a prerelease. Losing that
+        # would leave the release looking "safe" (still prerelease) while
+        # the ::warning:: below (or its absence) is the only record that
+        # the tap itself may still be broken.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
@@ -221,8 +282,38 @@ jobs:
             echo "homebrew-tap wasn't touched by this run -- nothing to revert"
             exit 0
           fi
-          gh api --method PATCH "repos/fivexl/homebrew-tap/git/refs/heads/$TAP_BRANCH" -f sha="$TAP_SHA_BEFORE" -F force=true
-          echo "::warning::Reverted fivexl/homebrew-tap from $current to $TAP_SHA_BEFORE — $TAG failed smoke"
+
+          CASK_PATH="Casks/elevator.rb"
+
+          # Revert only this one file, via the Contents API, rather than
+          # force-resetting the whole branch to TAP_SHA_BEFORE: fivexl/homebrew-tap
+          # is a shared, unprotected repo that can hold other casks/formulae,
+          # and a force-push would destroy any unrelated commit that landed
+          # there in this window too -- a human fix to another formula, or a
+          # second, concurrent elevator release's own cask push.
+          current_file_sha=$(gh api "repos/fivexl/homebrew-tap/contents/$CASK_PATH?ref=$TAP_BRANCH" --jq .sha 2>/dev/null) || current_file_sha=""
+          if [ -z "$current_file_sha" ]; then
+            echo "$CASK_PATH doesn't exist on $TAP_BRANCH right now -- nothing to revert"
+            exit 0
+          fi
+
+          before_content=$(gh api "repos/fivexl/homebrew-tap/contents/$CASK_PATH?ref=$TAP_SHA_BEFORE" --jq .content 2>/dev/null) || before_content=""
+          if [ -z "$before_content" ]; then
+            # The file didn't exist before this run created it -- undo the
+            # creation, rather than restoring nonexistent prior content.
+            gh api --method DELETE "repos/fivexl/homebrew-tap/contents/$CASK_PATH" \
+              -f message="Revert $CASK_PATH: $TAG failed smoke" \
+              -f sha="$current_file_sha" \
+              -f branch="$TAP_BRANCH" >/dev/null
+            echo "::warning::Deleted $CASK_PATH from fivexl/homebrew-tap (it didn't exist before this run) — $TAG failed smoke"
+          else
+            gh api --method PUT "repos/fivexl/homebrew-tap/contents/$CASK_PATH" \
+              -f message="Revert $CASK_PATH: $TAG failed smoke" \
+              -f content="$before_content" \
+              -f sha="$current_file_sha" \
+              -f branch="$TAP_BRANCH" >/dev/null
+            echo "::warning::Reverted $CASK_PATH on fivexl/homebrew-tap to its pre-release content — $TAG failed smoke"
+          fi
 
       - name: Promote a good release, demote a broken one
         env:
@@ -260,14 +351,20 @@ jobs:
                 exit 0
                 ;;
             esac
-            # Deliberately no --latest: that would move the repo-wide
-            # "Latest release" badge onto the CLI tag. Module releases are
-            # published by hand, by a separate process this workflow
-            # doesn't touch, so nothing would ever flip it back. install.sh
-            # has its own resolution path (filtering to elevator-v* tags) and
-            # doesn't rely on GitHub's notion of "latest" at all.
+            # --latest=false, not just omitting --latest: "Latest release" is
+            # independently computed by GitHub as the newest non-prerelease,
+            # non-draft release by created_at, and gh release edit's
+            # underlying PATCH defaults make_latest to true whenever the
+            # flag isn't sent at all -- so simply not passing --latest still
+            # moved the repo-wide "Latest release" badge onto the CLI tag
+            # the moment this promoted it out of prerelease. Module releases
+            # are published by hand, by a separate process this workflow
+            # doesn't touch, so nothing would ever flip the badge back.
+            # install.sh has its own resolution path (filtering to
+            # elevator-v* tags) and doesn't rely on GitHub's notion of
+            # "latest" at all.
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --draft=false --prerelease=false
+              --draft=false --prerelease=false --latest=false
             echo "### $TAG published" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi

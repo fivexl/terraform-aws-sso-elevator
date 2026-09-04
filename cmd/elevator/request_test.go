@@ -1,16 +1,23 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// roundTripperFunc adapts a plain function to http.RoundTripper, so a test
+// can script a client's per-attempt behavior without any real networking.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestValidateEndpointSchemeRejectsPlainHTTP(t *testing.T) {
 	if err := validateEndpointScheme("http://example.execute-api.us-east-1.amazonaws.com/default/access-requester-cli"); err == nil {
@@ -242,12 +249,53 @@ func TestSendWithConnectRetryDoesNotRetryAfterTheServerWasReached(t *testing.T) 
 		time.Sleep(200 * time.Millisecond) // outlast the client timeout
 	}))
 	defer srv.Close()
-	req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader([]byte(`{}`)))
+	// A nil body, not bytes.NewReader([]byte("{}")): sendWithConnectRetry
+	// reuses the same *http.Request across attempts without restoring the
+	// body from req.GetBody, so a non-empty body reader is already
+	// exhausted by attempt 2 -- that attempt then fails inside the
+	// transport on a Content-Length mismatch, before ever reaching the
+	// network, making hits stay 1 regardless of whether the retry
+	// predicate under test is actually correct. Confirmed: with the old
+	// body, this test still passed even after deliberately breaking
+	// isDialError's predicate to also retry on os.IsTimeout (the exact
+	// regression it exists to catch).
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
 	if _, err := sendWithConnectRetry(&http.Client{Timeout: 50 * time.Millisecond}, req); err == nil {
 		t.Fatal("expected a timeout")
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {
 		t.Fatalf("server hit %d times, want exactly 1", n)
+	}
+}
+
+// TestSendWithConnectRetryRetriesAfterADialFailure is the companion this
+// invariant was still missing: proof that a genuine dial failure (the one
+// case sendWithConnectRetry exists to retry) actually gets retried and can
+// succeed, not just that a non-dial failure doesn't. Scripted via a fake
+// RoundTripper rather than real sockets, so it isn't subject to OS-level
+// port-reuse timing the way simulating this with real listeners would be.
+func TestSendWithConnectRetryRetriesAfterADialFailure(t *testing.T) {
+	var attempts int32
+	client := &http.Client{
+		Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			if atomic.AddInt32(&attempts, 1) == 1 {
+				// The exact shape isDialError checks for: op == "dial".
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+		}),
+	}
+	req, _ := http.NewRequest(http.MethodPost, "http://elevator.invalid/", nil)
+
+	resp, err := sendWithConnectRetry(client, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if n := atomic.LoadInt32(&attempts); n != 2 {
+		t.Fatalf("got %d attempts, want exactly 2 (one dial failure, then a retry that reached the server)", n)
 	}
 }
 
