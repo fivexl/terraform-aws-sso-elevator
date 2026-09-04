@@ -189,6 +189,15 @@ def test_config_init(dict_config: dict):
     config.Config(**dict_config)
 
 
+def test_config_rejects_empty_cli_sso_role_name_prefix():
+    """An empty prefix would silently make cli_auth.extract_identity's
+    role-name check accept every role name instead of rejecting non-matching
+    ones (str.startswith("") is always True) -- must fail config load
+    instead of quietly disabling that check."""
+    with pytest.raises(ValidationError):
+        config.Config(**(valid_config_dict() | {"cli_sso_role_name_prefix": ""}))
+
+
 # TTL validation tests removed - cache no longer uses TTL
 
 

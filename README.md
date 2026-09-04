@@ -474,6 +474,17 @@ create_lambda_url = false # This will delete lambda url
 To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.
 **After updating the module, you can find the API URL in the output of the module. Please don't forget to update the Slack App manifest with the new URL.**
 
+## CLI tool
+Access requests can also be submitted from the command line, without Slack, via the `POST /access-requester-cli` route — signed directly with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. This route is off by default; set `enable_access_requester_cli = true` to add it. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
+
+The image referenced by the default `ecr_repo_tag` predates this route; until a module release ships with CLI support, also set `use_pre_created_image = false` or pin `ecr_repo_tag` to a release that includes it.
+
+Each caller's AWS identity also needs `execute-api:Invoke` permission on this route — without it, API Gateway itself rejects the request with a `403` before the Lambda ever runs. Use the `requester_api_execution_arn_cli` module output as the policy's `Resource` when granting it.
+
+**Trust model warning:** the requester Lambda itself does not re-verify the caller's identity beyond what API Gateway's `AWS_IAM` authorizer already established. This means anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway entirely and invoke it directly with a forged event, which is equivalent to granting themselves any configured permission set as any user. Keep `lambda:InvokeFunction` on this function restricted to API Gateway's own invocation role — do not grant it to anyone as a general-purpose IAM permission. The Lambda does check that the event's `requestContext.apiId` matches this deployment's API Gateway as a defense-in-depth measure, but that value is not secret (it's visible via `DescribeApi`/Terraform state to anyone with read access), so it only stops an accidental or naive direct invocation, not a deliberate one.
+
+The CLI route isn't currently usable outside the standard `aws` partition: this module's IAM policies hardcode `arn:aws:` throughout, so a GovCloud/China caller's otherwise-valid SSO session fails at the Lambda's own `iam:GetRole` call and is rejected with the same generic message an invalid session gets.
+
 # Deployment and Usage
 
 The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
@@ -744,7 +755,7 @@ settings:
 ## Requirements
 
 | Name | Version |
-|------|---------|
+| ---- | ------- |
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.0 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 4.64 |
 | <a name="requirement_external"></a> [external](#requirement\_external) | >= 1.0 |
@@ -755,7 +766,7 @@ settings:
 ## Providers
 
 | Name | Version |
-|------|---------|
+| ---- | ------- |
 | <a name="provider_aws"></a> [aws](#provider\_aws) | >= 4.64 |
 | <a name="provider_null"></a> [null](#provider\_null) | >= 2.0 |
 | <a name="provider_random"></a> [random](#provider\_random) | >= 3.0 |
@@ -763,7 +774,7 @@ settings:
 ## Modules
 
 | Name | Source | Version |
-|------|--------|---------|
+| ---- | ------ | ------- |
 | <a name="module_access_requester_slack_handler"></a> [access\_requester\_slack\_handler](#module\_access\_requester\_slack\_handler) | terraform-aws-modules/lambda/aws | 8.1.2 |
 | <a name="module_access_revoker"></a> [access\_revoker](#module\_access\_revoker) | terraform-aws-modules/lambda/aws | 8.1.2 |
 | <a name="module_attribute_syncer"></a> [attribute\_syncer](#module\_attribute\_syncer) | terraform-aws-modules/lambda/aws | 8.1.2 |
@@ -775,7 +786,7 @@ settings:
 ## Resources
 
 | Name | Type |
-|------|------|
+| ---- | ---- |
 | [aws_cloudwatch_event_rule.attribute_sync_schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_rule.sso_elevator_check_on_inconsistency](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
@@ -802,7 +813,7 @@ settings:
 ## Inputs
 
 | Name | Description | Type | Default | Required |
-|------|-------------|------|---------|:--------:|
+| ---- | ----------- | ---- | ------- | :------: |
 | <a name="input_api_gateway_name"></a> [api\_gateway\_name](#input\_api\_gateway\_name) | The name of the API Gateway for SSO Elevator's access-requester Lambda | `string` | `"sso-elevator-access-requster"` | no |
 | <a name="input_api_gateway_throttling_burst_limit"></a> [api\_gateway\_throttling\_burst\_limit](#input\_api\_gateway\_throttling\_burst\_limit) | The maximum number of requests that API Gateway allows in a burst. | `number` | `5` | no |
 | <a name="input_api_gateway_throttling_rate_limit"></a> [api\_gateway\_throttling\_rate\_limit](#input\_api\_gateway\_throttling\_rate\_limit) | The maximum number of requests that API Gateway allows per second. | `number` | `1` | no |
@@ -819,6 +830,7 @@ settings:
 | <a name="input_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#input\_attribute\_syncer\_lambda\_name) | Name for the attribute syncer Lambda function. | `string` | `"attribute-syncer"` | no |
 | <a name="input_aws_sns_topic_subscription_email"></a> [aws\_sns\_topic\_subscription\_email](#input\_aws\_sns\_topic\_subscription\_email) | value for the email address to subscribe to the SNS topic | `string` | `""` | no |
 | <a name="input_cache_enabled"></a> [cache\_enabled](#input\_cache\_enabled) | Enable caching of AWS accounts and permission sets in S3. If set to false, caching is disabled but the S3 bucket will still be created for future config storage. | `bool` | `true` | no |
+| <a name="input_cli_sso_role_name_prefix"></a> [cli\_sso\_role\_name\_prefix](#input\_cli\_sso\_role\_name\_prefix) | Required prefix on a CLI caller's assumed-role name for the request to be accepted as an SSO-provisioned session. | `string` | `"AWSReservedSSO_"` | no |
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | `[]` | no |
 | <a name="input_config_bucket_kms_key_arn"></a> [config\_bucket\_kms\_key\_arn](#input\_config\_bucket\_kms\_key\_arn) | ARN of the KMS key to use for config S3 bucket encryption. If not provided, uses AES256 encryption. | `string` | `null` | no |
 | <a name="input_config_bucket_name"></a> [config\_bucket\_name](#input\_config\_bucket\_name) | Name of the S3 bucket for storing configuration and cache data (accounts, permission sets, and future config files) | `string` | `"sso-elevator-config"` | no |
@@ -826,7 +838,8 @@ settings:
 | <a name="input_create_lambda_url"></a> [create\_lambda\_url](#input\_create\_lambda\_url) | If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future<br/>If false, Lambda url will be deleted. | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
-| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.2.2"` | no |
+| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.3.1"` | no |
+| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true (and create\_api\_gateway is also true), adds the POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |
 | <a name="input_event_brige_check_on_inconsistency_rule_name"></a> [event\_brige\_check\_on\_inconsistency\_rule\_name](#input\_event\_brige\_check\_on\_inconsistency\_rule\_name) | DEPRECATED: Use event\_bridge\_check\_on\_inconsistency\_rule\_name instead. This variable contains a typo and will be removed in a future version. | `string` | `"sso-elevator-check-on-inconsistency"` | no |
@@ -839,7 +852,7 @@ settings:
 | <a name="input_log_level"></a> [log\_level](#input\_log\_level) | value for the log level | `string` | `"INFO"` | no |
 | <a name="input_logs_retention_in_days"></a> [logs\_retention\_in\_days](#input\_logs\_retention\_in\_days) | The number of days you want to retain log events in the log group for both Lambda functions and API Gateway. | `number` | `365` | no |
 | <a name="input_max_permissions_duration_time"></a> [max\_permissions\_duration\_time](#input\_max\_permissions\_duration\_time) | Maximum duration (in hours) for permissions granted by Elevator. Max number - 48 hours.<br/>  Due to Slack's dropdown limit of 100 items, anything above 48 hours will cause issues when generating half-hour increments<br/>  and Elevator will not display more then 48 hours in the dropdown. | `number` | `24` | no |
-| <a name="input_permission_duration_list_override"></a> [permission\_duration\_list\_override](#input\_permission\_duration\_list\_override) | An explicit list of duration values to appear in the drop-down menu users use to select how long to request permissions for.<br/>  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes<br/>  must be between 0-59, the number of hours can be any number.<br/>  If this variable is set, the max\_permission\_duration\_time is ignored. | `list(string)` | `[]` | no |
+| <a name="input_permission_duration_list_override"></a> [permission\_duration\_list\_override](#input\_permission\_duration\_list\_override) | An explicit list of duration values to appear in the drop-down menu users use to select how long to request permissions for.<br/>  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes<br/>  must be between 0-59, the number of hours can be any number.<br/>  If this variable is set, the max\_permission\_duration\_time is ignored.<br/>  Note for the CLI (enable\_access\_requester\_cli): the CLI is not restricted to these specific entries the way the Slack dropdown<br/>  is -- it accepts any whole number of minutes up to the highest value in this list, treating the list as a ceiling rather than<br/>  an exact set of allowed durations. For example, an override of ["00:30", "08:00"] lets the CLI request any duration from 1<br/>  minute up to 8 hours, not just those two values. | `list(string)` | `[]` | no |
 | <a name="input_request_expiration_hours"></a> [request\_expiration\_hours](#input\_request\_expiration\_hours) | After how many hours should the request expire? If set to 0, the request will never expire. | `number` | `8` | no |
 | <a name="input_requester_lambda_name"></a> [requester\_lambda\_name](#input\_requester\_lambda\_name) | value for the requester lambda name | `string` | `"access-requester"` | no |
 | <a name="input_revoker_lambda_name"></a> [revoker\_lambda\_name](#input\_revoker\_lambda\_name) | value for the revoker lambda name | `string` | `"access-revoker"` | no |
@@ -867,7 +880,7 @@ settings:
 ## Outputs
 
 | Name | Description |
-|------|-------------|
+| ---- | ----------- |
 | <a name="output_attribute_sync_schedule_rule_arn"></a> [attribute\_sync\_schedule\_rule\_arn](#output\_attribute\_sync\_schedule\_rule\_arn) | The ARN of the EventBridge rule that triggers the attribute syncer. |
 | <a name="output_attribute_syncer_lambda_arn"></a> [attribute\_syncer\_lambda\_arn](#output\_attribute\_syncer\_lambda\_arn) | The ARN of the attribute syncer Lambda function. |
 | <a name="output_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#output\_attribute\_syncer\_lambda\_name) | The name of the attribute syncer Lambda function. |
@@ -875,6 +888,8 @@ settings:
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
 | <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
+| <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR\_ENDPOINT). null unless enable\_access\_requester\_cli is also true. |
+| <a name="output_requester_api_execution_arn_cli"></a> [requester\_api\_execution\_arn\_cli](#output\_requester\_api\_execution\_arn\_cli) | The execute-api ARN for the CLI's access-request route, for building the execute-api:Invoke IAM policy CLI callers need (e.g. as the policy's Resource, optionally narrowed from */* to <stage>/POST). null unless enable\_access\_requester\_cli is also true. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END_TF_DOCS -->
 

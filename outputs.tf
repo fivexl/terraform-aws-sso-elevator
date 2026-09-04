@@ -8,6 +8,16 @@ output "requester_api_endpoint_url" {
   value       = var.create_api_gateway ? local.full_api_url : null
 }
 
+output "requester_api_endpoint_url_cli" {
+  description = "The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR_ENDPOINT). null unless enable_access_requester_cli is also true."
+  value       = var.create_api_gateway && var.enable_access_requester_cli ? local.full_api_url_cli : null
+}
+
+output "requester_api_execution_arn_cli" {
+  description = "The execute-api ARN for the CLI's access-request route, for building the execute-api:Invoke IAM policy CLI callers need (e.g. as the policy's Resource, optionally narrowed from */* to <stage>/POST). null unless enable_access_requester_cli is also true."
+  value       = var.create_api_gateway && var.enable_access_requester_cli ? "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path_cli}" : null
+}
+
 output "lambda_function_url" {
   description = "value for the access_requester lambda function URL"
   value       = var.create_lambda_url ? module.access_requester_slack_handler.lambda_function_url : null

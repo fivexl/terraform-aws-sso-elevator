@@ -4,7 +4,7 @@ from typing import Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import entities
@@ -130,6 +130,37 @@ class Config(BaseSettings):
     send_dm_if_user_not_in_channel: bool = True
 
     sso_instance_arn: str
+
+    # CLI access-request path: identity read from the AWS_IAM authorizer's
+    # userArn is only trusted if it matches both of these.
+    # cli_expected_account_id is always the account this module is deployed
+    # into (see locals.tf) — not operator-configurable, since cli_auth.py's
+    # iam:GetRole check can only ever resolve against that same account
+    # regardless of what this claimed, so letting them diverge was either a
+    # guaranteed rejection or, worse, a cross-account impersonation path.
+    # The "" default here only matters for tests/direct Config() use that
+    # don't go through Terraform at all.
+    cli_expected_account_id: str = ""
+    cli_sso_role_name_prefix: str = "AWSReservedSSO_"
+
+    # Defense-in-depth only, not a real access control: a direct-invoke caller
+    # controls the entire event JSON, so this value is guessable, not secret
+    # (it's visible via DescribeApi/Terraform state to anyone with read
+    # access). It only blocks a naive/accidental direct lambda:InvokeFunction
+    # that doesn't bother setting requestContext.apiId -- it does not stop a
+    # deliberate forgery. The real trust boundary is the IAM policy deciding
+    # who can invoke this Lambda at all; see the README's CLI section.
+    cli_expected_api_id: str = ""
+
+    @field_validator("cli_sso_role_name_prefix")
+    @classmethod
+    def cli_sso_role_name_prefix_must_not_be_empty(cls, value: str) -> str:  # noqa: ANN101
+        # str.startswith("") is always True, so an empty prefix would
+        # silently make cli_auth.extract_identity's role-name check accept
+        # any role name at all instead of rejecting non-matching ones.
+        if value == "":
+            raise ValueError("cli_sso_role_name_prefix must not be empty — an empty prefix matches every role name")
+        return value
 
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"

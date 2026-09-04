@@ -1,0 +1,130 @@
+version: 2
+
+before:
+  hooks:
+    # Unlike boris-mcp-cli (go.mod at repo root), this repo's go.mod is
+    # nested in cmd/elevator/ — GoReleaser itself runs from the repo root, so
+    # this needs an explicit working directory. before.hooks entries are
+    # plain strings (no dir:/cmd: object form here), so `go -C` (Go 1.20+)
+    # is used instead of shell `cd` to avoid depending on hook shell
+    # semantics.
+    #
+    # -diff, not a plain `mod tidy`: cli-release.yml's --skip=validate
+    # disables GoReleaser's dirty-tree check, so a bare `mod tidy` that
+    # silently mutated go.mod/go.sum here would ship a binary built from a
+    # module graph that was never committed, tested, or vuln-scanned --
+    # cli-ci.yml already runs `go mod tidy -diff` and rejects that state, so
+    # failing loudly here instead of mutating just makes this hook agree
+    # with that gate rather than possibly rubber-stamping past it.
+    - go -C cmd/elevator mod tidy -diff
+
+builds:
+  - main: .
+    dir: cmd/elevator
+    binary: elevator
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      # Strips local filesystem paths (GOPATH, the runner's checkout
+      # directory) from the compiled binary, both so two builds of the same
+      # commit produce byte-identical output (reproducibility) and so the
+      # binary doesn't embed the CI runner's own directory layout.
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.buildCommit={{.Commit}}
+      - -X main.buildDate={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - LICENSE
+      - src: cmd/elevator/README.md
+        dst: README.md
+
+checksum:
+  name_template: checksums.txt
+
+# sboms + the build-provenance attestation step in cli-release.yml are this
+# project's artifact-authenticity story: an SBOM per archive, plus a SLSA
+# provenance attestation tying each archive back to the exact CI run and
+# commit that produced it, verifiable with `gh attestation verify` -- no
+# separate signing keys/secrets to manage, since it rides on GitHub's own
+# OIDC-backed (Sigstore) attestation support.
+sboms:
+  - id: default
+    artifacts: archive
+
+# macOS code signing/notarization is intentionally not configured here — it's
+# planned as a follow-up by someone else on the team. This is a real gap, not
+# a cosmetic one: on current macOS, an unsigned, unnotarized binary that
+# actually went through Gatekeeper's quarantine check (e.g. downloaded and
+# extracted via a browser/Finder, not install.sh) gets a hard "Apple could
+# not verify this app" block, not a dismissible warning -- the user has to
+# go into System Settings > Privacy & Security to allow it. install.sh's own
+# curl+tar path typically doesn't trigger this at all, since curl doesn't set
+# the quarantine attribute the way a browser download does, but that's a
+# property of how the file was fetched, not something this tool controls or
+# should be relied on. Add a `notarize:` block here once signing secrets
+# exist.
+
+homebrew_casks:
+  - name: elevator
+    # "auto": GoReleaser skips publishing the cask when the tag itself
+    # carries a prerelease indicator (e.g. elevator-v1.0.0-rc1) -- without
+    # this, a release-candidate tag's cask would overwrite the stable
+    # cask fivexl/homebrew-tap's "brew install elevator" resolves to,
+    # since GoReleaser has no other notion of "don't publish this one" for
+    # a channel that isn't itself versioned per-release the way the
+    # GitHub release object is.
+    skip_upload: auto
+    repository:
+      owner: fivexl
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/fivexl/terraform-aws-sso-elevator
+    description: Submit temporary AWS access requests from the command line
+    license: Apache-2.0
+    binaries:
+      - elevator
+    # Homebrew casks are unsigned/unnotarized here (see the notarize: note
+    # above), and unlike install.sh's curl+tar path, a `brew install` fetch
+    # does set the com.apple.quarantine extended attribute -- which without
+    # this hook hits Gatekeeper's hard "Apple could not verify this app"
+    # block on first run, not a dismissible warning. This removes it the
+    # same way install.sh avoids triggering it in the first place.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/elevator"]
+          end
+
+release:
+  github:
+    owner: fivexl
+    name: terraform-aws-sso-elevator
+  # Makes re-publishing a tag idempotent — a release that failed partway
+  # through leaves some assets uploaded and some not; without this, a retry
+  # fails on a 422 for the ones that already made it.
+  replace_existing_artifacts: true
+  # Every release starts out marked prerelease, regardless of whether the
+  # tag itself looks like one. This is deliberate: it's the only thing that
+  # keeps a release that hasn't passed cli-release.yml's smoke job yet out
+  # of GitHub's "latest" release and out of install.sh's default (unpinned)
+  # install path, both of which explicitly filter on prerelease == false --
+  # so a plain `curl install.sh | sh` run can't land on an untested build
+  # during the window between this release being created and smoke
+  # finishing. The smoke job itself still reaches it fine, since it pins an
+  # exact tag (ELEVATOR_VERSION) rather than resolving "latest", and a
+  # prerelease's assets are just as publicly downloadable as a normal
+  # release's -- only draft releases would need extra plumbing here.
+  # cli-release.yml's publication-state job flips this to false (promoting
+  # it to a real release) once smoke passes, unless the tag itself is a
+  # genuine prerelease (e.g. elevator-v1.0.0-rc1), in which case it's left
+  # alone on purpose.
+  prerelease: true

@@ -244,6 +244,17 @@ variable "max_permissions_duration_time" {
   EOT
   type        = number
   default     = 24
+  validation {
+    # 0 (or negative) makes get_max_duration_block's computed range empty
+    # whenever permission_duration_list_override isn't set -- src/slack_helpers.py's
+    # duration dropdown then indexes into that empty list and crashes the
+    # request-access modal for every Slack user, and src/main.py's CLI
+    # duration check hits the same empty sequence. Both used to reach their
+    # generic exception handler (a 500, plus a Slack post) rather than fail
+    # here, at the one place a deployer could actually see why.
+    condition     = var.max_permissions_duration_time > 0
+    error_message = "max_permissions_duration_time must be greater than 0."
+  }
 }
 
 variable "permission_duration_list_override" {
@@ -252,6 +263,10 @@ variable "permission_duration_list_override" {
   Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes
   must be between 0-59, the number of hours can be any number.
   If this variable is set, the max_permission_duration_time is ignored.
+  Note for the CLI (enable_access_requester_cli): the CLI is not restricted to these specific entries the way the Slack dropdown
+  is -- it accepts any whole number of minutes up to the highest value in this list, treating the list as a ceiling rather than
+  an exact set of allowed durations. For example, an override of ["00:30", "08:00"] lets the CLI request any duration from 1
+  minute up to 8 hours, not just those two values.
   EOT
   type        = list(string)
   default     = []
@@ -464,4 +479,30 @@ variable "identity_store_id" {
   description = "The Identity Store ID. If not provided and sso_instance_arn is also not provided, it will be automatically discovered."
   type        = string
   default     = ""
+}
+
+# ==========================================
+# CLI access-request path
+# ==========================================
+
+variable "enable_access_requester_cli" {
+  description = "If true (and create_api_gateway is also true), adds the POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Off by default so upgrading an existing deployment doesn't silently add a new AWS_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it."
+  type        = bool
+  default     = false
+}
+
+variable "cli_sso_role_name_prefix" {
+  description = "Required prefix on a CLI caller's assumed-role name for the request to be accepted as an SSO-provisioned session."
+  type        = string
+  default     = "AWSReservedSSO_"
+
+  # src/config.py rejects "" at load time, and main.py calls get_config() at
+  # module import -- so an empty value here wouldn't just break the CLI
+  # route, it would crash the Lambda's import and take the Slack path down
+  # with it. Catching this at `terraform plan`/`apply` is a lot cheaper than
+  # finding out from a broken deployment.
+  validation {
+    condition     = var.cli_sso_role_name_prefix != ""
+    error_message = "cli_sso_role_name_prefix must not be empty -- it would disable the check entirely (str.startswith(\"\") is always true) and crash the Lambda's config load, breaking the Slack path too."
+  }
 }
