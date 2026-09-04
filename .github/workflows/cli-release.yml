@@ -35,6 +35,10 @@ jobs:
     # guards the dispatch input.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # This job only checks an input string against a shell case pattern --
+    # no checkout, no gh/git calls -- so it needs no GITHUB_TOKEN access at
+    # all, not just read-only.
+    permissions: {}
     steps:
       - name: Refuse a tag outside this workflow's own namespace
         env:
