@@ -25,9 +25,9 @@ jmespath==1.0.1 \
     #   aws-lambda-powertools
     #   boto3
     #   botocore
-pydantic==2.12.3 \
-    --hash=sha256:1da1c82b0fc140bb0103bc1441ffe062154c8d38491189751ee00fd8ca65ce74 \
-    --hash=sha256:6986454a854bc3bc6e5443e1369e06a3a456af9d339eda45510f517d9ea5c6bf
+pydantic==2.13.5 \
+    --hash=sha256:346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73 \
+    --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
     # via aws-lambda-powertools
 pydantic-core==2.41.4 \
     --hash=sha256:19f3684868309db5263a11bace3c45d93f6f24afa2ffe75a647583df22a2ff89 \
