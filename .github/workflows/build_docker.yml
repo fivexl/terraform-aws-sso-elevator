@@ -13,6 +13,15 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # The push-tags trigger above is already scoped to "v*", which never
+    # matches an "elevator-v*" CLI release tag. The release:published
+    # trigger has no such filter, though -- it fires for ANY release this
+    # repo publishes, including the CLI's, whether that's goreleaser
+    # creating it directly or cli-release.yml's publication-state job
+    # un-drafting/promoting it later. Without this guard, every CLI release
+    # would also rebuild and push these three Lambda images to ECR, tagged
+    # with a meaningless "requester-elevator-vX.Y.Z"-style tag.
+    if: github.event_name != 'release' || !startsWith(github.event.release.tag_name, 'elevator-')
 
     steps:
       - name: Checkout code

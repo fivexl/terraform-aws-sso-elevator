@@ -474,6 +474,15 @@ create_lambda_url = false # This will delete lambda url
 To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.
 **After updating the module, you can find the API URL in the output of the module. Please don't forget to update the Slack App manifest with the new URL.**
 
+## CLI tool
+Access requests can also be submitted from the command line, without Slack, via the `POST /access-requester-cli` route — signed directly with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. This route is off by default; set `enable_access_requester_cli = true` to add it. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
+
+Each caller's AWS identity also needs `execute-api:Invoke` permission on this route — without it, API Gateway itself rejects the request with a `403` before the Lambda ever runs. Use the `requester_api_execution_arn_cli` module output as the policy's `Resource` when granting it.
+
+**Trust model warning:** the requester Lambda itself does not re-verify the caller's identity beyond what API Gateway's `AWS_IAM` authorizer already established. This means anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway entirely and invoke it directly with a forged event, which is equivalent to granting themselves any configured permission set as any user. Keep `lambda:InvokeFunction` on this function restricted to API Gateway's own invocation role — do not grant it to anyone as a general-purpose IAM permission. The Lambda does check that the event's `requestContext.apiId` matches this deployment's API Gateway as a defense-in-depth measure, but that value is not secret (it's visible via `DescribeApi`/Terraform state to anyone with read access), so it only stops an accidental or naive direct invocation, not a deliberate one.
+
+The CLI route isn't currently usable outside the standard `aws` partition: this module's IAM policies hardcode `arn:aws:` throughout, so a GovCloud/China caller's otherwise-valid SSO session fails at the Lambda's own `iam:GetRole` call and is rejected with the same generic message an invalid session gets.
+
 ## Access-requester configuration in SSM Parameter Store
 
 The access-requester Lambda reads its configuration from AWS Systems Manager Parameter Store instead of Lambda environment variables. Lambda environment variables are stored and displayed in plaintext, so the Slack bot token and signing secret used to be readable by anyone holding `lambda:GetFunctionConfiguration`. The module now writes them as `SecureString` parameters that are encrypted at rest with KMS, and grants the Lambda a scoped `ssm:GetParametersByPath` permission to read them.
@@ -490,6 +499,8 @@ ssm_parameter_kms_key_id = null
 ```
 
 The Lambda loads the parameters once per cold start. To make configuration changes take effect immediately, the module publishes a new Lambda version whenever any parameter version changes, which forces a cold start. `LOG_LEVEL` remains an environment variable because the logger is initialised before the configuration is loaded.
+
+The CLI access-request settings (`CLI_EXPECTED_ACCOUNT_ID`, `CLI_SSO_ROLE_NAME_PREFIX`, `CLI_EXPECTED_API_ID`) are written to Parameter Store alongside the rest of the configuration, and only when `enable_access_requester_cli` is on.
 
 # Deployment and Usage
 
@@ -510,6 +521,15 @@ ecr_owner_account_id = "<example_account_id>"
 ```
 
 GitHub CI of this repository pre-builds the requester and revoker lambda Docker images on every release and push them to FivexL's private ECR. Users can use these pre-built Docker images to build lambdas.
+
+### Releasing a new module version
+
+The image only gets built once, as a side effect of publishing a GitHub Release — nothing builds it in advance, and nothing rebuilds it retroactively for an existing release. Get the order wrong and consumers who apply with defaults either fail to find the image or silently keep pulling the previous version:
+
+1. Merge to `main` first — the release is built from whatever `main` has at release time.
+2. Bump `ecr_repo_tag`'s default in `vars.tf` to the version you're about to release (e.g. `"4.4.0"`), and merge that too.
+3. Publish a GitHub Release on `main` tagged with that exact same version (a bare `X.Y.Z`, no `elevator-` prefix — that namespace is reserved for the separate [CLI binary release](cmd/elevator/README.md)). Publishing is what triggers `build_docker.yml`, which builds and pushes the `requester-X.Y.Z`/`revoker-X.Y.Z`/`attribute-syncer-X.Y.Z` images to ECR.
+4. Only after that workflow finishes does `ecr_repo_tag`'s new default actually resolve to a real image. Until then, anyone applying with defaults against a pre-release `main` would fail to find it — this is why step 2 and step 3's tag must match exactly, and why step 3 must happen promptly after step 2 merges.
 
 ECR is private for the following reasons:
 
@@ -838,6 +858,7 @@ settings:
 | <a name="input_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#input\_attribute\_syncer\_lambda\_name) | Name for the attribute syncer Lambda function. | `string` | `"attribute-syncer"` | no |
 | <a name="input_aws_sns_topic_subscription_email"></a> [aws\_sns\_topic\_subscription\_email](#input\_aws\_sns\_topic\_subscription\_email) | value for the email address to subscribe to the SNS topic | `string` | `""` | no |
 | <a name="input_cache_enabled"></a> [cache\_enabled](#input\_cache\_enabled) | Enable caching of AWS accounts and permission sets in S3. If set to false, caching is disabled but the S3 bucket will still be created for future config storage. | `bool` | `true` | no |
+| <a name="input_cli_sso_role_name_prefix"></a> [cli\_sso\_role\_name\_prefix](#input\_cli\_sso\_role\_name\_prefix) | Required prefix on a CLI caller's assumed-role name for the request to be accepted as an SSO-provisioned session. | `string` | `"AWSReservedSSO_"` | no |
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | `[]` | no |
 | <a name="input_config_bucket_kms_key_arn"></a> [config\_bucket\_kms\_key\_arn](#input\_config\_bucket\_kms\_key\_arn) | ARN of the KMS key to use for config S3 bucket encryption. If not provided, uses AES256 encryption. | `string` | `null` | no |
 | <a name="input_config_bucket_name"></a> [config\_bucket\_name](#input\_config\_bucket\_name) | Name of the S3 bucket for storing configuration and cache data (accounts, permission sets, and future config files) | `string` | `"sso-elevator-config"` | no |
@@ -845,7 +866,8 @@ settings:
 | <a name="input_create_lambda_url"></a> [create\_lambda\_url](#input\_create\_lambda\_url) | If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future<br/>If false, Lambda url will be deleted. | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
-| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.3.1"` | no |
+| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.4.0"` | no |
+| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true (and create\_api\_gateway is also true), adds the POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |
 | <a name="input_event_brige_check_on_inconsistency_rule_name"></a> [event\_brige\_check\_on\_inconsistency\_rule\_name](#input\_event\_brige\_check\_on\_inconsistency\_rule\_name) | DEPRECATED: Use event\_bridge\_check\_on\_inconsistency\_rule\_name instead. This variable contains a typo and will be removed in a future version. | `string` | `"sso-elevator-check-on-inconsistency"` | no |
@@ -858,7 +880,7 @@ settings:
 | <a name="input_log_level"></a> [log\_level](#input\_log\_level) | value for the log level | `string` | `"INFO"` | no |
 | <a name="input_logs_retention_in_days"></a> [logs\_retention\_in\_days](#input\_logs\_retention\_in\_days) | The number of days you want to retain log events in the log group for both Lambda functions and API Gateway. | `number` | `365` | no |
 | <a name="input_max_permissions_duration_time"></a> [max\_permissions\_duration\_time](#input\_max\_permissions\_duration\_time) | Maximum duration (in hours) for permissions granted by Elevator. Max number - 48 hours.<br/>  Due to Slack's dropdown limit of 100 items, anything above 48 hours will cause issues when generating half-hour increments<br/>  and Elevator will not display more then 48 hours in the dropdown. | `number` | `24` | no |
-| <a name="input_permission_duration_list_override"></a> [permission\_duration\_list\_override](#input\_permission\_duration\_list\_override) | An explicit list of duration values to appear in the drop-down menu users use to select how long to request permissions for.<br/>  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes<br/>  must be between 0-59, the number of hours can be any number.<br/>  If this variable is set, the max\_permission\_duration\_time is ignored. | `list(string)` | `[]` | no |
+| <a name="input_permission_duration_list_override"></a> [permission\_duration\_list\_override](#input\_permission\_duration\_list\_override) | An explicit list of duration values to appear in the drop-down menu users use to select how long to request permissions for.<br/>  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes<br/>  must be between 0-59, the number of hours can be any number.<br/>  If this variable is set, the max\_permission\_duration\_time is ignored.<br/>  Note for the CLI (enable\_access\_requester\_cli): the CLI is not restricted to these specific entries the way the Slack dropdown<br/>  is -- it accepts any whole number of minutes up to the highest value in this list, treating the list as a ceiling rather than<br/>  an exact set of allowed durations. For example, an override of ["00:30", "08:00"] lets the CLI request any duration from 1<br/>  minute up to 8 hours, not just those two values. | `list(string)` | `[]` | no |
 | <a name="input_request_expiration_hours"></a> [request\_expiration\_hours](#input\_request\_expiration\_hours) | After how many hours should the request expire? If set to 0, the request will never expire. | `number` | `8` | no |
 | <a name="input_requester_lambda_name"></a> [requester\_lambda\_name](#input\_requester\_lambda\_name) | value for the requester lambda name | `string` | `"access-requester"` | no |
 | <a name="input_requester_ssm_parameter_path"></a> [requester\_ssm\_parameter\_path](#input\_requester\_ssm\_parameter\_path) | SSM Parameter Store path prefix holding the access-requester lambda configuration. The lambda reads every parameter under this path at cold start. | `string` | `"/sso-elevator/access-requester/config"` | no |
@@ -896,6 +918,8 @@ settings:
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
 | <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
+| <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR\_ENDPOINT). null unless enable\_access\_requester\_cli is also true. |
+| <a name="output_requester_api_execution_arn_cli"></a> [requester\_api\_execution\_arn\_cli](#output\_requester\_api\_execution\_arn\_cli) | The execute-api ARN for the CLI's access-request route, for building the execute-api:Invoke IAM policy CLI callers need (e.g. as the policy's Resource, optionally narrowed from */* to <stage>/POST). null unless enable\_access\_requester\_cli is also true. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END_TF_DOCS -->
 

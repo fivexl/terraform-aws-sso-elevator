@@ -41,4 +41,6 @@ No inputs.
 | ---- | ----------- |
 | <a name="output_aws_sso_elevator_lambda_function_url"></a> [aws\_sso\_elevator\_lambda\_function\_url](#output\_aws\_sso\_elevator\_lambda\_function\_url) | n/a |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The URL to invoke the Lambda function |
+| <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | Pass this to `elevator configure --endpoint` (or set as ELEVATOR\_ENDPOINT). |
+| <a name="output_requester_api_execution_arn_cli"></a> [requester\_api\_execution\_arn\_cli](#output\_requester\_api\_execution\_arn\_cli) | Use this to build the execute-api:Invoke IAM policy CLI callers need. |
 <!-- END_TF_DOCS -->

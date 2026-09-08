@@ -1,7 +1,10 @@
 import datetime
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
+import access_control
 import entities
 from access_control import (
     AccessRequestDecision,
@@ -1014,3 +1017,94 @@ def test_make_and_excute_approve_request_decision(
     decision = make_decision_on_approve_request(**test_cases_for_approve_request_decision["in"])
     if decision.grant is not True:
         assert execute_decision(decision=decision, **execute_decision_info) is False
+
+
+def test_execute_decision_grants_against_verified_user_id_for_cli_requests_without_reresolving_email(execute_decision_info):
+    """Regression test for the UserId-threading gap: a CLI request's
+    identity is verified once, at submission time, against a specific
+    UserId (cli_auth.extract_identity, cross-checked again by
+    handle_cli_access_request's email round-trip) -- execute_decision must
+    grant against that exact UserId, not re-resolve requester.email through
+    a second, independent Identity Store lookup at approval time that could
+    disagree with the one actually verified (a directory change in between,
+    or a primary-email lookup that legitimately falls through to a
+    different person via the secondary-domain fallback). Verified by
+    asserting get_user_principal_id_by_email is never even called when a
+    CLI verified_user_id is supplied, and that the account assignment and
+    audit entry are both created against that exact UserId."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    verified_user_id = "u-verified-from-cli-session"
+
+    with (
+        patch.object(
+            access_control.sso,
+            "describe_sso_instance",
+            return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+        ),
+        patch.object(
+            access_control.sso,
+            "get_permission_set_by_name",
+            return_value=SimpleNamespace(
+                arn="arn:aws:sso:::permissionSet/ssoins-1/ps-1", name=execute_decision_info["permission_set_name"]
+            ),
+        ),
+        patch.object(access_control.sso, "get_user_principal_id_by_email") as mock_resolve_by_email,
+        patch.object(
+            access_control.sso, "create_account_assignment_and_wait_for_result", return_value=SimpleNamespace(request_id="req-1")
+        ) as mock_create_assignment,
+        patch.object(access_control.schedule, "schedule_revoke_event"),
+        patch.object(access_control.s3, "log_operation") as mock_log_operation,
+    ):
+        result = execute_decision(
+            decision=decision,
+            request_source="cli",
+            verified_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com",
+            verified_user_id=verified_user_id,
+            **execute_decision_info,
+        )
+
+    assert result is True
+    mock_resolve_by_email.assert_not_called()
+    account_assignment = mock_create_assignment.call_args.args[1]
+    assert account_assignment.user_principal_id == verified_user_id
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.sso_user_principal_id == verified_user_id
+    assert audit_entry.secondary_domain_was_used is False
+
+
+def test_execute_decision_still_resolves_by_email_for_slack_requests(execute_decision_info):
+    """Companion to the test above: a "slack" request (or a "cli" request
+    reconstructed from a pre-existing message with no verified_user_id, i.e.
+    still "NA") has no submission-time-verified UserId to grant against --
+    execute_decision must fall back to the pre-existing email-based
+    resolution unchanged, not silently skip the grant or use a placeholder
+    UserId."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    resolved_user_id = "u-resolved-by-email"
+
+    with (
+        patch.object(
+            access_control.sso,
+            "describe_sso_instance",
+            return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+        ),
+        patch.object(
+            access_control.sso,
+            "get_permission_set_by_name",
+            return_value=SimpleNamespace(
+                arn="arn:aws:sso:::permissionSet/ssoins-1/ps-1", name=execute_decision_info["permission_set_name"]
+            ),
+        ),
+        patch.object(access_control.sso, "get_user_principal_id_by_email", return_value=(resolved_user_id, False)) as mock_resolve_by_email,
+        patch.object(
+            access_control.sso, "create_account_assignment_and_wait_for_result", return_value=SimpleNamespace(request_id="req-1")
+        ) as mock_create_assignment,
+        patch.object(access_control.schedule, "schedule_revoke_event"),
+        patch.object(access_control.s3, "log_operation"),
+    ):
+        result = execute_decision(decision=decision, **execute_decision_info)
+
+    assert result is True
+    mock_resolve_by_email.assert_called_once()
+    account_assignment = mock_create_assignment.call_args.args[1]
+    assert account_assignment.user_principal_id == resolved_user_id

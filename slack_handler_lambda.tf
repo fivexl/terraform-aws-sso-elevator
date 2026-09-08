@@ -47,6 +47,10 @@ module "access_requester_slack_handler" {
   # Only the bootstrap values that are read before the config is loaded stay here:
   # LOG_LEVEL is consumed by config.get_logger() at import time and
   # POWERTOOLS_LOGGER_LOG_EVENT is read by aws-lambda-powertools itself.
+  # The CLI access-request settings (CLI_EXPECTED_ACCOUNT_ID,
+  # CLI_SSO_ROLE_NAME_PREFIX, CLI_EXPECTED_API_ID) are ordinary Config values,
+  # not bootstrap values, so they live in Parameter Store with the rest of the
+  # configuration rather than here.
   environment_variables = {
     LOG_LEVEL                   = var.log_level
     POWERTOOLS_LOGGER_LOG_EVENT = true
@@ -55,12 +59,20 @@ module "access_requester_slack_handler" {
     SSM_CONFIG_VERSION        = local.requester_ssm_config_version
   }
 
-  allowed_triggers = var.create_api_gateway ? {
-    AllowExecutionFromAPIGateway = {
-      service    = "apigateway"
-      source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path}"
-    }
-  } : {}
+  allowed_triggers = merge(
+    var.create_api_gateway ? {
+      AllowExecutionFromAPIGateway = {
+        service    = "apigateway"
+        source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path}"
+      }
+    } : {},
+    var.create_api_gateway && var.enable_access_requester_cli ? {
+      AllowExecutionFromAPIGatewayCli = {
+        service    = "apigateway"
+        source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path_cli}"
+      }
+    } : {}
+  )
 
   create_lambda_function_url = var.create_lambda_url ? true : false
 
@@ -150,7 +162,20 @@ data "aws_iam_policy_document" "slack_handler" {
     effect = "Allow"
     actions = [
       "sso:CreateAccountAssignment",
-      "sso:DescribeAccountAssignmentCreationStatus"
+      "sso:DescribeAccountAssignmentCreationStatus",
+      # Read-only, granted for src/main.py's CLI defense-in-depth check
+      # (sso.has_account_assignment): iam:GetRole (below) only proves a CLI
+      # session's role is genuinely IAM Identity Center-provisioned, not
+      # that this specific user was ever actually assigned this permission
+      # set on this account -- this makes that check redundant rather than
+      # load-bearing, requiring a real account assignment before trusting a
+      # session. Deliberately ListAccountAssignments, not
+      # ListAccountAssignmentsForPrincipal: AWS documents the latter as
+      # callable only from the IAM Identity Center management account, and
+      # this module's own docs recommend deploying in the delegated SSO
+      # administrator account, where that call always fails with
+      # AccessDeniedException.
+      "sso:ListAccountAssignments"
     ]
     resources = [
       "arn:aws:sso:::instance/*",
@@ -158,6 +183,12 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:sso:::account/*"
     ]
   }
+  # iam:GetRole here is also what src/cli_auth.py relies on to verify a CLI
+  # caller's assumed role is genuinely IAM Identity Center-provisioned: the
+  # resource scoping below means a role at any other path 403s on GetRole
+  # rather than returning a (non-matching) real path, so a spoofed role
+  # never gets its metadata read at all. Don't broaden these resources
+  # without checking that function's expectations.
   statement {
     effect = "Allow"
     actions = [
@@ -173,6 +204,11 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"
     ]
   }
+  # identitystore:ListUsers here is also what src/cli_auth.py (via
+  # sso.find_email_by_username) relies on to resolve a CLI caller's
+  # Identity Store username (RoleSessionName) to their real registered
+  # email — RoleSessionName isn't always an email itself (AD-style
+  # usernames, or a long email truncated to its 64-character limit).
   statement {
     effect = "Allow"
     actions = [
@@ -266,16 +302,39 @@ module "http_api" {
     max_age           = 86400
   }
 
-  routes = {
-    "POST ${local.api_resource_path}" : {
-      integration = {
-        uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
-        type = "AWS_PROXY"
+  routes = merge(
+    {
+      "POST ${local.api_resource_path}" : {
+        integration = {
+          uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+          type = "AWS_PROXY"
+        }
+        throttling_burst_limit = var.api_gateway_throttling_burst_limit
+        throttling_rate_limit  = var.api_gateway_throttling_rate_limit
       }
-      throttling_burst_limit = var.api_gateway_throttling_burst_limit
-      throttling_rate_limit  = var.api_gateway_throttling_rate_limit
-    }
-  }
+    },
+    # Same Lambda, same deployment — a second route for the CLI's signed
+    # requests, only added when explicitly enabled (enable_access_requester_cli
+    # defaults to false, so upgrading an existing deployment doesn't silently
+    # add this new AWS_IAM-authorized entry point). AWS_IAM here means API
+    # Gateway itself verifies the caller's SigV4 signature (unlike the Slack
+    # route above, which relies on Slack's own signing secret checked inside
+    # the Lambda), and populates requestContext.authorizer.iam for
+    # main.lambda_handler to read. The Lambda forks on the request path to
+    # decide which of the two to run — see CLI_ACCESS_REQUEST_PATH in main.py.
+    var.enable_access_requester_cli ? {
+      "POST ${local.api_resource_path_cli}" : {
+        integration = {
+          uri                    = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+          type                   = "AWS_PROXY"
+          payload_format_version = "2.0" # routeKey and requestContext.authorizer.iam only exist in 2.0 — see main.py/cli_auth.py
+        }
+        authorization_type     = "AWS_IAM"
+        throttling_burst_limit = var.api_gateway_throttling_burst_limit
+        throttling_rate_limit  = var.api_gateway_throttling_rate_limit
+      }
+    } : {}
+  )
   stage_name         = local.api_stage_name
   create_domain_name = false
   tags               = var.tags
