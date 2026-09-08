@@ -477,8 +477,6 @@ To fix the Security Hub issue when migrating to API Gateway, manually delete the
 ## CLI tool
 Access requests can also be submitted from the command line, without Slack, via the `POST /access-requester-cli` route — signed directly with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. This route is off by default; set `enable_access_requester_cli = true` to add it. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
 
-The image referenced by the default `ecr_repo_tag` predates this route; until a module release ships with CLI support, also set `use_pre_created_image = false` or pin `ecr_repo_tag` to a release that includes it.
-
 Each caller's AWS identity also needs `execute-api:Invoke` permission on this route — without it, API Gateway itself rejects the request with a `403` before the Lambda ever runs. Use the `requester_api_execution_arn_cli` module output as the policy's `Resource` when granting it.
 
 **Trust model warning:** the requester Lambda itself does not re-verify the caller's identity beyond what API Gateway's `AWS_IAM` authorizer already established. This means anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway entirely and invoke it directly with a forged event, which is equivalent to granting themselves any configured permission set as any user. Keep `lambda:InvokeFunction` on this function restricted to API Gateway's own invocation role — do not grant it to anyone as a general-purpose IAM permission. The Lambda does check that the event's `requestContext.apiId` matches this deployment's API Gateway as a defense-in-depth measure, but that value is not secret (it's visible via `DescribeApi`/Terraform state to anyone with read access), so it only stops an accidental or naive direct invocation, not a deliberate one.
@@ -504,6 +502,15 @@ ecr_owner_account_id = "<example_account_id>"
 ```
 
 GitHub CI of this repository pre-builds the requester and revoker lambda Docker images on every release and push them to FivexL's private ECR. Users can use these pre-built Docker images to build lambdas.
+
+### Releasing a new module version
+
+The image only gets built once, as a side effect of publishing a GitHub Release — nothing builds it in advance, and nothing rebuilds it retroactively for an existing release. Get the order wrong and consumers who apply with defaults either fail to find the image or silently keep pulling the previous version:
+
+1. Merge to `main` first — the release is built from whatever `main` has at release time.
+2. Bump `ecr_repo_tag`'s default in `vars.tf` to the version you're about to release (e.g. `"4.4.0"`), and merge that too.
+3. Publish a GitHub Release on `main` tagged with that exact same version (a bare `X.Y.Z`, no `elevator-` prefix — that namespace is reserved for the separate [CLI binary release](cmd/elevator/README.md)). Publishing is what triggers `build_docker.yml`, which builds and pushes the `requester-X.Y.Z`/`revoker-X.Y.Z`/`attribute-syncer-X.Y.Z` images to ECR.
+4. Only after that workflow finishes does `ecr_repo_tag`'s new default actually resolve to a real image. Until then, anyone applying with defaults against a pre-release `main` would fail to find it — this is why step 2 and step 3's tag must match exactly, and why step 3 must happen promptly after step 2 merges.
 
 ECR is private for the following reasons:
 
@@ -838,7 +845,7 @@ settings:
 | <a name="input_create_lambda_url"></a> [create\_lambda\_url](#input\_create\_lambda\_url) | If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future<br/>If false, Lambda url will be deleted. | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
-| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.3.1"` | no |
+| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.4.0"` | no |
 | <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true (and create\_api\_gateway is also true), adds the POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |
