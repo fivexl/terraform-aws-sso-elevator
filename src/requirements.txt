@@ -36,9 +36,9 @@ mypy-boto3-identitystore==1.40.54 \
     --hash=sha256:03d9e2bcf17ce4a4149dfa36685e9ae743534b1a31d8e9575d2e0cbb13676758 \
     --hash=sha256:4b0b9913d046508e558767b48e39f4c911e6866afff9ac00c402bf94888f136e
     # via boto3-stubs
-mypy-boto3-organizations==1.40.55 \
-    --hash=sha256:3fd0191f5802ab88e4518d0df1d29cda29f4958d19c6ae617da7a97813da6f58 \
-    --hash=sha256:6c138f098c993fdead04f5a730346c3a14503b62be468b387519295618a3bb66
+mypy-boto3-organizations==1.43.73 \
+    --hash=sha256:7b3d956d257f73ec3b3d6a7d02ebbdf383ac59ee89bcde743db2af66cbe0d7e6 \
+    --hash=sha256:cfd0117bb0e2fc6b702e21efcf09018eff821201dbbbcef4e4d845771740ac61
     # via boto3-stubs
 mypy-boto3-s3==1.40.26 \
     --hash=sha256:6d055d16ef89a0133ade92f6b4f09603e4acc31a0f5e8f846edf4eb48f17b5a7 \
