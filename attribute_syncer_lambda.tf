@@ -5,7 +5,7 @@
 module "attribute_syncer" {
   count   = var.attribute_sync_enabled ? 1 : 0
   source  = "terraform-aws-modules/lambda/aws"
-  version = "8.1.2"
+  version = "8.8.0"
 
   function_name = var.attribute_syncer_lambda_name
   description   = "Automatically synchronizes users to groups based on their attributes"
