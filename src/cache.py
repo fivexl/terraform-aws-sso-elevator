@@ -52,6 +52,36 @@ class CacheKey:
 
     ACCOUNTS = "accounts.json"
     PERMISSION_SETS_PREFIX = "permission_sets/"
+    USERS_PREFIX = "users/"
+
+
+# IAM Identity Store IDs are documented as "d-" followed by 10 lowercase
+# hex characters, but that's not a versioned public contract -- matched
+# loosely (a bounded alphanumeric/hyphen string) rather than pinned to
+# that exact shape, the same way _validate_arn exists to reject garbage
+# input before it becomes an S3 key, not to enforce AWS's own format.
+IDENTITY_STORE_ID_PATTERN = re.compile(r"^[\w-]{1,64}$")
+
+
+def _validate_identity_store_id(identity_store_id: str) -> str:
+    """Validate and sanitize an Identity Store ID used as part of a cache key.
+
+    Args:
+        identity_store_id: Identity Store ID to validate
+
+    Returns:
+        Validated identity_store_id string
+
+    Raises:
+        ValueError: If the identity_store_id format is invalid
+    """
+    if not isinstance(identity_store_id, str):
+        raise ValueError(f"identity_store_id must be a string, got {type(identity_store_id)}")
+
+    if not IDENTITY_STORE_ID_PATTERN.match(identity_store_id):
+        raise ValueError(f"Invalid identity_store_id format: {identity_store_id}")
+
+    return identity_store_id
 
 
 def _validate_arn(arn: str) -> str:
@@ -290,6 +320,92 @@ def set_cached_permission_sets(
         logger.warning(f"Validation failed when caching permission sets: {e}", extra={"error": str(e)})
     except Exception as e:
         logger.warning(f"Failed to cache permission sets: {e}", extra={"error": str(e)})
+
+
+def get_cached_users(
+    s3_client: S3Client,
+    cache_config: CacheConfig,
+    identity_store_id: str,
+) -> Optional[list[dict[str, Any]]]:
+    """Get cached Identity Store users (raw dicts, the same shape sso.list_users
+    returns under its "Users" key) from S3.
+
+    Args:
+        s3_client: S3 client
+        cache_config: Cache configuration
+        identity_store_id: Identity Store ID (used as part of cache key)
+
+    Returns:
+        List of cached user dicts or None if cache miss
+    """
+    if not cache_config.enabled:
+        logger.debug("Cache is disabled, skipping cache lookup")
+        return None
+
+    try:
+        validated_bucket_name = _validate_bucket_name(cache_config.bucket_name)
+        validated_identity_store_id = _validate_identity_store_id(identity_store_id)
+
+        key = f"{CacheKey.USERS_PREFIX}{validated_identity_store_id}.json"
+
+        response = s3_client.get_object(
+            Bucket=validated_bucket_name,
+            Key=key,
+        )
+
+        users = json.loads(response["Body"].read().decode("utf-8"))
+
+        logger.info(f"Retrieved {len(users)} users from cache")
+        return users
+
+    except s3_client.exceptions.NoSuchKey:
+        logger.info("Cache miss for users - no cached data found")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get cached users: {e}", extra={"error": str(e)})
+        return None
+
+
+def set_cached_users(
+    s3_client: S3Client,
+    cache_config: CacheConfig,
+    identity_store_id: str,
+    users: list[dict[str, Any]],
+) -> None:
+    """Store Identity Store users (raw dicts) in S3 cache.
+
+    Args:
+        s3_client: S3 client
+        cache_config: Cache configuration
+        identity_store_id: Identity Store ID (used as part of cache key)
+        users: List of user dicts to cache
+    """
+    if not cache_config.enabled:
+        logger.debug("Cache is disabled, skipping cache write")
+        return
+
+    try:
+        validated_bucket_name = _validate_bucket_name(cache_config.bucket_name)
+        validated_identity_store_id = _validate_identity_store_id(identity_store_id)
+
+        sanitized_data = _sanitize_json_data(users)
+
+        key = f"{CacheKey.USERS_PREFIX}{validated_identity_store_id}.json"
+
+        s3_client.put_object(
+            Bucket=validated_bucket_name,
+            Key=key,
+            Body=sanitized_data.encode("utf-8"),
+            ContentType="application/json",
+            ServerSideEncryption="AES256",
+        )
+
+        logger.info(f"Cached {len(users)} users")
+
+    except ValueError as e:
+        logger.warning(f"Validation failed when caching users: {e}", extra={"error": str(e)})
+    except Exception as e:
+        logger.warning(f"Failed to cache users: {e}", extra={"error": str(e)})
 
 
 def _compute_data_hash(data: T) -> str:

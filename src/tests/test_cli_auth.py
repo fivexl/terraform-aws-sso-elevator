@@ -84,10 +84,13 @@ def _unrecognized_5xx() -> botocore.exceptions.ClientError:
     )
 
 
-def extract_identity(user_arn: str, identity_store_client=None):
-    """extract_identity always takes an identity store client + id now --
-    this wrapper lets most call sites in this file omit the boilerplate."""
-    return cli_auth.extract_identity(user_arn, identity_store_client, IDENTITY_STORE_ID)
+def extract_identity(user_arn: str, identity_store_client=None, s3_client=None):
+    """extract_identity always takes an identity store client + id + s3
+    client now -- this wrapper lets most call sites in this file omit the
+    boilerplate. s3_client is unused by any test here directly since
+    mock_list_users below patches list_users_with_cache as a whole, but the
+    real signature still needs a value in its place."""
+    return cli_auth.extract_identity(user_arn, identity_store_client, IDENTITY_STORE_ID, s3_client)
 
 
 @pytest.fixture(autouse=True)
@@ -102,12 +105,16 @@ def mock_iam_client():
 
 @pytest.fixture(autouse=True)
 def mock_list_users():
-    """Stubs the Identity Store list_users call extract_identity makes before
-    find_email_by_username -- the returned content doesn't matter here since
-    find_email_by_username itself is separately mocked below, this just
-    stands in for the identity_store_client=None passed by the extract_identity
-    wrapper above."""
-    with patch.object(cli_auth.sso, "list_users", return_value={"Users": []}) as mock_list:
+    """Stubs the cached Identity Store list_users call extract_identity makes
+    before find_email_by_username -- the returned content doesn't matter
+    here since find_email_by_username itself is separately mocked below,
+    this just stands in for the identity_store_client=None/s3_client=None
+    passed by the extract_identity wrapper above. Patches
+    list_users_with_cache as a whole (#193 item 2 added caching), not the
+    raw list_users it wraps -- exercising the real cache-resilience
+    machinery here would mean mocking S3 and threading for no test value,
+    since that machinery is covered on its own in test_cache.py/test_sso.py."""
+    with patch.object(cli_auth.sso, "list_users_with_cache", return_value={"Users": []}) as mock_list:
         yield mock_list
 
 

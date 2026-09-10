@@ -47,6 +47,7 @@ import sso
 
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_s3 import S3Client
 
 # Matches all three real AWS partitions (aws, aws-cn, aws-us-gov) -- a
 # hardcoded "aws" would reject 100% of requests in GovCloud/China with the
@@ -128,7 +129,9 @@ GENERIC_REJECTION = {
 }
 
 
-def extract_identity(user_arn: str, identity_store_client: "IdentityStoreClient", identity_store_id: str) -> tuple[str, str, dict] | None:
+def extract_identity(
+    user_arn: str, identity_store_client: "IdentityStoreClient", identity_store_id: str, s3_client: "S3Client"
+) -> tuple[str, str, dict] | None:
     """Return the requester's real, registered (email, UserId, the full
     list_users() snapshot they were matched against), but only if user_arn is
     an assumed-role session in the expected account, under a role that's
@@ -171,17 +174,26 @@ def extract_identity(user_arn: str, identity_store_client: "IdentityStoreClient"
     # all) work here the same way it already does on the Slack path.
     #
     # This is a full paginated Identity Store scan -- the call on this path
-    # most likely to throttle -- so it gets the same transient-vs-real
-    # distinction _is_sso_provisioned_role's iam:GetRole call already makes:
-    # a throttle/5xx/connectivity failure says nothing about whether the
-    # caller's identity is valid, so it's surfaced as TransientIAMError
-    # (a 503 the CLI can retry) rather than falling through to the generic
-    # exception handler as a 500 plus a Slack post. A non-transient
-    # ClientError (e.g. this Lambda's own IAM policy unexpectedly missing
-    # identitystore:ListUsers) is a real misconfiguration, not something to
-    # silently swallow -- that's left to propagate and page the channel.
+    # most likely to throttle -- so it goes through list_users_with_cache
+    # (#193 item 2), not the raw, uncached list_users: every account/
+    # permission-set catalog lookup on this same path already gets S3-backed
+    # cache resilience, but this call, arguably the most throttle-prone one
+    # here, previously had none at all -- every single CLI request paid for
+    # a fresh scan with no fallback. The remaining try/except below still
+    # matters for a *cold* cache (or caching disabled): list_users_with_cache
+    # only absorbs a throttle/5xx silently when it has cached data to fall
+    # back to, and re-raises the raw error otherwise -- the same
+    # transient-vs-real distinction _is_sso_provisioned_role's iam:GetRole
+    # call already makes: a throttle/5xx/connectivity failure says nothing
+    # about whether the caller's identity is valid, so it's surfaced as
+    # TransientIAMError (a 503 the CLI can retry) rather than falling
+    # through to the generic exception handler as a 500 plus a Slack post.
+    # A non-transient ClientError (e.g. this Lambda's own IAM policy
+    # unexpectedly missing identitystore:ListUsers) is a real
+    # misconfiguration, not something to silently swallow -- that's left to
+    # propagate and page the channel.
     try:
-        list_of_users = sso.list_users(identity_store_client, identity_store_id)
+        list_of_users = sso.list_users_with_cache(identity_store_client, identity_store_id, s3_client, cfg)
     except botocore.exceptions.ClientError as e:
         if _is_transient(e):
             raise TransientIAMError from e

@@ -34,10 +34,12 @@ Downloads the right binary for your OS/arch from GitHub Releases, verifies its c
 ```bash
 git clone https://github.com/fivexl/terraform-aws-sso-elevator.git
 cd terraform-aws-sso-elevator/cmd/elevator
-go build -o elevator .
+go build -ldflags "-X main.version=dev -X main.buildCommit=$(git rev-parse --short HEAD) -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o elevator .
 ```
 
 This is a separate, nested Go module (`cmd/elevator/go.mod`) — the rest of this repo is Python/Terraform, so building the CLI doesn't touch or require anything else in the repo.
+
+A plain `go build -o elevator .` (no `-ldflags`) still works, but leaves `main.version`/`main.buildCommit`/`main.buildDate` at their zero values, so `elevator version` reports `elevator dev (commit none, built unknown)` regardless of what was actually built — the `-ldflags` above are what `.goreleaser.yaml` sets for every published release, so a binary built this way reports something meaningful instead.
 
 ### Verifying a release
 

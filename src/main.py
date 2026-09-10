@@ -106,22 +106,20 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         user_arn = iam_context.get("userArn", "")
         logger.debug("Authorizer IAM userArn", extra={"user_arn": user_arn})
 
-        try:
-            identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id) if user_arn else None
-        except cli_auth.TransientIAMError:
-            # IAM couldn't answer iam:GetRole right now (throttled, a 5xx,
-            # briefly unavailable) -- this says nothing about whether the
-            # caller's identity is valid, so it shouldn't be reported as
-            # GENERIC_REJECTION's "your credentials are invalid", nor paged
-            # to the approvals channel as an unexpected error. A 503 tells
-            # the caller this is worth retrying.
-            logger.warning("Transient IAM error while verifying CLI identity; asking the caller to retry")
-            return _transient_aws_error_response()
-        if not identity:
-            logger.info("Rejected CLI request: could not verify a signed identity with an email")
-            return cli_auth.GENERIC_REJECTION
-        identity_email, identity_user_id, list_of_users = identity
-
+        # Cheap request-body validation (JSON syntax, field presence, reason
+        # length, duration format -- all local, no AWS calls) happens before
+        # cli_auth.extract_identity below, not after (#193 item 1): that
+        # call does an iam:GetRole plus a full paginated
+        # identitystore:ListUsers scan, the single most expensive thing on
+        # this path. A caller sending malformed JSON, a non-object body,
+        # missing fields, or an over-length reason used to still pay for
+        # both AWS calls before getting its 400 -- and since this route's
+        # AWS_IAM authorizer only proves the caller can *sign* a request,
+        # not that they're a legitimate SSO principal, this meant anyone
+        # able to sign a request (not just genuine SSO users) could drive
+        # full Identity Store scans with garbage payloads at the route's
+        # throttle. Validating the body first rejects that for free, before
+        # any AWS call runs at all.
         try:
             body = json.loads(event.get("body") or "{}")
         except json.JSONDecodeError:
@@ -168,13 +166,20 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # in for that field, not just Slack's own 2000: a reason of, say,
         # 1996 characters passed a plain 2000 check but produced a
         # 2004-character field once wrapped, still overflowing.
+        #
+        # Checked against the *escaped* length, not len(reason): escape_mrkdwn
+        # expands "&" to "&amp;" (5x) and "<"/">" to "&lt;"/"&gt;" (4x), and
+        # that's what actually lands in the field -- 399 "&" characters alone
+        # is enough to blow past Slack's 2000-char limit even though the raw
+        # string is nowhere near it, which is exactly what this cap exists to
+        # prevent.
         reason_prefix = "Reason: "
         max_reason_length = 2000 - len(reason_prefix)
-        if len(reason) > max_reason_length:
+        if len(slack_helpers.escape_mrkdwn(reason)) > max_reason_length:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": f"reason must be at most {max_reason_length} characters."}),
+                "body": json.dumps({"message": f"reason must be at most {max_reason_length} characters (after escaping any of & < >)."}),
             }
 
         # A strict, length-bounded digit-string match rather than a bare
@@ -221,6 +226,26 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                     }
                 ),
             }
+
+        # Identity verification (iam:GetRole plus a full paginated
+        # identitystore:ListUsers scan) runs only now, after every cheap,
+        # local check on the body above has already passed -- see the
+        # comment where user_arn is extracted for why.
+        try:
+            identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if user_arn else None
+        except cli_auth.TransientIAMError:
+            # IAM couldn't answer iam:GetRole right now (throttled, a 5xx,
+            # briefly unavailable) -- this says nothing about whether the
+            # caller's identity is valid, so it shouldn't be reported as
+            # GENERIC_REJECTION's "your credentials are invalid", nor paged
+            # to the approvals channel as an unexpected error. A 503 tells
+            # the caller this is worth retrying.
+            logger.warning("Transient IAM error while verifying CLI identity; asking the caller to retry")
+            return _transient_aws_error_response()
+        if not identity:
+            logger.info("Rejected CLI request: could not verify a signed identity with an email")
+            return cli_auth.GENERIC_REJECTION
+        identity_email, identity_user_id, list_of_users = identity
 
         # The Slack modal can't submit a malformed account or an unlisted
         # permission set at all -- both fields are populated selects built
@@ -698,6 +723,30 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     dm_text = f"Your request was approved by <@{approver.id}>. Permissions granted."
     color_coding_emoji = cfg.good_result_emoji
 
+    # Buttons stripped *before* execute_decision runs, not only afterward
+    # with the rest of the outcome (#194 A2): cache_for_dublicate_requests
+    # is per-container in-memory state, so it can't close this window by
+    # itself -- a second approver clicking Approve while
+    # create_account_assignment_and_wait_for_result is still polling can
+    # land in a different, fresh Lambda container that sees an empty cache
+    # and this message's still-live buttons, and runs a second
+    # execute_decision -> schedule_revoke_event for the same request. Once
+    # the buttons are gone there's nothing left for a second click to hit,
+    # regardless of which container it would have landed in. Best-effort:
+    # a Slack hiccup here narrows the closed window rather than eliminating
+    # it, but must not stop the actual grant from being attempted -- the
+    # final chat_update after execute_decision still removes the buttons
+    # for good either way.
+    try:
+        client.chat_update(
+            channel=payload.channel_id,
+            ts=payload.thread_ts,
+            blocks=slack_helpers.remove_blocks(payload.message["blocks"], block_ids=["buttons"]),
+            text=f"<@{approver.id}> is processing this request...",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to strip buttons before granting (best-effort, not re-raised)")
+
     # execute_decision runs before the chat_update/notifications below, not
     # after: the old order recolored the message green and said
     # "Permissions granted" before the grant had actually been attempted,
@@ -950,6 +999,24 @@ def process_access_request(  # noqa: PLR0915, PLR0912
         text = f"An error occurred while granting access: {e}"
         dm_text = text
 
+    # Isolated in its own try, not the first statement inside the shared
+    # best-effort block below (#194 A4): it used to be, so its failure
+    # aborted the thread reply, header chat_update, DM and "granted"
+    # follow-up all at once -- while succeeded (computed from
+    # color_coding_emoji, set above, before any of this) stayed True, so a
+    # CLI caller saw ok:true for a grant nobody was ever actually told
+    # about. Defaults to False (not confirmed in the channel) on failure,
+    # not True: that means the DM-if-not-in-channel fallback below still
+    # fires, so a membership-check hiccup fails toward over-notifying
+    # (an extra DM to someone already in the channel) rather than under-
+    # notifying (skipping the only notification a requester who genuinely
+    # isn't in the channel would see).
+    try:
+        is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to check channel membership; assuming not in channel so the DM fallback still fires")
+        is_user_in_channel = False
+
     # Everything below is notification about an outcome that's already
     # final by this point (execute_decision either succeeded -- access is
     # live -- or failed outright -- nothing was granted, captured as
@@ -962,8 +1029,6 @@ def process_access_request(  # noqa: PLR0915, PLR0912
     # below, after this block, unconditionally) can still make the
     # caller-visible outcome a failure.
     try:
-        is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
-
         logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
         client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
         if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
