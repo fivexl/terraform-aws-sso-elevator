@@ -41,19 +41,19 @@ detect_arch() {
 # keeps CLI release tags out of the module's own vX.Y.Z-less version tags
 # (e.g. "4.3.1") and out of any tag-triggered module workflow.
 validate_version() {
-  # The elevator-v[0-9]*.[0-9]*.[0-9]* shape alone doesn't reject "/" or
-  # "..", since case-pattern "*" matches those like any other character —
-  # e.g. "elevator-v1/../../etc/passwd.0.0" satisfies it. Reject "/"
-  # explicitly first; a real tag never contains one.
-  case "$1" in
-    */*) die "invalid version format: $1 (must not contain '/')" ;;
-  esac
   # grep matches per line, not the whole input -- "$(printf 'garbage\nelevator-v1.2.3')"
   # would pass the anchored check below (its second line matches on its own)
   # even though the value as a whole isn't a clean tag string. curl happens
   # to fail safe on a URL containing a raw newline, but that's incidental,
-  # not something this function should rely on -- reject a newline outright,
-  # the same way "/" is rejected above.
+  # not something this function should rely on -- reject a newline outright.
+  # This check is still load-bearing even with the anchored regex below,
+  # since grep is line-oriented; a standalone "/" rejection here is not
+  # (#194 E3) -- none of the regex's character classes ([0-9A-Za-z-] plus
+  # the literal "." "+" "-" separators) can ever match "/", so a value
+  # containing one already fails that anchored, whole-string match on its
+  # own. A prior version of this function rejected "/" explicitly, before
+  # the match was tightened from a shell case-glob to this real anchored
+  # regex; keeping that check afterward was pure dead code.
   nl='
 '
   case "$1" in
@@ -143,7 +143,15 @@ EOF
 verify_checksum() {
   file="$1"; checksums_file="$2"
   [ -s "$checksums_file" ] || die "checksums.txt is missing or empty — refusing to install unverified"
-  expected=$(grep " $(basename "$file")\$" "$checksums_file" | awk '{print $1}')
+  # An exact field comparison, not a grep regex (#194 E1): the previous
+  # `grep " $(basename "$file")\$"` left "." unescaped, so e.g.
+  # "elevator-darwin-arm64.tar.gz" also matched a line for
+  # "elevator-darwin-arm64Xtar.gz" -- not exploitable against real
+  # GoReleaser output (fixed filenames, and any spurious extra match would
+  # just produce a value that fails the comparison below), but this is
+  # unambiguous by construction rather than relying on the archive name
+  # never containing a regex metacharacter.
+  expected=$(awk -v want="$(basename "$file")" '$2 == want { print $1 }' "$checksums_file")
   [ -n "$expected" ] || die "no checksum entry found for $(basename "$file") — refusing to install unverified"
   if command -v sha256sum >/dev/null 2>&1; then
     actual=$(sha256sum "$file" | awk '{print $1}')
@@ -167,6 +175,15 @@ verify_checksum() {
 # simply being absent, or simply not authenticated -- see below), that's
 # treated as a real integrity failure, the same as a checksum mismatch
 # above.
+#
+# --signer-workflow, not just --repo (#194 C3): --repo alone accepts an
+# attestation signed by *any* workflow in this repo with id-token/
+# attestations: write, not specifically cli-release.yml -- another workflow
+# gaining that permission later (or being compromised) could attest
+# something as this release without this check noticing. Pinning the exact
+# signer workflow path closes that -- only an attestation actually signed
+# by cli-release.yml passes.
+SIGNER_WORKFLOW="${REPO}/.github/workflows/cli-release.yml"
 verify_attestation() {
   file="$1"
   if ! command -v gh >/dev/null 2>&1; then
@@ -185,20 +202,27 @@ verify_attestation() {
     log "note: gh CLI is not authenticated (run 'gh auth login') — skipping build-provenance attestation verification (only the checksum above was verified)"
     return 0
   fi
-  if ! gh attestation verify "$file" --repo "$REPO" >/dev/null 2>&1; then
-    die "build-provenance attestation verification failed for $(basename "$file") — refusing to install (run 'gh attestation verify $file --repo $REPO' for details)"
+  if ! gh attestation verify "$file" --repo "$REPO" --signer-workflow "$SIGNER_WORKFLOW" >/dev/null 2>&1; then
+    die "build-provenance attestation verification failed for $(basename "$file") — refusing to install (run 'gh attestation verify $file --repo $REPO --signer-workflow $SIGNER_WORKFLOW' for details)"
   fi
   log "Verified build-provenance attestation for $(basename "$file")"
 }
 
 # verify_archive_members whitelists tar entries as regular files only,
-# rejecting symlinks so extraction can't be tricked into writing outside the
-# staging directory.
+# rejecting symlinks (and hardlinks -- #194 E2, GNU tar -tv marks these with
+# a leading "h") so extraction can't be tricked into writing outside the
+# staging directory. Not exploitable today given extraction only ever
+# targets one specific named member (see main()'s `tar -xzf ... "$BINARY_NAME"`
+# below) into a directory `-C` already confines it to, and both GNU and BSD
+# tar refuse ".." path segments in members by default regardless -- this is
+# hardening for what this function's own doc comment already claims to do,
+# not a response to a live gap.
 verify_archive_members() {
   archive="$1"
   tar -tvf "$archive" | while IFS= read -r line; do
     case "$line" in
       l*) die "archive contains a symlink entry, refusing to extract: $line" ;;
+      h*) die "archive contains a hardlink entry, refusing to extract: $line" ;;
     esac
   done
 }
@@ -229,8 +253,17 @@ main() {
   # cross-device copy instead of an atomic rename, and an install
   # interrupted mid-copy can leave a truncated binary at the destination.
   mkdir -p "$INSTALL_DIR"
-  work_dir=$(mktemp -d "${INSTALL_DIR}/.${BINARY_NAME}-install.XXXXXX" 2>/dev/null) \
-    || work_dir=$(mktemp -d)
+  if ! work_dir=$(mktemp -d "${INSTALL_DIR}/.${BINARY_NAME}-install.XXXXXX" 2>/dev/null); then
+    # This fallback silently reintroduced exactly the non-atomic-install
+    # risk the comment above exists to prevent (#194 E4): a work_dir outside
+    # INSTALL_DIR's filesystem makes the mv below a cross-device copy
+    # (POSIX mv falls back to copy+unlink when rename(2) returns EXDEV, not
+    # a single atomic rename), so an install interrupted mid-copy can leave
+    # a truncated binary at the destination -- with nothing here saying
+    # that weaker path was actually taken.
+    log "warning: could not create a temp directory inside ${INSTALL_DIR} (unwritable, or on a filesystem that doesn't support this template) — falling back to the system temp directory, which makes the final install step a cross-device copy instead of an atomic rename"
+    work_dir=$(mktemp -d)
+  fi
   trap 'rm -rf "$work_dir"' EXIT
 
   log "Downloading ${BINARY_NAME} ${version} for ${os}/${arch}..."

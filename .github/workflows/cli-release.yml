@@ -46,10 +46,24 @@ jobs:
       contents: read
     steps:
       - name: Refuse a tag outside this workflow's own namespace
+        # A bare elevator-v* prefix check (the previous version of this
+        # step) is weaker than install.sh's own anchored validate_version
+        # regex (#194 E5) -- not exploitable either way (TAG arrives via
+        # env:, not shell-interpolated, so there's no injection angle, and a
+        # malformed ref simply can't exist in git for command injection to
+        # matter), but it did mean a real tag this workflow would happily
+        # build and release (e.g. "elevator-vBOGUS" or "elevator-v1", no
+        # minor/patch) could be one install.sh's own validate_version would
+        # then refuse to let anyone actually install via
+        # ELEVATOR_VERSION=<that tag>. Reusing the identical anchored regex
+        # keeps what this workflow will release and what install.sh will
+        # accept in agreement.
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          case "$TAG" in elevator-v*) ;; *) echo "::error::refusing non-CLI tag $TAG"; exit 1 ;; esac
+          set -eu
+          echo "$TAG" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
+            || { echo "::error::refusing tag outside this workflow's namespace or shape: $TAG (expected elevator-vX.Y.Z, optionally with a -prerelease and/or +build suffix, matching install.sh's own validate_version)"; exit 1; }
       - name: Refuse a ref that isn't actually a tag
         # The shape check above only constrains the *name* -- actions/checkout
         # resolves refs/heads/ before refs/tags/, so a branch literally named
@@ -67,6 +81,44 @@ jobs:
           set -eu
           if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
             echo "::error::$TAG is not an existing tag (a branch or other ref with this name doesn't count)"
+            exit 1
+          fi
+      - name: Refuse a dispatch run whose trigger ref doesn't match the tag's commit
+        # actions/attest-build-provenance (in the goreleaser job) derives the
+        # attestation's own "source" (repo/ref/commit) from this *run's* OIDC
+        # claims -- i.e. github.sha, the commit whatever ref was picked in
+        # the "Run workflow from branch/tag" dropdown resolves to -- not from
+        # what the goreleaser job's checkout step actually checks out
+        # (inputs.tag, per the ref: refs/tags/${{ inputs.tag || ... }} fix
+        # above). GitHub gives this workflow no way to override that (#194
+        # C4): it's derived from unforgeable OIDC claims by design, so it
+        # can't be pointed at an arbitrary historical tag after the fact.
+        # A dispatch run started from a ref other than inputs.tag itself
+        # (main being the default/obvious choice in that dropdown) would
+        # still build and publish the *right* source (the checkout is
+        # correctly pinned to the tag), but its attestation would falsely
+        # claim to have been built from wherever that other ref's HEAD was
+        # at dispatch time. Refusing here forces the operator to actually
+        # select the tag itself in that dropdown, so github.sha genuinely
+        # is the tag's commit and the attestation is accurate.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          object_type=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.type)
+          object_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)
+          if [ "$object_type" = "tag" ]; then
+            # An annotated tag's ref object points at the tag object itself,
+            # not the commit -- dereference one more level to get the
+            # commit sha attest-build-provenance will actually compare against.
+            tag_commit_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" --jq .object.sha)
+          else
+            tag_commit_sha="$object_sha"
+          fi
+          if [ "$tag_commit_sha" != "$TRIGGER_SHA" ]; then
+            echo "::error::This run was dispatched from commit $TRIGGER_SHA, but tag $TAG points at $tag_commit_sha -- select the $TAG tag itself in the \"Run workflow from\" dropdown, not a branch, so the build-provenance attestation reflects the real source"
             exit 1
           fi
 
@@ -101,9 +153,21 @@ jobs:
           sha=$(gh api "repos/fivexl/homebrew-tap/commits/$branch" --jq .sha)
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          # refs/tags/<name>, not the bare name inputs.tag/github.ref_name
+          # resolve to (#194 C1): an unqualified ref given to actions/checkout
+          # is ambiguous if a branch happens to share the tag's exact name --
+          # validate-tag above only proves a *tag* by this name exists, not
+          # that this checkout will actually resolve to it rather than a
+          # same-named branch, and a bare github.ref_name on the push trigger
+          # has the identical ambiguity (it's just the short ref name GitHub
+          # hands the workflow, not proof there's no same-named branch too).
+          # Qualifying the ref removes the ambiguity outright: this can only
+          # ever resolve to the tag, and fails the checkout cleanly if no tag
+          # by this name exists, rather than silently building a branch's
+          # content and publishing it under the tag's name.
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
           # This job never needs git to push anything with its own
           # checkout's credentials -- GoReleaser authenticates to GitHub via
@@ -111,10 +175,11 @@ jobs:
           # .git/config. No reason for those credentials to be persisted on
           # disk here either.
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: cmd/elevator/go.mod
-      - uses: anchore/sbom-action/download-syft@v0 # installs syft, which sboms: in .goreleaser.yaml shells out to
+      # installs syft, which sboms: in .goreleaser.yaml shells out to
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
       # A previous version of this step set GORELEASER_CURRENT_TAG to strip
       # the "elevator-" prefix, meaning to make GoReleaser treat the tag as
       # plain "vX.Y.Z" for version/changelog purposes. Verified locally
@@ -128,7 +193,7 @@ jobs:
       # for everything, at the cost of {{.Version}} (embedded in the binary
       # via -ldflags) being the full "elevator-vX.Y.Z" string rather than a
       # bare "X.Y.Z" — correctness over a cosmetic version string.
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: "~> v2"
           # --skip=validate: GoReleaser's default validation hard-rejects a
@@ -150,15 +215,22 @@ jobs:
       # doesn't depend on) the release's own prerelease/draft state above,
       # since the attestation is tied to the build artifacts and this run,
       # not to whether the release has been promoted yet.
-      - uses: actions/attest-build-provenance@v4
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           # Previously covered only the four archives -- checksums.txt and
           # the SBOMs (dist/*.sbom.json, per sboms.artifacts: archive in
-          # .goreleaser.yaml) are exactly what an attacker would need to
-          # forge undetected: install.sh's authenticity chain is
-          # archive -> checksums.txt, both fetched unauthenticated from the
-          # same release, so an attestation that doesn't also cover
-          # checksums.txt leaves that link unverifiable.
+          # .goreleaser.yaml) are covered too now, though not because
+          # install.sh's own verification actually consumes an attestation
+          # on checksums.txt (#194 documentation fix): install.sh only ever
+          # calls verify_attestation on the downloaded archive itself
+          # (install.sh's main(), `verify_attestation "${work_dir}/${archive_name}"`)
+          # -- checksums.txt is checked by hash comparison against that same
+          # archive (verify_checksum), never by its own attestation. Both
+          # get attested anyway so a security-conscious operator can
+          # manually verify either file's provenance independently
+          # (`gh attestation verify checksums.txt --repo ...`), which is
+          # useful on its own even though install.sh's automated chain
+          # doesn't rely on it.
           subject-path: |
             dist/*.tar.gz
             dist/checksums.txt
@@ -197,9 +269,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - if: matrix.checkout == 'pinned-tag'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          # refs/tags/<name>, not the bare name -- see the identical
+          # comment on the goreleaser job's own checkout above (#194 C1).
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           # This job downloads and executes a freshly-published, arbitrary
           # release binary -- persisting this checkout's GITHUB_TOKEN
           # credentials in .git/config for that binary (or install.sh) to
@@ -207,7 +281,7 @@ jobs:
           # itself never pushes anything.
           persist-credentials: false
       - if: matrix.checkout == 'documented-oneliner'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: main
           persist-credentials: false
@@ -297,7 +371,29 @@ jobs:
             exit 0
           fi
 
-          before_content=$(gh api "repos/fivexl/homebrew-tap/contents/$CASK_PATH?ref=$TAP_SHA_BEFORE" --jq .content 2>/dev/null) || before_content=""
+          # Distinguishes a genuine 404 (the file really didn't exist at
+          # TAP_SHA_BEFORE, so deleting what this run created is the correct
+          # revert) from any other failure -- a network blip, a transient
+          # 5xx, a rate limit (#194 C6). The previous version of this check
+          # collapsed both into the same empty before_content, so a
+          # transient error while fetching a cask that *did* exist before
+          # this run looked identical to "never existed", and this step
+          # would delete a real, stable, pre-existing cask instead of
+          # restoring it -- silently making the outage worse, not
+          # recovering from it. On success gh writes nothing to stderr, so
+          # merging it into before_content here is harmless; on failure
+          # stdout is empty, so before_content ends up holding gh's own
+          # error text instead, which is exactly what the 404 check below
+          # needs to inspect.
+          if ! before_content=$(gh api "repos/fivexl/homebrew-tap/contents/$CASK_PATH?ref=$TAP_SHA_BEFORE" --jq .content 2>&1); then
+            if echo "$before_content" | grep -q "HTTP 404"; then
+              before_content=""
+            else
+              echo "::error::Could not confirm whether $CASK_PATH existed before this run (fetch failed for a reason other than 404): $before_content"
+              echo "::error::Refusing to guess -- not deleting or overwriting $CASK_PATH. Revert it manually once this is investigated."
+              exit 1
+            fi
+          fi
           if [ -z "$before_content" ]; then
             # The file didn't exist before this run created it -- undo the
             # creation, rather than restoring nonexistent prior content.

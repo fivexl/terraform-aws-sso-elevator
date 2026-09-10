@@ -51,8 +51,7 @@ module "access_revoker" {
     SLACK_CHANNEL_ID     = var.slack_channel_id
     SCHEDULE_GROUP_NAME  = var.schedule_group_name
 
-    SSO_INSTANCE_ARN            = local.sso_instance_arn
-    POWERTOOLS_LOGGER_LOG_EVENT = true
+    SSO_INSTANCE_ARN = local.sso_instance_arn
 
     POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
     SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn

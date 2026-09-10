@@ -28,6 +28,17 @@ def execute_decision_info():
         "approver": entities.slack.User(email="email@email", id="123", real_name="123"),
         "requester": entities.slack.User(email="email@email", id="123", real_name="123"),
         "reason": "",
+        # execute_decision no longer defaults these itself (#194 duplication
+        # cleanup): both production call sites always pass them explicitly,
+        # so the only place still relying on a default was this fixture --
+        # baseline "slack"/"NA"/"NA" values here instead, matching what the
+        # removed defaults used to provide. Tests exercising the "cli" path
+        # override these via {**execute_decision_info, ...} rather than a
+        # duplicate keyword argument (passing the same key both via **dict
+        # and explicitly is a TypeError).
+        "request_source": "slack",
+        "verified_arn": "NA",
+        "verified_user_id": "NA",
     }
 
 
@@ -1057,10 +1068,12 @@ def test_execute_decision_grants_against_verified_user_id_for_cli_requests_witho
     ):
         result = execute_decision(
             decision=decision,
-            request_source="cli",
-            verified_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com",
-            verified_user_id=verified_user_id,
-            **execute_decision_info,
+            **{
+                **execute_decision_info,
+                "request_source": "cli",
+                "verified_arn": "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com",
+                "verified_user_id": verified_user_id,
+            },
         )
 
     assert result is True
@@ -1073,12 +1086,14 @@ def test_execute_decision_grants_against_verified_user_id_for_cli_requests_witho
 
 
 def test_execute_decision_still_resolves_by_email_for_slack_requests(execute_decision_info):
-    """Companion to the test above: a "slack" request (or a "cli" request
-    reconstructed from a pre-existing message with no verified_user_id, i.e.
-    still "NA") has no submission-time-verified UserId to grant against --
-    execute_decision must fall back to the pre-existing email-based
-    resolution unchanged, not silently skip the grant or use a placeholder
-    UserId."""
+    """Companion to the test above: a "slack" request has no submission-time
+    -verified UserId to grant against -- execute_decision must fall back to
+    the pre-existing email-based resolution unchanged, not silently skip the
+    grant or use a placeholder UserId. See
+    test_execute_decision_fails_closed_for_a_cli_request_missing_verified_user_id
+    for why a "cli" request with no verified_user_id is handled differently
+    (#194 B6): unlike a "slack" request, it must not silently fall back to
+    this same email-based resolution."""
     decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
     resolved_user_id = "u-resolved-by-email"
 
@@ -1108,3 +1123,49 @@ def test_execute_decision_still_resolves_by_email_for_slack_requests(execute_dec
     mock_resolve_by_email.assert_called_once()
     account_assignment = mock_create_assignment.call_args.args[1]
     assert account_assignment.user_principal_id == resolved_user_id
+
+
+def test_execute_decision_fails_closed_for_a_cli_request_missing_verified_user_id(execute_decision_info):
+    """Regression test (#194 B6): a request_source="cli" request with
+    verified_user_id still "NA" -- the only way this combination occurs is a
+    pending approval message posted before verified_user_id existed on this
+    field -- must not silently fall back to the email-based resolution
+    "slack" requests use. That fallback includes the secondary-domain
+    fuzzy-match mechanism, which is exactly what the CLI's stricter,
+    submission-time-verified identity path exists to avoid trusting; a
+    message explicitly labeled "Source: CLI" silently using it anyway would
+    defeat the whole point. Verified by asserting the grant is refused
+    (raises) before either get_user_principal_id_by_email or
+    create_account_assignment_and_wait_for_result is ever called -- nothing
+    is granted through the weaker mechanism, not even accidentally."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+
+    with (
+        patch.object(
+            access_control.sso,
+            "describe_sso_instance",
+            return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+        ),
+        patch.object(
+            access_control.sso,
+            "get_permission_set_by_name",
+            return_value=SimpleNamespace(
+                arn="arn:aws:sso:::permissionSet/ssoins-1/ps-1", name=execute_decision_info["permission_set_name"]
+            ),
+        ),
+        patch.object(access_control.sso, "get_user_principal_id_by_email") as mock_resolve_by_email,
+        patch.object(access_control.sso, "create_account_assignment_and_wait_for_result") as mock_create_assignment,
+        pytest.raises(ValueError, match="no verified UserId"),
+    ):
+        execute_decision(
+            decision=decision,
+            **{
+                **execute_decision_info,
+                "request_source": "cli",
+                "verified_arn": "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com",
+                "verified_user_id": "NA",
+            },
+        )
+
+    mock_resolve_by_email.assert_not_called()
+    mock_create_assignment.assert_not_called()

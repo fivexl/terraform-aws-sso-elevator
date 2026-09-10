@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -164,6 +166,7 @@ func runRequest(args []string) {
 	reason := fs.String("reason", "", "Reason for the access request (required)")
 	endpointFlag := fs.String("endpoint", "", "SSO Elevator API invoke URL (overrides ELEVATOR_ENDPOINT and the saved config file if set)")
 	region := fs.String("region", "", "AWS region for SigV4 signing (defaults to the region parsed from --endpoint's own hostname if it's an API Gateway default invoke URL, else the resolved AWS config region, falling back to us-east-1)")
+	exitIfHelpRequested(args)
 	fs.Parse(args)
 
 	if fs.NArg() > 0 {
@@ -240,13 +243,19 @@ func runRequest(args []string) {
 		log.Fatalf("sign request: %v", err)
 	}
 
-	fmt.Printf("Credential source: %s\n", creds.Source)
+	// Diagnostics go to stderr, not stdout (#194 D4): stdout is reserved for
+	// printSubmissionResult's actual result, so a caller piping/capturing
+	// just stdout (or redirecting it to /dev/null to keep only a script's
+	// own output) still gets the full failure detail below -- Status,
+	// Location, Body -- on stderr, rather than losing it while only the
+	// terse final log.Fatalf line survives.
+	fmt.Fprintf(os.Stderr, "Credential source: %s\n", creds.Source)
 	// Printed so a custom-domain wrong-region 403 (SignatureDoesNotMatch)
 	// is actually diagnosable -- resolveSigningRegion's fallback chain isn't
 	// visible anywhere else, and a custom domain doesn't get the free
 	// region hint an API Gateway default invoke URL's hostname gives.
-	fmt.Printf("Signing region: %s\n", resolvedRegion)
-	fmt.Printf("POST %s\n\n", endpoint)
+	fmt.Fprintf(os.Stderr, "Signing region: %s\n", resolvedRegion)
+	fmt.Fprintf(os.Stderr, "POST %s\n\n", endpoint)
 
 	httpClient := &http.Client{Timeout: requestTimeout, CheckRedirect: doNotFollowRedirects}
 	resp, err := sendWithConnectRetry(httpClient, req)
@@ -275,15 +284,15 @@ func runRequest(args []string) {
 	}
 
 	if resp.StatusCode >= 300 {
-		fmt.Printf("Status: %s\n", resp.Status)
+		fmt.Fprintf(os.Stderr, "Status: %s\n", resp.Status)
 		if loc := resp.Header.Get("Location"); loc != "" {
 			// doNotFollowRedirects stops here specifically so a signed
 			// request is never replayed automatically -- printing where it
 			// would have gone is what makes that stop diagnosable instead
 			// of just a bare, unexplained non-2xx status.
-			fmt.Printf("Location: %s\n", loc)
+			fmt.Fprintf(os.Stderr, "Location: %s\n", loc)
 		}
-		fmt.Printf("Body:\n%s\n", string(respBody))
+		fmt.Fprintf(os.Stderr, "Body:\n%s\n", string(respBody))
 		log.Fatalf("request failed with status %s", resp.Status)
 	}
 
@@ -296,21 +305,29 @@ func runRequest(args []string) {
 // already be sitting in the Lambda, and retrying could submit a duplicate
 // access request (and a duplicate auto-grant, if the caller self-approves).
 func sendWithConnectRetry(client *http.Client, req *http.Request) (*http.Response, error) {
-	var lastErr error
 	for attempt := 1; attempt <= maxConnectAttempts; attempt++ {
 		resp, err := client.Do(req)
 		if err == nil {
 			return resp, nil
 		}
-		lastErr = err
+		// The loop always returns from right here on the last attempt (or
+		// on any non-dial error before that): !isDialError(err) ||
+		// attempt == maxConnectAttempts is unconditionally true by then, so
+		// nothing after this loop is ever reached (#194 D3) -- a
+		// since-removed `lastErr` variable and a `return nil, lastErr`
+		// after the loop were dead code golangci-lint didn't catch,
+		// because lastErr was technically "used" in that unreachable
+		// statement.
 		if !isDialError(err) || attempt == maxConnectAttempts {
 			return nil, err
 		}
 		backoff := time.Duration(attempt) * 2 * time.Second
-		fmt.Printf("Connection attempt %d failed (%v), retrying in %s...\n", attempt, err, backoff)
+		fmt.Fprintf(os.Stderr, "Connection attempt %d failed (%v), retrying in %s...\n", attempt, err, backoff)
 		time.Sleep(backoff)
 	}
-	return nil, lastErr
+	// Unreachable: maxConnectAttempts >= 1, so the loop above always
+	// returns on its final iteration. Required only to satisfy the compiler.
+	panic("unreachable")
 }
 
 // isDialError reports whether err is a failure to establish the connection
@@ -318,7 +335,31 @@ func sendWithConnectRetry(client *http.Client, req *http.Request) (*http.Respons
 // (by which point the request may have already reached the Lambda).
 func isDialError(err error) bool {
 	var opErr *net.OpError
-	return errors.As(err, &opErr) && opErr.Op == "dial"
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+	// A TLS handshake failure -- an expired/misconfigured server
+	// certificate, a TLS-inspecting corporate proxy whose CA isn't in the
+	// system trust store, clock skew invalidating the presented
+	// certificate -- happens before any request bytes reach the server,
+	// exactly like a dial failure. But net/http never wraps it as a
+	// *net.OpError with Op == "dial": it comes back as *url.Error with one
+	// of these crypto/tls or crypto/x509 types as the underlying cause
+	// (#194 D2, verified empirically). Without this, such a failure fell
+	// through to the "the request may have already gone through" message
+	// -- for a request that provably never left the machine -- and was
+	// never retried, contrary to what this function's own doc comment and
+	// README.md already claim.
+	var certErr *tls.CertificateVerificationError
+	var hostnameErr x509.HostnameError
+	var unknownAuthorityErr x509.UnknownAuthorityError
+	var certInvalidErr x509.CertificateInvalidError
+	var recordHeaderErr tls.RecordHeaderError
+	return errors.As(err, &certErr) ||
+		errors.As(err, &hostnameErr) ||
+		errors.As(err, &unknownAuthorityErr) ||
+		errors.As(err, &certInvalidErr) ||
+		errors.As(err, &recordHeaderErr)
 }
 
 // printSubmissionResult prints an unambiguous "what happens next" message on
@@ -349,20 +390,31 @@ has been granted.
 
 // parseSubmissionResponse reports whether the server explicitly flagged
 // this request as not actually submitted, despite the 2xx status that got
-// us here, plus the best available message to show for it. OK is a *bool,
-// not bool, so a response that omits "ok" entirely isn't mistaken for an
-// explicit false — only "ok": false is treated as a real failure signal.
+// us here, plus the best available message to show for it. The real server
+// always includes an explicit "ok" field on every 2xx CLI response (see
+// main.py's handle_cli_access_request) -- a 2xx response that isn't valid
+// JSON, or is JSON but omits "ok" entirely, can therefore only mean this
+// request went somewhere other than the real endpoint (a misconfigured
+// --endpoint/ELEVATOR_ENDPOINT hitting the wrong host, a captive portal, a
+// load balancer's own error page, an empty 204), not an ambiguous "probably
+// fine" -- both are now treated as a failure to submit, not silently as
+// success (#194 D1). OK is still a *bool, not bool, purely so an explicit
+// "ok": false is distinguishable from the field being absent (each maps to
+// a different message below), not so absence reads as success.
 func parseSubmissionResponse(respBody []byte) (failed bool, message string) {
 	var parsed struct {
 		OK      *bool  `json:"ok"`
 		Message string `json:"message"`
 	}
 	message = string(respBody)
-	if json.Unmarshal(respBody, &parsed) != nil {
-		return false, message
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return true, fmt.Sprintf("server returned a 2xx response that isn't valid JSON (%v) -- this usually means --endpoint/ELEVATOR_ENDPOINT is pointed at the wrong place, not that the request was submitted: %s", err, message)
 	}
 	if parsed.Message != "" {
 		message = parsed.Message
 	}
-	return parsed.OK != nil && !*parsed.OK, message
+	if parsed.OK == nil {
+		return true, fmt.Sprintf(`server returned a 2xx response with no "ok" field -- this usually means --endpoint/ELEVATOR_ENDPOINT is pointed at the wrong place, not that the request was submitted: %s`, message)
+	}
+	return !*parsed.OK, message
 }

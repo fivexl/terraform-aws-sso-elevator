@@ -168,8 +168,6 @@ func TestParseSubmissionResponse(t *testing.T) {
 	}{
 		{name: "ok true", body: `{"ok":true,"message":"posted for approval"}`, wantFailed: false, wantMessage: "posted for approval"},
 		{name: "ok false", body: `{"ok":false,"message":"duplicate request"}`, wantFailed: true, wantMessage: "duplicate request"},
-		{name: "ok omitted entirely is not treated as false", body: `{"message":"legacy server"}`, wantFailed: false, wantMessage: "legacy server"},
-		{name: "non-json body falls back to the raw body, never flagged failed", body: `not json`, wantFailed: false, wantMessage: "not json"},
 		{name: "json with no message falls back to the raw body", body: `{"ok":true}`, wantFailed: false, wantMessage: `{"ok":true}`},
 	}
 	for _, c := range cases {
@@ -180,6 +178,39 @@ func TestParseSubmissionResponse(t *testing.T) {
 			}
 			if message != c.wantMessage {
 				t.Errorf("message = %q, want %q", message, c.wantMessage)
+			}
+		})
+	}
+}
+
+// TestParseSubmissionResponseFailsClosedForAMisconfiguredEndpoint is a
+// regression test (#194 D1): the real server always includes an explicit
+// "ok" field on every 2xx CLI response, so a 2xx response that isn't valid
+// JSON at all, or is JSON but omits "ok" entirely, can only mean this
+// request went somewhere other than the real endpoint (a misconfigured
+// --endpoint/ELEVATOR_ENDPOINT, a captive portal, a load balancer's own
+// error page, an empty 204) -- not an ambiguous "probably fine". Both used
+// to be reported as success (`✓ Request submitted.`, exit 0), telling
+// automation a request reached the Slack approval workflow when none
+// exists. Both must now be reported as a failure to submit.
+func TestParseSubmissionResponseFailsClosedForAMisconfiguredEndpoint(t *testing.T) {
+	cases := []struct {
+		name              string
+		body              string
+		wantMessageSubstr string
+	}{
+		{name: "ok omitted entirely", body: `{"message":"legacy server"}`, wantMessageSubstr: "legacy server"},
+		{name: "non-json body (e.g. an HTML error page from the wrong host)", body: `not json`, wantMessageSubstr: "not json"},
+		{name: "empty body (e.g. an empty 204)", body: ``, wantMessageSubstr: ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			failed, message := parseSubmissionResponse([]byte(c.body))
+			if !failed {
+				t.Errorf("failed = false, want true -- a misconfigured-endpoint response must not be reported as a successful submission")
+			}
+			if !strings.Contains(message, c.wantMessageSubstr) {
+				t.Errorf("message = %q, want it to contain %q (the raw response body, for diagnosability)", message, c.wantMessageSubstr)
 			}
 		})
 	}
@@ -231,6 +262,43 @@ func TestIsDialError(t *testing.T) {
 	t.Run("nil error is not a dial error", func(t *testing.T) {
 		if isDialError(nil) {
 			t.Error("isDialError(nil) = true, want false")
+		}
+	})
+
+	// Regression test (#194 D2): a TLS handshake failure -- here, a real
+	// server certificate the client doesn't trust, the same failure mode an
+	// untrusted TLS-inspecting corporate proxy or an expired cert produces
+	// -- must be treated as safe to retry, the same as a dial failure,
+	// since no request bytes ever reached the server. This uses a real TLS
+	// server and a real http.Client.Do call, not a hand-constructed error
+	// value, specifically to confirm empirically (not just by type-name
+	// inspection) what error shape net/http actually produces for this
+	// case -- which is exactly what motivated this fix: it's wrapped only
+	// in *url.Error, never in a *net.OpError with Op == "dial".
+	t.Run("a real TLS certificate verification failure is a dial error", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		// Deliberately NOT srv.Client() (which trusts the test server's
+		// cert) -- the default client's transport uses the system trust
+		// store, which will not trust this test server's self-signed cert,
+		// reproducing a real certificate verification failure.
+		_, err := http.DefaultClient.Get(srv.URL)
+		if err == nil {
+			t.Fatal("expected a TLS certificate verification error, got none -- was http.DefaultClient unexpectedly configured to trust the test server?")
+		}
+		if !isDialError(err) {
+			t.Errorf("isDialError(%v) = false, want true for a real TLS certificate verification failure", err)
+		}
+		// Also confirm the premise this fix is based on: net/http really
+		// does NOT wrap this as a *net.OpError with Op == "dial" -- if a
+		// future Go version changed that, the dedicated TLS-error branch
+		// added for this fix would be unreachable dead code, worth knowing.
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			t.Errorf("a TLS certificate verification failure was wrapped as a dial *net.OpError -- the dedicated TLS handling in isDialError may no longer be necessary")
 		}
 	})
 }

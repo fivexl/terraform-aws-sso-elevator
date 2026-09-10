@@ -53,13 +53,13 @@ def _button_click_values(fields: list[dict]) -> dict:
 def test_find_in_fields_optional_returns_none_when_missing(slack_helpers_module):
     sh = slack_helpers_module
     fields = _content_fields()
-    assert sh.ButtonClickedPayload.find_in_fields_optional(fields, "Source") is None
+    assert sh.find_in_fields_optional(fields, "Source") is None
 
 
 def test_find_in_fields_optional_returns_value_when_present(slack_helpers_module):
     sh = slack_helpers_module
     fields = _content_fields(["Source: CLI"])
-    assert sh.ButtonClickedPayload.find_in_fields_optional(fields, "Source") == "CLI"
+    assert sh.find_in_fields_optional(fields, "Source") == "CLI"
 
 
 def test_button_clicked_payload_defaults_to_slack_for_messages_without_source_field(slack_helpers_module):
@@ -101,7 +101,7 @@ def test_find_in_fields_does_not_truncate_a_value_containing_its_own_separator(s
         {"text": "Reason: debugging: INC-42"},
         {"text": "Permission duration: 1h 0m"},
     ]
-    assert sh.ButtonClickedPayload.find_in_fields(fields, "Reason") == "debugging: INC-42"
+    assert sh.find_in_fields(fields, "Reason") == "debugging: INC-42"
 
 
 def test_build_approval_request_message_blocks_omits_source_fields_for_slack(slack_helpers_module):

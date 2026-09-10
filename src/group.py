@@ -181,7 +181,7 @@ def handle_request_for_group_access_submittion(
     except Exception as e:  # noqa: BLE001
         grant_error = e
         logger.exception(
-            "execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome",
+            f"execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome: {e}",
             extra={"decision": decision.dict()},
         )
         color_coding_emoji = cfg.bad_result_emoji
@@ -227,8 +227,8 @@ def handle_request_for_group_access_submittion(
                     channel=requester.id,
                     text="Your request was processed, permissions granted.",
                 )
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to fully post/update notifications about this request's outcome (best-effort, not re-raised)")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to fully post/update notifications about this request's outcome (best-effort, not re-raised): {e}")
 
     if grant_error is not None:
         raise grant_error
@@ -325,8 +325,8 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             blocks=slack_helpers.remove_blocks(payload.message["blocks"], block_ids=["buttons"]),
             text=f"<@{approver.id}> is processing this request...",
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to strip buttons before granting (best-effort, not re-raised)")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to strip buttons before granting (best-effort, not re-raised): {e}")
 
     # execute_decision_on_group_request runs before the chat_update/
     # notifications below, not after: the old order recolored the message
@@ -347,7 +347,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     except Exception as e:  # noqa: BLE001
         grant_error = e
         logger.exception(
-            "execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome",
+            f"execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome: {e}",
             extra={"decision": decision.dict()},
         )
         text = f"An error occurred while granting access: {e}"
@@ -387,8 +387,8 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             text=text,
             thread_ts=payload.thread_ts,
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to fully post/update notifications about this approval's outcome (best-effort, not re-raised)")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to fully post/update notifications about this approval's outcome (best-effort, not re-raised): {e}")
 
     if grant_error is not None:
         raise grant_error

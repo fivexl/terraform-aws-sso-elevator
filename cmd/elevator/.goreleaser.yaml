@@ -74,14 +74,24 @@ sboms:
 
 homebrew_casks:
   - name: elevator
-    # "auto": GoReleaser skips publishing the cask when the tag itself
-    # carries a prerelease indicator (e.g. elevator-v1.0.0-rc1) -- without
-    # this, a release-candidate tag's cask would overwrite the stable
-    # cask fivexl/homebrew-tap's "brew install elevator" resolves to,
-    # since GoReleaser has no other notion of "don't publish this one" for
-    # a channel that isn't itself versioned per-release the way the
-    # GitHub release object is.
-    skip_upload: auto
+    # NOT the built-in "auto" (#194 C5): "auto" skips the cask push only
+    # when GoReleaser's own semver parsing of the tag produces a non-empty
+    # Prerelease field -- but that parser only recognizes an optional bare
+    # "v" prefix, not this project's "elevator-v" one (the same limitation
+    # cli-release.yml's --skip=validate works around elsewhere), so it
+    # fails to parse *any* tag under this scheme, including a genuine
+    # "elevator-v1.0.0-rc1". With validation disabled that failure is
+    # silent -- the Prerelease field comes back empty regardless, "auto"
+    # always sees "not a prerelease", and a release-candidate tag's cask
+    # would overwrite the stable cask fivexl/homebrew-tap's
+    # "brew install elevator" resolves to.
+    #
+    # This template checks the raw tag string directly instead of relying
+    # on that parser: strip the "elevator-" prefix (the same way
+    # cli-release.yml's publication-state job computes MODULE_TAG for the
+    # identical purpose) and skip the push if what's left still contains a
+    # hyphen -- true for "v1.0.0-rc1", false for a plain "v1.0.0".
+    skip_upload: '{{ if contains (trimprefix .Tag "elevator-") "-" }}true{{ else }}false{{ end }}'
     repository:
       owner: fivexl
       name: homebrew-tap

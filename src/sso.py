@@ -163,7 +163,20 @@ def create_account_assignment_and_wait_for_result(client: SSOAdminClient, assign
         result = retry_while(fn, condition=AccountAssignmentStatus.is_in_progress, timeout_seconds=-1)
     if AccountAssignmentStatus.is_failed(result):
         e = errors.AccountAssignmentError("Failed to create account assignment.")
-        logger.exception(e, extra={"status": result})
+        # logger.error, not logger.exception (#194 AGENTS.md convention pass,
+        # missed in the first pass): logger.exception relies on sys.exc_info()
+        # to attach the *currently being handled* exception's traceback, but
+        # e is freshly constructed here, not caught from an active except
+        # block -- there is no real traceback to attach at this point, so
+        # logger.exception here logged an empty/misleading "NoneType: None"
+        # traceback instead of a genuine one. This raise propagates
+        # uncaught up through execute_decision to main.py's/group.py's own
+        # except Exception handlers, which DO run inside a real except
+        # block and correctly get a real traceback when they log this same
+        # exception via logger.exception there -- this call's job is only
+        # to record the structured status detail (extra={"status": result})
+        # that would otherwise be lost, not to be the traceback-bearing log.
+        logger.error(f"Failed to create account assignment: {e}", extra={"status": result})
         raise e
 
     logger.info("Account assignment creation finished successfully.")
@@ -183,7 +196,12 @@ def delete_account_assignment_and_wait_for_result(client: SSOAdminClient, assign
 
     if AccountAssignmentStatus.is_failed(result):
         e = errors.AccountAssignmentError("Failed to delete account assignment.")
-        logger.exception(e, extra={"status": result})
+        # logger.error, not logger.exception -- see the identical comment in
+        # create_account_assignment_and_wait_for_result above (#194 AGENTS.md
+        # convention pass, missed in the first pass): e is freshly
+        # constructed here, not caught from an active except block, so
+        # logger.exception had no real traceback to attach.
+        logger.error(f"Failed to delete account assignment: {e}", extra={"status": result})
         raise e
     logger.info("Account assignment deletion finished successfully.")
     return result
@@ -429,7 +447,22 @@ def find_email_by_username(list_of_users: dict, username: str) -> tuple[str, str
     full paginated scan of the identity store, so a caller making more than one
     lookup against it in the same request (e.g. this plus
     get_user_principal_id_by_email for group-statement resolution) should fetch
-    once and reuse it instead of each lookup re-fetching independently."""
+    once and reuse it instead of each lookup re-fetching independently.
+
+    Known, unconfirmed caveat (#194 B9): this exact-match check is only as
+    trustworthy as the RoleSessionName IAM Identity Center itself generated
+    being unique to one real username. If Identity Center's own truncation
+    or illegal-character substitution for usernames over 64 chars can ever
+    collide two different real usernames onto the same generated session
+    name, this would resolve to whichever of them happens to appear first
+    in list_of_users, not necessarily the actual caller -- something this
+    function has no way to detect or distinguish, since by the time
+    `username` reaches here it's already just a string with no record of
+    which real username it came from. This is flagged as a hypothesis, not
+    a confirmed behavior: it hasn't been verified against a real directory
+    with genuinely long/character-substituted usernames. Deployments using
+    usernames near or over the 64-char limit should confirm this doesn't
+    apply to their directory before relying on it."""
     for user in list_of_users["Users"]:
         if user.get("UserName", "") != username:
             continue
@@ -441,52 +474,57 @@ def find_email_by_username(list_of_users: dict, username: str) -> tuple[str, str
 
 
 def find_user_principal_id_by_email_strict(email: str, list_of_users: dict) -> str | None:
-    try:
-        # Matched case-insensitively (AWS SSO email lookups aren't
-        # case-sensitive), so two different identity store users whose emails
-        # differ only by case are a real possibility, not just a theoretical
-        # one -- e.g. a directory sync writing an alternate email in a
-        # different case than another user's primary. Picking whichever one
-        # happens to come first in list_users' pagination order would grant
-        # access based on iteration order rather than identity, so collect
-        # every match and refuse to guess if there's more than one.
-        matching_user_ids = {
-            user["UserId"]
-            for user in list_of_users["Users"]
-            for user_email in user.get("Emails", [])
-            if user_email.get("Value", "").lower() == email.lower()
-        }
-        if len(matching_user_ids) > 1:
-            logger.error(
-                "Multiple SSO users share this email case-insensitively -- refusing to pick one",
-                extra={"email": email, "candidate_user_ids": sorted(matching_user_ids)},
-            )
-            # Raising here (rather than returning None, as the "not found"
-            # case below does) is deliberate: get_user_principal_id_by_email
-            # treats a None return as "try the next secondary fallback
-            # domain", which for a collision would mean resolving to a
-            # third, unrelated user's email instead of stopping at the
-            # ambiguity -- vars.tf already calls that fallback "STRONGLY
-            # DISCOURAGED", so an ambiguous primary-email lookup must
-            # terminate the whole lookup, not hand it to the fallback.
-            #
-            # AmbiguousSSOUser, not SSOUserNotFound: this is a genuinely
-            # different situation ("more than one user has this email", not
-            # "nobody does"), and errors.py's error_handler gives each its
-            # own, accurate user-facing message -- SSOUserNotFound's
-            # "your AWS SSO email differs from your Slack email" told a user
-            # hitting a collision the opposite of what actually happened
-            # (they *are* in SSO, twice).
-            raise errors.AmbiguousSSOUser(f"Multiple SSO users share the email {email!r} case-insensitively; refusing to pick one")
-        if matching_user_ids:
-            user_id = next(iter(matching_user_ids))
-            logger.info("Found SSO user", extra={"user_id": user_id})
-            return user_id
-        logger.info("User not found", extra={"email": email})
-        return None
-    except errors.AmbiguousSSOUser as e:
-        logger.error("Error while getting user principal id by email", extra={"error": e})
-        raise e
+    # Matched case-insensitively (AWS SSO email lookups aren't
+    # case-sensitive), so two different identity store users whose emails
+    # differ only by case are a real possibility, not just a theoretical
+    # one -- e.g. a directory sync writing an alternate email in a
+    # different case than another user's primary. Picking whichever one
+    # happens to come first in list_users' pagination order would grant
+    # access based on iteration order rather than identity, so collect
+    # every match and refuse to guess if there's more than one.
+    matching_user_ids = {
+        user["UserId"]
+        for user in list_of_users["Users"]
+        for user_email in user.get("Emails", [])
+        if user_email.get("Value", "").lower() == email.lower()
+    }
+    if len(matching_user_ids) > 1:
+        logger.error(
+            "Multiple SSO users share this email case-insensitively -- refusing to pick one",
+            extra={"email": email, "candidate_user_ids": sorted(matching_user_ids)},
+        )
+        # Raising here (rather than returning None, as the "not found"
+        # case below does) is deliberate: get_user_principal_id_by_email
+        # treats a None return as "try the next secondary fallback
+        # domain", which for a collision would mean resolving to a
+        # third, unrelated user's email instead of stopping at the
+        # ambiguity -- vars.tf already calls that fallback "STRONGLY
+        # DISCOURAGED", so an ambiguous primary-email lookup must
+        # terminate the whole lookup, not hand it to the fallback.
+        #
+        # AmbiguousSSOUser, not SSOUserNotFound: this is a genuinely
+        # different situation ("more than one user has this email", not
+        # "nobody does"), and errors.py's error_handler gives each its
+        # own, accurate user-facing message -- SSOUserNotFound's
+        # "your AWS SSO email differs from your Slack email" told a user
+        # hitting a collision the opposite of what actually happened
+        # (they *are* in SSO, twice).
+        #
+        # Not wrapped in a try/except that catches this same exception just
+        # to re-log and re-raise it (#194 AGENTS.md convention pass): that
+        # pattern used to sit here, logging this identical event a second
+        # time under a generic, wrong message ("Error while getting user
+        # principal id by email" -- the name of a different function
+        # entirely) and losing the original traceback via `raise e` instead
+        # of a bare `raise`, for no benefit over just letting this
+        # logger.error call above be the one and only record of it.
+        raise errors.AmbiguousSSOUser(f"Multiple SSO users share the email {email!r} case-insensitively; refusing to pick one")
+    if matching_user_ids:
+        user_id = next(iter(matching_user_ids))
+        logger.info("Found SSO user", extra={"user_id": user_id})
+        return user_id
+    logger.info("User not found", extra={"email": email})
+    return None
 
 
 def get_user_principal_id_by_email(
@@ -504,36 +542,39 @@ def get_user_principal_id_by_email(
     secondary_fallback_email_domains = cfg.secondary_fallback_email_domains or []
     list_of_users = list_users(identity_store_client, identity_store_id)
 
-    try:
-        logger.debug("Attempting to find user by primary email", extra={"email": email})
-        if user_id := find_user_principal_id_by_email_strict(email, list_of_users):
-            return user_id, False
+    # Not wrapped in a try/except Exception that just re-logs and re-raises
+    # (#194 AGENTS.md convention pass): every raise below already has its
+    # own, specific logging right next to it -- SSOUserNotFound's warning
+    # here, AmbiguousSSOUser's error inside find_user_principal_id_by_email_strict
+    # -- so a blanket handler here only double-logged those two under one
+    # generic message, and added nothing for any other exception (e.g. a
+    # real AWS ClientError from list_users above), which propagates to
+    # this function's own callers and is logged there instead.
+    logger.debug("Attempting to find user by primary email", extra={"email": email})
+    if user_id := find_user_principal_id_by_email_strict(email, list_of_users):
+        return user_id, False
 
-        logger.debug(
-            "User not found with primary email, trying secondary domains",
-            extra={"primary_email": email, "secondary_fallback_email_domains": secondary_fallback_email_domains},
-        )
-        first_part, _ = email.split("@", 1)
-        for domain in secondary_fallback_email_domains:
-            secondary_domain_email = first_part + domain
+    logger.debug(
+        "User not found with primary email, trying secondary domains",
+        extra={"primary_email": email, "secondary_fallback_email_domains": secondary_fallback_email_domains},
+    )
+    first_part, _ = email.split("@", 1)
+    for domain in secondary_fallback_email_domains:
+        secondary_domain_email = first_part + domain
 
-            if user_id := find_user_principal_id_by_email_strict(secondary_domain_email, list_of_users):
-                logger.info("Found user using secondary domain", extra={"candidate_email": secondary_domain_email, "original_email": email})
-                logger.debug("User found", extra={"user_id": user_id})
-                return user_id, True
+        if user_id := find_user_principal_id_by_email_strict(secondary_domain_email, list_of_users):
+            logger.info("Found user using secondary domain", extra={"candidate_email": secondary_domain_email, "original_email": email})
+            logger.debug("User found", extra={"user_id": user_id})
+            return user_id, True
 
-        logger.warning(
-            "User was not found in SSO",
-            extra={"original_email": email, "secondary_fallback_email_domains": secondary_fallback_email_domains},
-        )
+    logger.warning(
+        "User was not found in SSO",
+        extra={"original_email": email, "secondary_fallback_email_domains": secondary_fallback_email_domains},
+    )
 
-        raise errors.SSOUserNotFound(
-            f"User with email {email} not found in SSO, secondary_fallback_email_domains: {secondary_fallback_email_domains}"
-        )
-
-    except Exception as e:
-        logger.error("Error while getting user principal id by email", extra={"error": e})
-        raise
+    raise errors.SSOUserNotFound(
+        f"User with email {email} not found in SSO, secondary_fallback_email_domains: {secondary_fallback_email_domains}"
+    )
 
 
 def get_user_emails(client: IdentityStoreClient, identity_store_id: str, user_id: str) -> list[str]:
@@ -643,8 +684,13 @@ def get_groups_from_config(
         logger.debug("Groups", extra={"groups": groups})
         return groups
     except Exception as e:
-        logger.error("Error while getting groups from config", extra={"error": e})
-        raise e
+        # logger.exception, not logger.error(..., extra={"error": e}) --
+        # AGENTS.md requires the exception object actually be logged, not
+        # just its str() in an extra field, and a bare `raise` here (not
+        # `raise e`) preserves the original traceback instead of resetting
+        # it to point at this except block (#194 AGENTS.md convention pass).
+        logger.exception(f"Error while getting groups from config: {e}")
+        raise
 
 
 def add_user_to_a_group(

@@ -9,6 +9,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 )
 
@@ -22,6 +23,12 @@ var (
 )
 
 func main() {
+	// The stdlib log package's default flags prefix every log.Fatal*/
+	// log.Print* line with a date and time (#194 D4) -- expected for a
+	// long-running service's logs, but unusual and noisy for a one-shot
+	// CLI's error output, where the invocation itself already establishes
+	// "when".
+	log.SetFlags(0)
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "help", "-h", "--help":
@@ -36,6 +43,41 @@ func main() {
 		}
 	}
 	runRequest(os.Args[1:])
+}
+
+// exitIfHelpRequested prints the same usage text `elevator help`/`-h`/`--help`
+// does, to the same stream (stdout), and exits 0 if any of those appear
+// anywhere in args -- called by each subcommand before its own FlagSet.Parse.
+//
+// Without this, a `-h`/`-help` that isn't the very first argument (e.g.
+// `elevator --account 123456789012 --help`, or any `elevator configure -h`)
+// never reaches main's own top-level switch at all -- it's parsed by
+// FlagSet.Parse itself, whose built-in handling always writes to
+// fs.Output(), which defaults to stderr unless a FlagSet explicitly
+// overrides it. That produced the same help text on two different streams
+// depending on where in the command line -h/-help happened to appear (#194
+// D5). Genuine flag *errors* (an unknown flag, a missing required value)
+// still go through FlagSet.Parse's own handling on fs.Output() unchanged --
+// only usage requested via -h/-help/--help is intercepted here, so an error
+// mid-parse still reads as an error, on stderr, not usage text on stdout.
+func exitIfHelpRequested(args []string) {
+	if helpRequested(args) {
+		usage(os.Stdout)
+		os.Exit(0)
+	}
+}
+
+// helpRequested reports whether args contains -h, -help, or --help. Split
+// out from exitIfHelpRequested as a pure function purely so it's testable
+// without exercising the os.Exit(0) call.
+func helpRequested(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "-h", "-help", "--help":
+			return true
+		}
+	}
+	return false
 }
 
 // usage is the single source of truth for elevator's help text — reached both

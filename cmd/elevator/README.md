@@ -8,6 +8,8 @@ The normal SSO Elevator flow happens entirely in Slack: you post a request, an a
 
 Your AWS identity also needs `execute-api:Invoke` permission on this route in the account the module is deployed into — typical member-account SSO credentials (e.g. a plain `ReadOnly` session in a different account) will not have it, and you'll see a `403` if it's missing. Check with whoever manages your SSO permission sets if you're not sure you have it.
 
+`execute-api:Invoke` alone is not sufficient, though (#194 documentation fix): the Lambda's own identity check (`src/cli_auth.py`) additionally requires the caller to be an active **IAM Identity Center SSO session, in the deployment account specifically**, whose session name resolves to a **Slack user in this workspace**. Plain IAM users, other-account SSO sessions, and OIDC-federated CI roles (e.g. a GitHub Actions or GitLab CI job's own workload identity) are all rejected regardless of what `execute-api:Invoke` grant they hold, since none of them are IAM Identity Center-provisioned sessions in the first place — this matters especially for the "CI job" use case above, which needs a genuine SSO session available to it (e.g. via `aws sso login` in a runner with that capability), not just an IAM policy grant.
+
 ## Install
 
 Prebuilt binaries only cover macOS and Linux (`.goreleaser.yaml` builds for `goos: [darwin, linux]`, and `install.sh` rejects any other OS). On Windows, use [Build from source](#build-from-source) instead.
@@ -48,8 +50,12 @@ A plain `go build -o elevator .` (no `-ldflags`) still works, but leaves `main.v
 Each release includes an SBOM (`*.sbom.json`, one per archive) and a [GitHub build provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds) tying that exact archive back to the workflow run and commit that produced it — no separate signing key to fetch or trust, since it's backed by GitHub's own OIDC identity. Verify with the [`gh` CLI](https://cli.github.com/):
 
 ```bash
-gh attestation verify elevator-linux-amd64.tar.gz --owner fivexl
+gh attestation verify elevator-linux-amd64.tar.gz \
+  --repo fivexl/terraform-aws-sso-elevator \
+  --signer-workflow fivexl/terraform-aws-sso-elevator/.github/workflows/cli-release.yml
 ```
+
+`--owner fivexl` alone (accepting an attestation from *any* repo in the `fivexl` org) or `--repo` alone (accepting one from *any* workflow in this repo with permission to publish attestations) are both weaker than necessary here — `--signer-workflow` pins verification to the one workflow that actually publishes this release, `cli-release.yml`, the same check `install.sh` itself runs.
 
 ## Configure
 
@@ -80,7 +86,7 @@ elevator --account 123456789012 --permission-set ReadOnly --duration 120 --reaso
 
 Run `elevator --help` for the full flag reference.
 
-**What a successful submission means — and doesn't mean.** A `2xx` response means the request was received and posted into the approval workflow; it does **not** mean access has been granted. Depending on the module's configuration, the request may be granted automatically (if you're a self-approving approver for that account/permission-set combination) or may require someone else to click Approve/Deny in Slack — and the response looks the same either way, since the server can't tell your specific case apart from the response alone. `elevator` does not poll or wait for the final decision; check Slack, or the account's IAM Identity Center assignments, to confirm the actual outcome.
+**What a successful submission means — and doesn't mean.** A `2xx` status alone isn't the whole signal (#194 documentation fix): the server can refuse a request — no approvers configured for that account/permission-set combination, the caller isn't allowed to request it, and similar policy reasons — with `200` and an explicit `{"ok": false, ...}` body, not a `4xx`/`5xx`. `elevator` checks that `ok` field itself and exits non-zero with `request was not submitted: ...` when it's `false`, so an exit code of `0` is what actually means the request was received and posted into the approval workflow — not the raw HTTP status alone. Even a genuine `0`-exit submission does **not** mean access has been granted: depending on the module's configuration, the request may be granted automatically (if you're a self-approving approver for that account/permission-set combination) or may require someone else to click Approve/Deny in Slack — and the response looks the same either way, since the server can't tell your specific case apart from the response alone. `elevator` does not poll or wait for the final decision; check Slack, or the account's IAM Identity Center assignments, to confirm the actual outcome.
 
 **Timeouts and retries.** Each attempt is bounded to 35 seconds. A connection that fails before reaching the server (DNS, refused connection) is retried automatically up to 3 times; a timeout waiting for a response is not retried automatically, since the request may already have reached the Lambda by then — retrying blindly could submit (and possibly auto-grant) the same request twice. If you hit that, check Slack or IAM Identity Center before running the command again.
 

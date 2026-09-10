@@ -151,3 +151,29 @@ func TestLoadConfigReturnsZeroValueWhenFileDoesNotExist(t *testing.T) {
 		t.Errorf("got endpoint %q, want empty", cfg.Endpoint)
 	}
 }
+
+// TestLoadConfigReturnsAnErrorForMalformedJSON is a regression test (#194
+// test gap): loadConfig's malformed-JSON path was previously untested --
+// the one case where a corrupt ~/.elevator/config.json fatals a request,
+// and only when neither --endpoint nor ELEVATOR_ENDPOINT is set (resolveEndpoint's
+// precedence means a caller who always passes --endpoint never touches this
+// path at all). A corrupt file must be reported as an error, not silently
+// treated the same as a missing one (which loadConfig deliberately does
+// return as a zero-value success, per the test above) -- those are
+// different situations: "never configured" versus "configured, but broken".
+func TestLoadConfigReturnsAnErrorForMalformedJSON(t *testing.T) {
+	home := withTempHome(t)
+	configDir := filepath.Join(home, ".elevator")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := loadConfig()
+	if err == nil {
+		t.Fatal("loadConfig with a malformed config file returned no error, want one")
+	}
+}

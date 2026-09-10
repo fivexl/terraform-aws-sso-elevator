@@ -112,6 +112,7 @@ func runConfigure(args []string) {
 	fs := flag.NewFlagSet("elevator configure", flag.ExitOnError)
 	fs.Usage = func() { usage(fs.Output()) }
 	endpoint := fs.String("endpoint", "", "SSO Elevator API invoke URL to save for future commands (required)")
+	exitIfHelpRequested(args)
 	fs.Parse(args)
 
 	if fs.NArg() > 0 {

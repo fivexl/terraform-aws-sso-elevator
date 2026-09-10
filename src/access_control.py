@@ -1,6 +1,6 @@
 import datetime
 from enum import Enum
-from typing import FrozenSet
+from typing import FrozenSet, Literal
 
 import boto3
 
@@ -293,9 +293,14 @@ def execute_decision(  # noqa: PLR0913
     approver: entities.slack.User,
     requester: entities.slack.User,
     reason: str,
-    request_source: str = "slack",
-    verified_arn: str = "NA",
-    verified_user_id: str = "NA",
+    # No defaults (#194 duplication cleanup): both production call sites
+    # (main.py's handle_button_click and process_access_request) always
+    # pass all three explicitly, so a default here was pure unused surface
+    # -- AGENTS.md says not to maintain backward-compatibility shims, and
+    # this wasn't even that, just dead flexibility nothing exercised.
+    request_source: Literal["slack", "cli"],
+    verified_arn: str,
+    verified_user_id: str,
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -304,7 +309,7 @@ def execute_decision(  # noqa: PLR0913
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
-    if request_source == "cli" and verified_user_id != "NA":
+    if request_source == "cli":
         # Grant against the exact UserId the CLI's SigV4-verified session was
         # actually checked against at submission time (cli_auth.extract_identity,
         # cross-checked again by handle_cli_access_request's email round-trip),
@@ -318,6 +323,23 @@ def execute_decision(  # noqa: PLR0913
         # create_account_assignment_and_wait_for_result below fails outright
         # rather than silently substituting a different, currently-resolvable
         # user -- fail closed instead of granting to the wrong person.
+        #
+        # A "cli" request with verified_user_id still "NA" (#194 B6) is not
+        # treated as "no verification available, fall back to the email
+        # lookup" -- that would silently re-enable, for a message explicitly
+        # labeled "Source: CLI", the exact fuzzy email-based resolution
+        # (secondary-domain fallback included) the CLI path exists to avoid
+        # trusting. The only way this combination occurs is a pending
+        # request message posted before verified_user_id existed on this
+        # field; failing closed here means such a request must be
+        # re-submitted after upgrade rather than silently granted through
+        # the weaker mechanism. This is a deliberate, narrow behavior change
+        # from earlier versions, not an oversight.
+        if verified_user_id == "NA":
+            raise ValueError(
+                "CLI-sourced request has no verified UserId to grant against "
+                "(likely a pending request from before this field existed) -- refusing to fall back to email-based resolution."
+            )
         sso_user_principal_id = verified_user_id
         secondary_domain_was_used = False
     else:

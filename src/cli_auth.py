@@ -81,22 +81,6 @@ _SSO_RESERVED_ROLE_PATH_PREFIX = "/aws-reserved/sso.amazonaws.com/"
 
 _iam_client = boto3.Session().client("iam")
 
-# botocore error codes that mean "IAM couldn't answer right now", as opposed
-# to "this role genuinely isn't SSO-provisioned". Conflating the two would
-# tell a legitimate caller their credentials are invalid (GENERIC_REJECTION)
-# during a transient IAM hiccup, when the honest answer is "try again" --
-# see TransientIAMError below.
-_TRANSIENT_IAM_ERROR_CODES = frozenset(
-    {
-        "Throttling",
-        "ThrottlingException",
-        "RequestLimitExceeded",
-        "ServiceUnavailable",
-        "InternalError",
-        "InternalFailure",
-    }
-)
-
 
 class TransientIAMError(Exception):
     """Raised when iam:GetRole fails for a reason that says nothing about
@@ -106,14 +90,6 @@ class TransientIAMError(Exception):
     it fall through to GENERIC_REJECTION's "your credentials are invalid"
     message, or to a generic 500 that pages the approvals channel for what's
     just AWS being temporarily unavailable."""
-
-
-def _is_transient(error: botocore.exceptions.ClientError) -> bool:
-    code = error.response.get("Error", {}).get("Code", "")
-    if code in _TRANSIENT_IAM_ERROR_CODES:
-        return True
-    status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
-    return status >= 500  # noqa: PLR2004
 
 
 GENERIC_REJECTION = {
@@ -195,7 +171,7 @@ def extract_identity(
     try:
         list_of_users = sso.list_users_with_cache(identity_store_client, identity_store_id, s3_client, cfg)
     except botocore.exceptions.ClientError as e:
-        if _is_transient(e):
+        if sso.is_transient_aws_error(e):
             raise TransientIAMError from e
         raise
     except botocore.exceptions.BotoCoreError as e:
@@ -227,7 +203,7 @@ def _is_sso_provisioned_role(role_name: str) -> bool:
     try:
         role = _iam_client.get_role(RoleName=role_name)["Role"]
     except botocore.exceptions.ClientError as e:
-        if _is_transient(e):
+        if sso.is_transient_aws_error(e):
             raise TransientIAMError from e
         # Covers both "no such role" (deleted between assuming it and this
         # call) and "access denied" (this Lambda's own IAM policy already
@@ -236,8 +212,9 @@ def _is_sso_provisioned_role(role_name: str) -> bool:
         return False
     except botocore.exceptions.BotoCoreError as e:
         # A connect/read-timeout or endpoint-resolution failure (no HTTP
-        # response at all, so _is_transient's status-code/error-code check
-        # doesn't apply) says nothing about whether role_name is genuinely
+        # response at all, so is_transient_aws_error's status-code/error-code
+        # check doesn't apply -- it always treats a bare BotoCoreError as
+        # transient) says nothing about whether role_name is genuinely
         # SSO-provisioned, same as a transient ClientError above.
         raise TransientIAMError from e
     return role["Path"].startswith(_SSO_RESERVED_ROLE_PATH_PREFIX)

@@ -16,11 +16,17 @@ jobs:
     # The push-tags trigger above is already scoped to "v*", which never
     # matches an "elevator-v*" CLI release tag. The release:published
     # trigger has no such filter, though -- it fires for ANY release this
-    # repo publishes, including the CLI's, whether that's goreleaser
-    # creating it directly or cli-release.yml's publication-state job
-    # un-drafting/promoting it later. Without this guard, every CLI release
-    # would also rebuild and push these three Lambda images to ECR, tagged
-    # with a meaningless "requester-elevator-vX.Y.Z"-style tag.
+    # repo publishes, including the CLI's (#194 documentation fix: this
+    # fires when GoReleaser's own `release --clean` call in cli-release.yml
+    # first creates the release, since .goreleaser.yaml's release.prerelease
+    # is true but draft is never set -- the release exists non-draft
+    # immediately. cli-release.yml's later publication-state job only edits
+    # that already-published release, `--prerelease=false` --
+    # `gh release edit` fires GitHub's release:edited event, not another
+    # release:published; a release can only be "published" once). Without
+    # this guard, every CLI release would also rebuild and push these three
+    # Lambda images to ECR, tagged with a meaningless
+    # "requester-elevator-vX.Y.Z"-style tag.
     if: github.event_name != 'release' || !startsWith(github.event.release.tag_name, 'elevator-')
 
     steps:
