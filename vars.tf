@@ -22,16 +22,14 @@ variable "ecr_repo_name" {
 variable "ecr_repo_tag" {
   description = "The tag of the image in the ECR repository."
   type        = string
-  # 4.4.0, not 4.3.1: the image at 4.3.1 predates the CLI's requester-Lambda
-  # dispatch branch entirely (git show 4.3.1:src/main.py has no CLI route
-  # handling) -- this default must point at the first module release that
-  # actually contains it, or enable_access_requester_cli=true creates a
-  # route the Lambda can't serve, and CLI requests 401 on Slack-signature
-  # verification instead of reaching the CLI handler. This value must match
-  # the tag of the GitHub Release that ships this change -- build_docker.yml
-  # only builds and pushes an image for a tag once that release is
-  # published, so this default is only real once release 4.4.0 exists.
-  default = "4.4.0"
+  # 4.4.1, not 4.4.0: 4.4.0's CLI route accepted requests but then rejected
+  # every one of them (issue #193 -- a defense-in-depth check required the
+  # requester to already hold the exact access being requested, which no
+  # genuine elevation request ever does). This value must match the tag of
+  # the GitHub Release that ships the fix -- build_docker.yml only builds
+  # and pushes an image for a tag once that release is published, so this
+  # default is only real once release 4.4.1 exists.
+  default = "4.4.1"
 }
 
 variable "use_pre_created_image" {
