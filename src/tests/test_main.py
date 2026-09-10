@@ -66,14 +66,6 @@ def main_module():
     uses the same "req@example.com" identity throughout; the mismatch case
     is exercised on its own, separately.
 
-    get_paginator dispatches by operation name (list_users vs.
-    list_account_assignments) since the shared client backs both calls --
-    a single flat paginate() stub can't serve both shapes at once.
-    list_account_assignments is stubbed to report one real assignment (for
-    the "u-req" identity every test below verifies), since
-    handle_cli_access_request now requires at least one before proceeding
-    -- the empty/no-assignment case is exercised on its own, separately.
-
     organizations.get_accounts_from_config_with_cache and
     sso.get_permission_sets_from_config_with_cache are patched to the fake
     catalog-lookup functions above, rather than left to hit the (mocked)
@@ -103,10 +95,6 @@ def main_module():
                             {"UserId": "u-req", "UserName": "req@example.com", "Emails": [{"Value": "req@example.com", "Primary": True}]}
                         ]
                     }
-                ]
-            elif operation_name == "list_account_assignments":
-                paginator.paginate.return_value = [
-                    {"AccountAssignments": [{"AccountId": "111111111111", "PrincipalId": "u-req", "PrincipalType": "USER"}]}
                 ]
             else:
                 paginator.paginate.return_value = []
@@ -245,74 +233,43 @@ def test_handle_cli_access_request_rejects_untrusted_arn(main_module):
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
-def test_handle_cli_access_request_rejects_identity_with_no_account_assignment(main_module):
-    """Defense-in-depth against round-1 finding #6: iam:GetRole proves
-    role_name is genuinely IAM Identity Center-provisioned, but says nothing
-    about whether this specific user was ever actually assigned anything on
-    this account -- a session under a reserved-path role that's still
-    technically valid but was orphaned (e.g. after every permission set
-    assignment for this user was revoked) must still be rejected."""
+def test_handle_cli_access_request_succeeds_with_no_prior_account_assignment(main_module):
+    """Regression test for issue #193: a genuine elevation request -- the
+    requester currently has *no* SSO account assignment at all for the
+    account/permission-set being requested -- must reach process_access_request,
+    not be rejected. The now-removed has_account_assignment defense-in-depth
+    check required the requester to already hold the exact assignment being
+    requested, which rejected every real elevation request by construction
+    (the entire point of this tool is granting access the caller does not
+    currently have) and only ever passed for a redundant re-request of a
+    still-live grant SSO Elevator had itself just issued. Reproduced live
+    against a real 4.4.0 deployment before this fix: a genuinely
+    unprivileged account/permission-set pair came back 403 GENERIC_REJECTION
+    every time."""
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
-        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "incident response", "duration": "15"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
-    with patch.object(main_module.sso, "has_account_assignment", return_value=False):
-        result = main_module.handle_cli_access_request(event)
-    assert result == main_module.cli_auth.GENERIC_REJECTION
-
-
-def test_handle_cli_access_request_calls_has_account_assignment_with_the_resolved_account_and_permission_set_arn(main_module):
-    """Regression test: has_account_assignment moved from
-    list_account_assignments_for_principal (documented by AWS as callable
-    only from the IAM Identity Center *management* account -- unusable in
-    this module's own recommended delegated-admin deployment) to
-    list_account_assignments (per account + permission set, no such
-    restriction) -- which needs the real permission_set_arn, not just the
-    name, so this pins that has_account_assignment is actually called with
-    the account/permission-set pair the request resolved to, not called
-    before that resolution happens."""
-    event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "x", "duration": "1"},
-        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
-    )
-    with patch.object(main_module.sso, "has_account_assignment", return_value=True) as mock_check:
-        result = main_module.handle_cli_access_request(event)
-    mock_check.assert_called_once_with(
-        main_module.sso_client,
-        main_module.cfg.sso_instance_arn,
-        "u-req",
-        "111111111111",
-        "arn:aws:sso:::permissionSet/ssoins-1/ps-fullorgadmin",
-    )
-    assert result != main_module.cli_auth.GENERIC_REJECTION
-
-
-def test_handle_cli_access_request_returns_503_on_transient_account_assignment_error(main_module):
-    """A throttled/unavailable list_account_assignments says nothing about
-    whether the assignment exists -- it must not be reported as
-    GENERIC_REJECTION's "your credentials are invalid" (403), nor page the
-    approvals channel as an unexpected error (500). A distinguishable 503
-    lets the CLI tell "retry this" apart from both of those."""
-    event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
-        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
-    )
+    fake_requester = MagicMock(id="U_REQ", email="req@example.com")
+    fake_decision = SimpleNamespace(reason=main_module.access_control.DecisionReason.RequiresApproval)
     with (
-        patch.object(main_module.sso, "has_account_assignment", side_effect=main_module.sso.TransientSSOError),
-        patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
+        patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
+        patch.object(main_module, "process_access_request", return_value=(fake_decision, True)) as mock_process,
     ):
         result = main_module.handle_cli_access_request(event)
-    assert result["statusCode"] == 503
-    mock_post_message.assert_not_called()
+
+    mock_process.assert_called_once()
+    assert result != main_module.cli_auth.GENERIC_REJECTION
+    assert result["statusCode"] == 200
+    assert json.loads(result["body"])["ok"] is True
 
 
 def test_handle_cli_access_request_returns_503_on_transient_account_catalog_error(main_module):
     """Regression test: get_accounts_from_config_with_cache and
     get_permission_sets_from_config_with_cache are cache-backed, but that
     only shields a *warm* cache -- with caching disabled or a cold cache, a
-    throttle propagates the raw botocore error. Like the has_account_assignment
-    transient case above, this must come back as a retryable 503, not the
-    blanket handler's 500 plus a Slack post."""
+    throttle propagates the raw botocore error. This must come back as a
+    retryable 503, not the blanket handler's 500 plus a Slack post."""
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",

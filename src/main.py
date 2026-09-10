@@ -197,9 +197,8 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # exactly what the comment above says this strict match exists to
         # avoid on an authorization-relevant field.
         #
-        # Checked before the account/permission-set catalog lookups below
-        # (and before has_account_assignment further down), not after: those
-        # two lookups are themselves expensive -- organizations:ListAccounts
+        # Checked before the account/permission-set catalog lookups below,
+        # not after: those two lookups are themselves expensive -- organizations:ListAccounts
         # or sso:ListPermissionSets plus one sso:DescribePermissionSet per
         # entry, all behind a per-route throttle any SSO principal in the
         # org can drive at 1 rps sustained -- and a malformed duration is
@@ -273,35 +272,24 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "permission_set must be a permission set this deployment is configured for."}),
             }
-        permission_set_arn = real_permission_sets[permission_set_name].arn
-
-        # Defense-in-depth against round-1 finding #6 (session name not
-        # bound to any real SSO account assignment): iam:GetRole (inside
-        # extract_identity) proves role_name is genuinely IAM Identity
-        # Center-provisioned, but says nothing about whether this specific
-        # user was ever actually assigned this permission set on this
-        # account -- a session under a reserved-path role that's still
-        # technically valid but was orphaned (e.g. after this exact
-        # assignment was revoked) would otherwise still pass. Placed here,
-        # after catalog resolution, rather than right after identity
-        # verification: has_account_assignment needs the real
-        # permission_set_arn to query list_account_assignments (a
-        # per-account-and-permission-set call, not a principal-wide one --
-        # see its docstring for why), and that's only available once the
-        # caller's permission_set_name has already been resolved against
-        # the real catalog above.
-        try:
-            has_assignment = sso.has_account_assignment(sso_client, cfg.sso_instance_arn, identity_user_id, account_id, permission_set_arn)
-        except sso.TransientSSOError:
-            logger.warning("Transient AWS error while checking the account assignment; asking the caller to retry")
-            return _transient_aws_error_response()
-        if not has_assignment:
-            logger.warning(
-                "Rejected CLI request: verified identity has no SSO account assignment for this account/permission set",
-                extra={"user_id": identity_user_id, "account_id": account_id, "permission_set_arn": permission_set_arn},
-            )
-            return cli_auth.GENERIC_REJECTION
-
+        # No "does the caller already hold this exact assignment" check here
+        # -- issue #193: that defense-in-depth check (round-1 finding #6)
+        # required the requester to already have the specific account/
+        # permission-set pair they were requesting, which rejects every
+        # genuine elevation request by construction (the whole point of this
+        # tool is granting access the caller does not currently have). It
+        # only ever passed for a redundant re-request of a still-live grant
+        # SSO Elevator had itself just issued. Removed rather than rescoped:
+        # a correct principal-wide "do they have any real assignment
+        # anywhere" check needs sso-admin:ListAccountAssignmentsForPrincipal,
+        # which round-3 already established doesn't work from this module's
+        # own recommended delegated-admin deployment topology, and any
+        # per-account variant has the same "rejects legitimate first-time
+        # access" problem this one did. The identity is still verified by
+        # SigV4 + AWS_IAM, iam:GetRole's reserved-path check (round-1 #6's
+        # own conclusion: AWS itself blocks non-Identity-Center role
+        # creation there), the session name resolving to a real Identity
+        # Store user, and the email round-trip cross-check below.
         try:
             requester = slack_helpers.get_user_by_email(app.client, identity_email)
         except slack_sdk.errors.SlackApiError:
