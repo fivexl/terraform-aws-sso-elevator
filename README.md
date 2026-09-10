@@ -483,6 +483,25 @@ Each caller's AWS identity also needs `execute-api:Invoke` permission on this ro
 
 The CLI route isn't currently usable outside the standard `aws` partition: this module's IAM policies hardcode `arn:aws:` throughout, so a GovCloud/China caller's otherwise-valid SSO session fails at the Lambda's own `iam:GetRole` call and is rejected with the same generic message an invalid session gets.
 
+## Access-requester configuration in SSM Parameter Store
+
+The access-requester Lambda reads its configuration from AWS Systems Manager Parameter Store instead of Lambda environment variables. Lambda environment variables are stored and displayed in plaintext, so the Slack bot token and signing secret used to be readable by anyone holding `lambda:GetFunctionConfiguration`. The module now writes them as `SecureString` parameters that are encrypted at rest with KMS, and grants the Lambda a scoped `ssm:GetParametersByPath` permission to read them.
+
+The module creates the parameters for you from the same input variables as before, so no action is required when upgrading. Two variables control where they live and how they are encrypted:
+
+```hcl
+# Path prefix the parameters are written to and the lambda reads from
+requester_ssm_parameter_path = "/sso-elevator/access-requester/config"
+
+# Optional customer managed KMS key for the SecureString parameters.
+# Defaults to the AWS managed alias/aws/ssm key.
+ssm_parameter_kms_key_id = null
+```
+
+The Lambda loads the parameters once per cold start. To make configuration changes take effect immediately, the module publishes a new Lambda version whenever any parameter version changes, which forces a cold start. `LOG_LEVEL` remains an environment variable because the logger is initialised before the configuration is loaded.
+
+The CLI access-request settings (`CLI_EXPECTED_ACCOUNT_ID`, `CLI_SSO_ROLE_NAME_PREFIX`, `CLI_EXPECTED_API_ID`) are written to Parameter Store alongside the rest of the configuration, and only when `enable_access_requester_cli` is on.
+
 # Deployment and Usage
 
 The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
@@ -808,6 +827,8 @@ settings:
 | [aws_scheduler_schedule_group.one_time_schedule_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule_group) | resource |
 | [aws_sns_topic.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
 | [aws_sns_topic_subscription.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
+| [aws_ssm_parameter.requester_config](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
+| [aws_ssm_parameter.requester_secret](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
 | [null_resource.attribute_sync_validation](https://registry.terraform.io/providers/hashicorp/null/latest/docs/resources/resource) | resource |
 | [random_string.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
@@ -862,6 +883,7 @@ settings:
 | <a name="input_permission_duration_list_override"></a> [permission\_duration\_list\_override](#input\_permission\_duration\_list\_override) | An explicit list of duration values to appear in the drop-down menu users use to select how long to request permissions for.<br/>  Each entry in the list should be formatted as "hh:mm", e.g. "01:30" for an hour and a half. Note that while the number of minutes<br/>  must be between 0-59, the number of hours can be any number.<br/>  If this variable is set, the max\_permission\_duration\_time is ignored.<br/>  Note for the CLI (enable\_access\_requester\_cli): the CLI is not restricted to these specific entries the way the Slack dropdown<br/>  is -- it accepts any whole number of minutes up to the highest value in this list, treating the list as a ceiling rather than<br/>  an exact set of allowed durations. For example, an override of ["00:30", "08:00"] lets the CLI request any duration from 1<br/>  minute up to 8 hours, not just those two values. | `list(string)` | `[]` | no |
 | <a name="input_request_expiration_hours"></a> [request\_expiration\_hours](#input\_request\_expiration\_hours) | After how many hours should the request expire? If set to 0, the request will never expire. | `number` | `8` | no |
 | <a name="input_requester_lambda_name"></a> [requester\_lambda\_name](#input\_requester\_lambda\_name) | value for the requester lambda name | `string` | `"access-requester"` | no |
+| <a name="input_requester_ssm_parameter_path"></a> [requester\_ssm\_parameter\_path](#input\_requester\_ssm\_parameter\_path) | SSM Parameter Store path prefix holding the access-requester lambda configuration. The lambda reads every parameter under this path at cold start. | `string` | `"/sso-elevator/access-requester/config"` | no |
 | <a name="input_revoker_lambda_name"></a> [revoker\_lambda\_name](#input\_revoker\_lambda\_name) | value for the revoker lambda name | `string` | `"access-revoker"` | no |
 | <a name="input_revoker_post_update_to_slack"></a> [revoker\_post\_update\_to\_slack](#input\_revoker\_post\_update\_to\_slack) | Should revoker send a confirmation of the revocation to Slack? | `bool` | `true` | no |
 | <a name="input_s3_bucket_name_for_audit_entry"></a> [s3\_bucket\_name\_for\_audit\_entry](#input\_s3\_bucket\_name\_for\_audit\_entry) | The name of the S3 bucket that will be used by the module to store logs about every access request.<br/>  If s3\_name\_of\_the\_existing\_bucket is not provided, the module will create a new bucket with this name. | `string` | `"sso-elevator-audit-entry"` | no |
@@ -880,6 +902,7 @@ settings:
 | <a name="input_slack_bot_token"></a> [slack\_bot\_token](#input\_slack\_bot\_token) | value for the Slack bot token | `string` | n/a | yes |
 | <a name="input_slack_channel_id"></a> [slack\_channel\_id](#input\_slack\_channel\_id) | value for the Slack channel ID | `string` | n/a | yes |
 | <a name="input_slack_signing_secret"></a> [slack\_signing\_secret](#input\_slack\_signing\_secret) | value for the Slack signing secret | `string` | n/a | yes |
+| <a name="input_ssm_parameter_kms_key_id"></a> [ssm\_parameter\_kms\_key\_id](#input\_ssm\_parameter\_kms\_key\_id) | KMS key id, ARN or alias used to encrypt the access-requester SecureString parameters. Defaults to the AWS managed alias/aws/ssm key. | `string` | `null` | no |
 | <a name="input_sso_instance_arn"></a> [sso\_instance\_arn](#input\_sso\_instance\_arn) | value for the SSO instance ARN | `string` | `""` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | A map of tags to assign to resources. | `map(string)` | `{}` | no |
 | <a name="input_use_pre_created_image"></a> [use\_pre\_created\_image](#input\_use\_pre\_created\_image) | If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code. | `bool` | `true` | no |
