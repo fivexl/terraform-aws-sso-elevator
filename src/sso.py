@@ -275,15 +275,6 @@ def list_user_account_assignments(
     return account_assignments
 
 
-class TransientSSOError(Exception):
-    """Raised when an sso-admin call in this module fails for a reason that
-    says nothing about whether the thing being checked is actually true --
-    throttling, a 5xx, or a connectivity failure with no HTTP response at
-    all. Mirrors cli_auth.TransientIAMError's purpose for its own calls;
-    kept as a separate type here rather than imported from cli_auth, since
-    cli_auth imports this module and a reverse import would be circular."""
-
-
 def is_transient_aws_error(error: Exception) -> bool:
     """True for a botocore error that says nothing about whether the
     underlying request was valid -- throttling, a 5xx, or a connectivity
@@ -297,56 +288,6 @@ def is_transient_aws_error(error: Exception) -> bool:
         status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
         return status >= 500  # noqa: PLR2004
     return isinstance(error, botocore.exceptions.BotoCoreError)
-
-
-def has_account_assignment(client: SSOAdminClient, instance_arn: str, principal_id: str, account_id: str, permission_set_arn: str) -> bool:
-    """Whether principal_id (a UserId) has a real SSO account assignment for
-    permission_set_arn on account_id -- used as a defense-in-depth check
-    that a verified CLI session actually corresponds to someone with a live
-    assignment, rather than e.g. a reserved-path role that's still valid but
-    was orphaned after this specific assignment was revoked.
-
-    Deliberately list_account_assignments (per account + permission set),
-    not list_account_assignments_for_principal: AWS documents the latter as
-    callable "only from the management account containing your
-    organization instance of IAM Identity Center... not valid for account
-    instances" -- and this module's own docs recommend deploying in the
-    delegated SSO administrator account, where every call would raise
-    AccessDeniedException. list_account_assignments has no such
-    restriction, at the cost of needing the specific permission_set_arn
-    already being requested rather than a principal-wide answer -- which is
-    exactly the pair the caller has resolved by the time this runs.
-
-    An AccessDeniedException here degrades to "skip the check" (logged, not
-    raised, returns True) rather than rejecting or 500ing: this is
-    defense-in-depth on top of the real, statement-based access control
-    downstream, and a misconfigured or unexpectedly-scoped IAM policy for
-    this one read-only call must never be able to take the whole CLI route
-    down. A throttle/5xx/connectivity failure is different -- it says
-    nothing about whether the assignment exists, so it's surfaced as
-    TransientSSOError for the caller to turn into a retryable response,
-    same shape as cli_auth's transient-vs-real distinction for its own
-    calls. Any other error is a genuine, unexpected failure and is left to
-    propagate."""
-    try:
-        paginator = client.get_paginator("list_account_assignments")
-        for page in paginator.paginate(InstanceArn=instance_arn, AccountId=account_id, PermissionSetArn=permission_set_arn):
-            for assignment in page.get("AccountAssignments", []):
-                if assignment.get("PrincipalType") == "USER" and assignment.get("PrincipalId") == principal_id:
-                    return True
-        return False
-    except botocore.exceptions.ClientError as e:
-        if e.response.get("Error", {}).get("Code", "") == "AccessDeniedException":
-            logger.warning(
-                "list_account_assignments was denied -- skipping the account-assignment check rather than blocking the route",
-                extra={"error": str(e)},
-            )
-            return True
-        if is_transient_aws_error(e):
-            raise TransientSSOError from e
-        raise
-    except botocore.exceptions.BotoCoreError as e:
-        raise TransientSSOError from e
 
 
 def parse_permission_set(td: type_defs.DescribePermissionSetResponseTypeDef) -> entities.aws.PermissionSet:
