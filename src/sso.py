@@ -367,6 +367,45 @@ def list_users(client: IdentityStoreClient, identity_store_id: str) -> dict:
     return r
 
 
+def list_users_with_cache(
+    client: IdentityStoreClient,
+    identity_store_id: str,
+    s3_client: S3Client,
+    cfg: config.Config,
+) -> dict:
+    """List all Identity Store users with cache resilience, same shape and
+    resilience contract as list_permission_sets_with_cache above (#193 item
+    2): list_users is a full paginated scan, documented elsewhere
+    in this module as the call on the CLI path most likely to throttle, and
+    unlike the account and permission-set catalogs it used to have no
+    caching at all -- every single CLI request paid for a fresh scan, with
+    no fallback if that scan happened to throttle.
+
+    This function calls both the Identity Store API and S3 cache in parallel.
+    If the API call succeeds, it compares with cached data and updates if different.
+    If the API call fails, it falls back to cached data.
+
+    Args:
+        client: Identity Store client
+        identity_store_id: Identity Store ID
+        s3_client: S3 client for cache
+        cfg: Application configuration
+
+    Returns:
+        dict shaped like list_users' own return value (a "Users" key holding
+        the full list), not the raw cached list directly.
+    """
+    cache_config = cache_module.CacheConfig.from_config(cfg)
+
+    users = cache_module.with_cache_resilience(
+        cache_getter=lambda: cache_module.get_cached_users(s3_client, cache_config, identity_store_id),
+        api_getter=lambda: list_users(client, identity_store_id)["Users"],
+        cache_setter=lambda users: cache_module.set_cached_users(s3_client, cache_config, identity_store_id, users),
+        resource_name="users",
+    )
+    return {"Users": users}
+
+
 def find_email_by_username(list_of_users: dict, username: str) -> tuple[str, str] | None:
     """Look up a user's real, registered email (and their UserId) by their exact
     IAM Identity Center username (the UserName attribute — what IAM Identity

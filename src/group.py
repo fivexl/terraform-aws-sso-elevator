@@ -154,56 +154,91 @@ def handle_request_for_group_access_submittion(
 
     is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
 
-    logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
-    client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
-    if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
-        logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-        client.chat_postMessage(
-            channel=requester.id,
-            text=f"""
-            {dm_text} You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
-            """,
+    # execute_decision_on_group_request runs before every notification below
+    # (#194 A3, mirroring main.py's process_access_request) -- not after,
+    # with the message already recolored to reflect an auto-grant decision.
+    # For ApprovalNotRequired/SelfApproval, text/color_coding_emoji above are
+    # already the "will be approved automatically" / good_result_emoji
+    # wording purely from the *decision*, before the grant has actually been
+    # attempted. Posting any notification before running the real AWS calls
+    # here means a failure (a stale group id, IAM Identity Center throttling,
+    # anything) left every message permanently reading "will be approved
+    # automatically" with no correction. For RequiresApproval, decision.grant
+    # is still False here, so execute_decision_on_group_request's own
+    # `if not decision.grant: return False` makes this a no-op -- this only
+    # changes behavior for the two auto-grant reasons.
+    grant_error: Exception | None = None
+    try:
+        access_control.execute_decision_on_group_request(
+            group=group,
+            permission_duration=request.permission_duration,
+            approver=requester,
+            requester=requester,
+            reason=request.reason,
+            decision=decision,
+            identity_store_id=identity_store_id,
         )
-
-    blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-        blocks=slack_response["message"]["blocks"],
-        color_coding_emoji=color_coding_emoji,
-    )
-    client.chat_update(
-        channel=cfg.slack_channel_id,
-        ts=slack_response["ts"],
-        blocks=blocks,
-        text=text,
-    )
-
-    access_control.execute_decision_on_group_request(
-        group=group,
-        permission_duration=request.permission_duration,
-        approver=requester,
-        requester=requester,
-        reason=request.reason,
-        decision=decision,
-        identity_store_id=identity_store_id,
-    )
-
-    if decision.grant:
-        client.chat_postMessage(
-            channel=cfg.slack_channel_id,
-            text=f"Permissions granted to <@{requester.id}>",
-            thread_ts=slack_response["ts"],
+    except Exception as e:  # noqa: BLE001
+        grant_error = e
+        logger.exception(
+            "execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome",
+            extra={"decision": decision.dict()},
         )
-        if not is_user_in_channel and cfg.send_dm_if_user_not_in_channel:
+        color_coding_emoji = cfg.bad_result_emoji
+        text = f"An error occurred while granting access: {e}"
+        dm_text = text
+
+    # Everything below is best-effort, not re-raised: once the grant has
+    # either succeeded (access is live) or definitively failed (captured as
+    # grant_error above), a Slack API hiccup while posting/updating these
+    # notifications must never be reported as "this failed" on top of a
+    # grant that actually succeeded.
+    try:
+        logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
+        client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
+        if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
+            logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
             client.chat_postMessage(
                 channel=requester.id,
-                text="Your request was processed, permissions granted.",
+                text=f"""
+                {dm_text} You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
+                """,
             )
+
+        blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
+            blocks=slack_response["message"]["blocks"],
+            color_coding_emoji=color_coding_emoji,
+        )
+        client.chat_update(
+            channel=cfg.slack_channel_id,
+            ts=slack_response["ts"],
+            blocks=blocks,
+            text=text,
+        )
+
+        if decision.grant and grant_error is None:
+            client.chat_postMessage(
+                channel=cfg.slack_channel_id,
+                text=f"Permissions granted to <@{requester.id}>",
+                thread_ts=slack_response["ts"],
+            )
+            if not is_user_in_channel and cfg.send_dm_if_user_not_in_channel:
+                client.chat_postMessage(
+                    channel=requester.id,
+                    text="Your request was processed, permissions granted.",
+                )
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to fully post/update notifications about this request's outcome (best-effort, not re-raised)")
+
+    if grant_error is not None:
+        raise grant_error
 
 
 cache_for_dublicate_requests = {}
 
 
 @handle_errors
-def handle_group_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse:  # type: ignore # noqa: PGH003 ARG001
+def handle_group_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # type: ignore # noqa: PGH003 ARG001 PLR0915
     logger.info("Handling button click")
     payload = slack_helpers.ButtonGroupClickedPayload.model_validate(body)
     logger.info("Button click payload", extra={"payload": payload})
@@ -273,35 +308,89 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 
     text = f"Permissions granted to <@{requester.id}> by <@{approver.id}>."
     dm_text = f"Your request was approved by <@{approver.id}>. Permissions granted."
+
+    # Buttons stripped *before* execute_decision_on_group_request runs, not
+    # only afterward together with the rest of the outcome (#194 A2/A3):
+    # cache_for_dublicate_requests is per-container in-memory state, so it
+    # can't close this window by itself -- a second approver clicking
+    # Approve while the grant is still in progress can land in a different,
+    # fresh Lambda container that sees an empty cache and this message's
+    # still-live buttons. Best-effort: a Slack hiccup here narrows the
+    # closed window rather than eliminating it, but must not stop the
+    # actual grant from being attempted.
+    try:
+        client.chat_update(
+            channel=payload.channel_id,
+            ts=payload.thread_ts,
+            blocks=slack_helpers.remove_blocks(payload.message["blocks"], block_ids=["buttons"]),
+            text=f"<@{approver.id}> is processing this request...",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to strip buttons before granting (best-effort, not re-raised)")
+
+    # execute_decision_on_group_request runs before the chat_update/
+    # notifications below, not after: the old order recolored the message
+    # green and said "Permissions granted" before the grant had actually
+    # been attempted, so a failure here left that message incorrect with no
+    # visible correction. Same shape as main.py's handle_button_click.
+    grant_error: Exception | None = None
+    try:
+        access_control.execute_decision_on_group_request(
+            decision=decision,
+            group=sso.describe_group(identity_store_id, payload.request.group_id, identity_store_client),
+            permission_duration=payload.request.permission_duration,
+            approver=approver,
+            requester=requester,
+            reason=payload.request.reason,
+            identity_store_id=identity_store_id,
+        )
+    except Exception as e:  # noqa: BLE001
+        grant_error = e
+        logger.exception(
+            "execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome",
+            extra={"decision": decision.dict()},
+        )
+        text = f"An error occurred while granting access: {e}"
+        dm_text = text
+
+    # The dedup cache is cleared once the outcome is decided (success or a
+    # caught failure), not only on the success path -- otherwise a failed
+    # execute_decision_on_group_request left this exact request permanently
+    # stuck reporting "already in progress" to any retry.
+    cache_for_dublicate_requests.clear()
+
     blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
         blocks=payload.message["blocks"],
-        color_coding_emoji=cfg.good_result_emoji,
+        color_coding_emoji=cfg.bad_result_emoji if grant_error is not None else cfg.good_result_emoji,
     )
-
     blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
     blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
-    client.chat_update(
-        channel=payload.channel_id,
-        ts=payload.thread_ts,
-        blocks=blocks,
-        text=text,
-    )
 
-    access_control.execute_decision_on_group_request(
-        decision=decision,
-        group=sso.describe_group(identity_store_id, payload.request.group_id, identity_store_client),
-        permission_duration=payload.request.permission_duration,
-        approver=approver,
-        requester=requester,
-        reason=payload.request.reason,
-        identity_store_id=identity_store_id,
-    )
-    cache_for_dublicate_requests.clear()
-    if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
-        logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-        client.chat_postMessage(channel=requester.id, text=dm_text)
-    return client.chat_postMessage(
-        channel=payload.channel_id,
-        text=text,
-        thread_ts=payload.thread_ts,
-    )
+    # Best-effort from here, not re-raised: once execute_decision_on_group_request
+    # has either succeeded (access is live) or definitively failed (captured
+    # as grant_error above), a Slack API hiccup while posting/updating these
+    # notifications must never be reported as "this failed" on top of a
+    # grant that actually succeeded.
+    result: SlackResponse | None = None
+    try:
+        client.chat_update(
+            channel=payload.channel_id,
+            ts=payload.thread_ts,
+            blocks=blocks,
+            text=text,
+        )
+        if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
+            logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
+            client.chat_postMessage(channel=requester.id, text=dm_text)
+        result = client.chat_postMessage(
+            channel=payload.channel_id,
+            text=text,
+            thread_ts=payload.thread_ts,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to fully post/update notifications about this approval's outcome (best-effort, not re-raised)")
+
+    if grant_error is not None:
+        raise grant_error
+
+    return result

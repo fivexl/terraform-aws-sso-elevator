@@ -207,7 +207,11 @@ def test_handle_cli_access_request_rejects_missing_api_id(main_module):
 
 
 def test_handle_cli_access_request_rejects_missing_authorizer_context(main_module):
-    event = _cli_request_event(body={"account": "111111111111"})
+    # A complete, otherwise-valid body -- not just {"account": ...} -- since
+    # body validation now runs before the identity check (#193 item 1); an
+    # incomplete body here would be rejected by that check instead of the
+    # authorizer-missing check this test means to isolate.
+    event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
     result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
@@ -218,7 +222,7 @@ def test_handle_cli_access_request_rejects_explicit_null_authorizer(main_module)
     applies its default when the key is absent, so "authorizer": null
     used to reach .get("iam") on None and raise, turning this into a 500
     with a Slack post instead of the same clean 403 a missing key gets."""
-    event = _cli_request_event(body={"account": "111111111111"})
+    event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
     event["requestContext"]["authorizer"] = None
     result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
@@ -371,6 +375,22 @@ def test_handle_cli_access_request_rejects_non_object_json_body(main_module):
     assert result["statusCode"] == 400
 
 
+def test_handle_cli_access_request_rejects_malformed_body_without_resolving_identity(main_module):
+    """Regression test (#193 item 1): cheap request-body validation must run
+    before cli_auth.extract_identity, not after -- that call does an
+    iam:GetRole plus a full paginated identitystore:ListUsers scan, and a
+    caller sending a malformed body used to pay for both before getting its
+    400. Verified directly: extract_identity must never even be called for
+    a body this broken, regardless of what a real call to it would have
+    resolved."""
+    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
+    event["body"] = "{not json"
+    with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
+        result = main_module.handle_cli_access_request(event)
+    mock_extract_identity.assert_not_called()
+    assert result["statusCode"] == 400
+
+
 def test_handle_cli_access_request_rejects_oversized_reason(main_module):
     """Slack's section-block text fields cap at 2000 chars; an oversized
     reason used to reach chat_postMessage unbounded, get rejected with
@@ -392,6 +412,22 @@ def test_handle_cli_access_request_rejects_reason_that_only_overflows_once_wrapp
     chat_postMessage and unwinding to the generic 500 handler."""
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x" * 1993, "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_rejects_reason_that_only_overflows_once_escaped(main_module):
+    """Regression test (#194 A1): the cap used to check len(reason) directly,
+    but the field actually posted is escape_mrkdwn(reason), and escape_mrkdwn
+    expands "&" to "&amp;" -- 5x length. 400 "&" characters is only 400 raw
+    characters, nowhere near the old 1992-char raw-length cap, but expands
+    to a 2000-char escaped string -- 2008 once wrapped in "Reason: ", over
+    Slack's real 2000-char field limit. The old check let this straight
+    through to chat_postMessage."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "&" * 400, "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
     )
     result = main_module.handle_cli_access_request(event)
@@ -911,6 +947,54 @@ def test_process_access_request_posts_granted_message_on_success(main_module):
     assert any("permissions granted" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
 
 
+def test_process_access_request_still_notifies_when_channel_membership_check_fails(main_module):
+    """Regression test (#194 A4): check_if_user_is_in_channel used to be the
+    first statement inside the single shared best-effort try block, so its
+    failure aborted the thread reply, header chat_update, DM, and
+    "Permissions granted" follow-up all at once -- while succeeded (derived
+    from color_coding_emoji, set before any of this) stayed True. A CLI
+    caller would see ok:true for a grant nobody was ever actually told
+    about, and the request would sit granted-but-silently-pending in Slack.
+    A channel-membership-check hiccup must not suppress every other
+    notification."""
+    request = main_module.slack_helpers.RequestForAccess(
+        account_id="111111111111",
+        permission_set_name="FullOrgAdmin",
+        reason="testing",
+        requester_slack_id="U_REQ",
+        permission_duration=main_module.timedelta(hours=1),
+    )
+    requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ts": "123.456", "message": {"blocks": []}}
+    client.conversations_members.side_effect = RuntimeError("Slack is briefly unavailable")
+    client.users_info.return_value = MagicMock(
+        data={"user": {"id": "U_REQ", "profile": {"email": "email@domen.com"}, "real_name": "Test User"}}
+    )
+
+    fake_decision = main_module.access_control.AccessRequestDecision(
+        grant=True,
+        reason=main_module.access_control.DecisionReason.SelfApproval,
+        based_on_statements=frozenset(),
+        approvers=frozenset(),
+    )
+    fake_account = main_module.entities.aws.Account(id="111111111111", name="test-account")
+
+    with (
+        patch.object(main_module.access_control, "make_decision_on_access_request", return_value=fake_decision),
+        patch.object(main_module.organizations, "describe_account", return_value=fake_account),
+        patch.object(main_module.slack_helpers.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
+        patch.object(main_module.access_control, "execute_decision", return_value=True),
+    ):
+        result, succeeded = main_module.process_access_request(request=request, requester=requester, client=client)
+
+    assert succeeded is True
+    # The header chat_update and the "Permissions granted" follow-up must
+    # both still happen despite the channel-membership check failing.
+    assert client.chat_update.call_args_list, "header chat_update should still have run"
+    assert any("permissions granted" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
+
+
 def test_process_access_request_reports_not_succeeded_when_requires_approval_finds_no_approvers_in_slack(main_module):
     """Regression test: a RequiresApproval decision whose approver emails
     don't resolve to any real Slack user (find_approvers_in_slack returns an
@@ -1047,6 +1131,50 @@ def test_handle_button_click_posts_granted_message_on_success(main_module):
     assert "permissions granted" in update_call.kwargs["text"].lower()
     assert result is not None
     assert main_module.cache_for_dublicate_requests == {}
+
+
+def test_handle_button_click_strips_buttons_before_execute_decision_runs(main_module):
+    """Regression test (#194 A2): the buttons must be removed via their own
+    chat_update *before* execute_decision runs, not only afterward together
+    with the rest of the outcome. cache_for_dublicate_requests can't close
+    this window by itself -- it's per-container in-memory state, so a second
+    approver clicking Approve while execute_decision (specifically
+    create_account_assignment_and_wait_for_result's polling) is still
+    running can land in a different, fresh Lambda container that sees an
+    empty cache and this message's still-live buttons. Verified by having
+    execute_decision itself assert, at the moment it's called, that
+    chat_update was already invoked with blocks that no longer contain the
+    buttons block."""
+    body = _button_click_body()
+    # The shared fixture's mock message has no "buttons" block at all, which
+    # would make the "buttons are gone" assertion below trivially true
+    # regardless of whether removal actually ran -- add one so the test
+    # genuinely proves something was stripped, not just that nothing was
+    # ever there.
+    body["message"]["blocks"].append({"block_id": "buttons", "elements": []})
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+
+    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
+
+    def _execute_decision_checks_buttons_already_stripped(**_kwargs):
+        assert client.chat_update.call_count >= 1, "buttons should already have been stripped by now"
+        last_call_blocks = client.chat_update.call_args.kwargs["blocks"]
+        assert not any(b.get("block_id") == "buttons" for b in last_call_blocks)
+        return True
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
+        patch.object(main_module.access_control, "execute_decision", side_effect=_execute_decision_checks_buttons_already_stripped),
+    ):
+        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    # Two chat_update calls total: the early button-strip, then the final
+    # outcome update -- not just one at the end.
+    assert client.chat_update.call_count == 2  # noqa: PLR2004
 
 
 def test_handle_button_click_notification_failure_after_a_successful_grant_is_not_reported_as_failure(main_module):

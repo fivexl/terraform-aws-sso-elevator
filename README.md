@@ -455,6 +455,8 @@ resolve the underlying domain mismatch to minimize security exposure.
 
 SSO Elevator will update request message in channel with Warning, if fallback domains are in use.
 
+**Upgrade note (4.4.0+):** if two or more Identity Store users share the same email case-insensitively, every request from any of them now fails outright with a clear "email collision" error, instead of silently resolving to whichever of them happened to come first in Identity Store's own listing order. If your directory has such a collision, requests from the affected users will start failing on upgrade until it's resolved on the Identity Store side.
+
 Notes:
 - SSO Elevator always prioritizes the primary domain from Slack (the Slack user's email) when searching for a user in AWS SSO.
 - SSO Elevator adds a large warning message in Slack if it uses a secondary fallback domain to find a user in AWS SSO.

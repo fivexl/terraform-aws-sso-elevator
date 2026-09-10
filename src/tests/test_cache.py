@@ -294,6 +294,91 @@ class TestSetCachedPermissionSets:
         assert "permission_sets/" in call_args[1]["Key"]
 
 
+@pytest.fixture
+def sample_users():
+    """Sample Identity Store user dicts, the same raw shape sso.list_users
+    returns under its "Users" key -- unlike accounts/permission sets, users
+    aren't cached through a pydantic model."""
+    return [
+        {"UserId": "u-1", "UserName": "alice@example.com", "Emails": [{"Value": "alice@example.com", "Primary": True}]},
+        {"UserId": "u-2", "UserName": "bob@example.com", "Emails": [{"Value": "bob@example.com", "Primary": True}]},
+    ]
+
+
+class TestGetCachedUsers:
+    """Tests for get_cached_users function (#193 item 2)."""
+
+    def test_cache_disabled_returns_none(self, mock_s3_client, cache_config_disabled):
+        """When cache is disabled, should return None without calling S3."""
+        result = cache_module.get_cached_users(mock_s3_client, cache_config_disabled, "d-1234567890")
+
+        assert result is None
+        mock_s3_client.get_object.assert_not_called()
+
+    def test_cache_miss_no_object(self, mock_s3_client, cache_config_enabled):
+        """When object not found in cache, should return None."""
+        mock_s3_client.get_object.side_effect = mock_s3_client.exceptions.NoSuchKey()
+
+        result = cache_module.get_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890")
+
+        assert result is None
+        mock_s3_client.get_object.assert_called_once()
+
+    def test_cache_hit_valid_data(self, mock_s3_client, cache_config_enabled, sample_users):
+        """When cache has valid data, should return the raw user dicts."""
+        body_mock = Mock()
+        body_mock.read.return_value = json.dumps(sample_users).encode("utf-8")
+        mock_s3_client.get_object.return_value = {"Body": body_mock}
+
+        result = cache_module.get_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890")
+
+        assert result == sample_users
+
+    def test_invalid_identity_store_id_returns_none(self, mock_s3_client, cache_config_enabled):
+        """An identity_store_id that fails validation must degrade to a
+        cache miss, the same as any other lookup failure -- not raise and
+        take the whole request down."""
+        result = cache_module.get_cached_users(mock_s3_client, cache_config_enabled, "not valid! id")
+
+        assert result is None
+        mock_s3_client.get_object.assert_not_called()
+
+    def test_generic_exception(self, mock_s3_client, cache_config_enabled):
+        """When generic exception occurs, should return None gracefully."""
+        mock_s3_client.get_object.side_effect = Exception("Something went wrong")
+
+        result = cache_module.get_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890")
+
+        assert result is None
+
+
+class TestSetCachedUsers:
+    """Tests for set_cached_users function (#193 item 2)."""
+
+    def test_cache_disabled_no_write(self, mock_s3_client, cache_config_disabled, sample_users):
+        """When cache is disabled, should not write to S3."""
+        cache_module.set_cached_users(mock_s3_client, cache_config_disabled, "d-1234567890", sample_users)
+
+        mock_s3_client.put_object.assert_not_called()
+
+    def test_successful_write(self, mock_s3_client, cache_config_enabled, sample_users):
+        """When cache is enabled, should write to S3, keyed by identity_store_id."""
+        cache_module.set_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890", sample_users)
+
+        mock_s3_client.put_object.assert_called_once()
+        call_args = mock_s3_client.put_object.call_args
+        assert call_args[1]["Bucket"] == "test-config-bucket"
+        assert call_args[1]["Key"] == "users/d-1234567890.json"
+        assert call_args[1]["ContentType"] == "application/json"
+
+    def test_generic_exception_during_write(self, mock_s3_client, cache_config_enabled, sample_users):
+        """When generic exception occurs during write, should fail gracefully."""
+        mock_s3_client.put_object.side_effect = Exception("Something went wrong")
+
+        # Should not raise exception
+        cache_module.set_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890", sample_users)
+
+
 class TestCacheResilience:
     """Tests for with_cache_resilience function."""
 

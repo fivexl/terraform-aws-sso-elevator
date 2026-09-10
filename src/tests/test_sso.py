@@ -26,6 +26,24 @@ def test_list_users_collects_users_across_pages():
     paginator.paginate.assert_called_once_with(IdentityStoreId="d-1234567890")
 
 
+def test_list_users_with_cache_returns_the_same_shape_as_list_users_when_cache_is_disabled():
+    """Regression test (#193 item 2): list_users_with_cache must return the
+    exact {"Users": [...]} shape list_users itself does, not the raw cached
+    list get_cached_users/set_cached_users deal in -- find_email_by_username
+    and every other caller expect that key. Cache disabled here so the real,
+    un-mocked with_cache_resilience machinery exercises only the API path,
+    not S3."""
+    client = MagicMock()
+    paginator = MagicMock()
+    client.get_paginator.return_value = paginator
+    paginator.paginate.return_value = [{"Users": [{"UserName": "a"}, {"UserName": "b"}]}]
+    cfg = MagicMock(cache_enabled=False, config_bucket_name="unused")
+
+    result = sso.list_users_with_cache(client, "d-1234567890", MagicMock(), cfg)
+
+    assert result == {"Users": [{"UserName": "a"}, {"UserName": "b"}]}
+
+
 def test_find_email_by_username_matches_exact_username():
     """The realistic case this function exists for: RoleSessionName is an
     Identity Store username, not necessarily an email (e.g. an AD
