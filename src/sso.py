@@ -298,7 +298,8 @@ def is_transient_aws_error(error: Exception) -> bool:
     underlying request was valid -- throttling, a 5xx, or a connectivity
     failure with no HTTP response at all. Not specific to any one AWS
     service; the same handful of codes/statuses mean "try again"
-    everywhere, the same way cli_auth._is_transient checks for iam:GetRole."""
+    everywhere, the same way cli_auth's own iam:GetRole call reuses this
+    exact function for the identical check."""
     if isinstance(error, botocore.exceptions.ClientError):
         code = error.response.get("Error", {}).get("Code", "")
         if code in {"Throttling", "ThrottlingException", "RequestLimitExceeded", "ServiceUnavailable", "InternalError", "InternalFailure"}:

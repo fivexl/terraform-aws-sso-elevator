@@ -3,7 +3,7 @@
 
 Replace bucket_name, partition_prefix and you should be good to go
 
-This DDL previously lagged `src/s3.py`'s `AuditEntry` fields (#194 documentation fix) -- `sync_operation`, `matched_attributes`, `sso_user_email` were already being written and landing in S3 unqueryable, and `request_source`/`verified_arn` (added for the CLI access-request path, to tell a CLI-sourced grant apart from a Slack-sourced one in audit history) were missing entirely. `matched_attributes` is declared `string` here as the least-wrong single type: `s3.py` serializes it as the literal string `"NA"` when absent, but as a nested JSON object of matched attribute names to values when present -- querying the populated case will need `json_extract`/similar rather than a plain column read.
+This DDL follows `src/s3.py`'s `AuditEntry` fields: `sync_operation`, `matched_attributes`, and `sso_user_email` come from the attribute-sync path, and `request_source`/`verified_arn` let a CLI-sourced grant be told apart from a Slack-sourced one in audit history. `matched_attributes` is declared `string` here as the least-wrong single type: `s3.py` serializes it as the literal string `"NA"` when absent, but as a nested JSON object of matched attribute names to values when present -- querying the populated case will need `json_extract`/similar rather than a plain column read.
 
 ```
 CREATE EXTERNAL TABLE IF NOT EXISTS sso_elevator_table (
