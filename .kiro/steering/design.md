@@ -15,6 +15,11 @@
 - Use `logger.exception()` instead of `logger.error()` for exceptions
 - Always include the exception object in the log message
 - Example: `logger.exception(f"Text describing what happened: {error}")`
+- Exception: for an exception object that was just constructed rather than
+  caught from an active `except` block (so there is no real traceback for
+  `logger.exception()`'s `sys.exc_info()` to attach — it would log a
+  misleading "NoneType: None" trace instead), use `logger.error()` and note
+  in a comment why there's no active exception context to attach.
 
 ## Configuration Management
 
