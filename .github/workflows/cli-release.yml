@@ -39,17 +39,29 @@ jobs:
     # and re-publish it as a prerelease. The tag-push trigger can't hit
     # this, since tags: ["elevator-v*"] already filters it -- this only
     # guards the dispatch input.
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # gh api below reads whether a ref exists -- contents: read, not {}.
     permissions:
       contents: read
     steps:
       - name: Refuse a tag outside this workflow's own namespace
-        # A bare elevator-v* prefix check (the previous version of this
-        # step) is weaker than install.sh's own anchored validate_version
-        # regex (#194 E5) -- not exploitable either way (TAG arrives via
-        # env:, not shell-interpolated, so there's no injection angle, and a
+        # Runs on both triggers, not gated to workflow_dispatch (#194 E5
+        # residual, found live by Andrey Devyatkin: the two steps below stay
+        # dispatch-only, since they're specifically about validating the
+        # dispatch dropdown's own input, but this shape check applies
+        # equally to a tag push). on.push.tags: ["elevator-v*"] is a glob,
+        # not this anchored regex -- it happily matches a real pushed tag
+        # like "elevator-vBOGUS" or "elevator-v1" (no minor/patch), which
+        # used to skip this job entirely (result: "skipped", not
+        # "failure") and let goreleaser build and publish it anyway, only
+        # for install.sh's own anchored validate_version regex to then
+        # refuse to let anyone actually install it. inputs.tag || github.ref_name
+        # is the same fallback pattern the smoke/publication-state jobs
+        # below already use to read "whichever tag this run is actually
+        # about" independent of trigger. A bare elevator-v* prefix check
+        # (an earlier version of this step) was weaker than this regex --
+        # not exploitable either way (TAG arrives via env:, not
+        # shell-interpolated, so there's no injection angle, and a
         # malformed ref simply can't exist in git for command injection to
         # matter), but it did mean a real tag this workflow would happily
         # build and release (e.g. "elevator-vBOGUS" or "elevator-v1", no
@@ -59,12 +71,16 @@ jobs:
         # keeps what this workflow will release and what install.sh will
         # accept in agreement.
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -eu
           echo "$TAG" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
             || { echo "::error::refusing tag outside this workflow's namespace or shape: $TAG (expected elevator-vX.Y.Z, optionally with a -prerelease and/or +build suffix, matching install.sh's own validate_version)"; exit 1; }
       - name: Refuse a ref that isn't actually a tag
+        # Dispatch-only: a tag push is, by definition, already a real tag --
+        # this guards against the dispatch dropdown's "Run workflow from"
+        # picking a branch that merely shares a tag's name.
+        #
         # The shape check above only constrains the *name* -- actions/checkout
         # resolves refs/heads/ before refs/tags/, so a branch literally named
         # e.g. "elevator-v2" satisfies it and gets checked out by the
@@ -74,6 +90,7 @@ jobs:
         # checked out — potentially overwriting the module's actual latest
         # release. This asserts a real tag by that exact name exists,
         # independent of how the later checkout's ref happens to resolve.
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
@@ -84,6 +101,11 @@ jobs:
             exit 1
           fi
       - name: Refuse a dispatch run whose trigger ref doesn't match the tag's commit
+        # Dispatch-only, like the step above: on a tag push, github.sha is
+        # already the tag's own commit by construction, so this comparison
+        # (and its reliance on inputs.tag, which is empty on that trigger)
+        # doesn't apply.
+        if: github.event_name == 'workflow_dispatch'
         # actions/attest-build-provenance (in the goreleaser job) derives the
         # attestation's own "source" (repo/ref/commit) from this *run's* OIDC
         # claims -- i.e. github.sha, the commit whatever ref was picked in
@@ -179,7 +201,14 @@ jobs:
         with:
           go-version-file: cmd/elevator/go.mod
       # installs syft, which sboms: in .goreleaser.yaml shells out to
+      #
+      # syft-version pinned explicitly (#194 C2 residual, found live by
+      # Andrey Devyatkin): without it, this action resolves and downloads
+      # whatever syft release is newest at run time -- unlike every other
+      # tool this workflow uses, which is pinned to an exact SHA/version.
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          syft-version: "v1.51.1"
       # A previous version of this step set GORELEASER_CURRENT_TAG to strip
       # the "elevator-" prefix, meaning to make GoReleaser treat the tag as
       # plain "vX.Y.Z" for version/changelog purposes. Verified locally
@@ -195,7 +224,13 @@ jobs:
       # bare "X.Y.Z" — correctness over a cosmetic version string.
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
-          version: "~> v2"
+          # Exact version, not the floating "~> v2" range (#194 C2 residual,
+          # found live by Andrey Devyatkin): the action itself is
+          # SHA-pinned above, but "~> v2" still resolved and downloaded
+          # whatever the newest v2.x.y GoReleaser *binary* was at run time --
+          # the one thing in this job that actually builds and publishes the
+          # release, unpinned while everything around it was.
+          version: "v2.18.1"
           # --skip=validate: GoReleaser's default validation hard-rejects a
           # tag shaped like "elevator-vX.Y.Z" as "not semver" (confirmed
           # locally) — it only recognizes an optional bare "v" prefix, not
@@ -308,14 +343,23 @@ jobs:
 
   publication-state:
     needs: [validate-tag, goreleaser, smoke]
-    # Without the validate-tag guard, a workflow_dispatch with an invalid
-    # tag (e.g. an existing bare module release tag like "4.3.1") makes
-    # goreleaser/smoke correctly skip -- but this job would still run
-    # (if: always()), see RELEASED/SMOKED as "skipped" (never "success"),
-    # and fall into the "demote a broken one" branch below, marking that
+    # !cancelled(), not always() (#194 found live by Andrey Devyatkin: this
+    # job was missed when goreleaser above was moved to !cancelled() for the
+    # identical reason). Without the validate-tag guard, a workflow_dispatch
+    # with an invalid tag (e.g. an existing bare module release tag like
+    # "4.3.1") makes goreleaser/smoke correctly skip -- but this job would
+    # still run, see RELEASED/SMOKED as "skipped" (never "success"), and
+    # fall into the "demote a broken one" branch below, marking that
     # unrelated, real, already-published module release as a prerelease.
-    # Mirrors the exact guard goreleaser itself uses for the same reason.
-    if: always() && needs.validate-tag.result != 'failure'
+    # Separately, always() also returns true when the *run itself* was
+    # cancelled: redispatching an already-published, healthy release and
+    # then pressing Cancel made this job see goreleaser/smoke as "skipped"
+    # too, and demote that perfectly good release to a prerelease --
+    # silently switching install.sh over to the *previous* release, with
+    # nothing left to ever promote it back. !cancelled() keeps the
+    # skip-tolerance this job needs (a skipped dependency isn't a failure)
+    # without also overriding a cancellation.
+    if: "!cancelled() && needs.validate-tag.result != 'failure'"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -365,7 +409,25 @@ jobs:
           # and a force-push would destroy any unrelated commit that landed
           # there in this window too -- a human fix to another formula, or a
           # second, concurrent elevator release's own cask push.
-          current_file_sha=$(gh api "repos/fivexl/homebrew-tap/contents/$CASK_PATH?ref=$TAP_BRANCH" --jq .sha 2>/dev/null) || current_file_sha=""
+          #
+          # Same genuine-404-vs-any-other-failure distinction as the
+          # before_content fetch below (#194 C6 residual, found live by
+          # Andrey Devyatkin: the fix below was applied only to that second
+          # call, not this first one). A transient error here (a network
+          # blip, a rate limit) used to collapse into the same empty
+          # current_file_sha as a real 404, so this step silently treated a
+          # cask that genuinely does exist as "nothing to revert" and
+          # skipped the revert entirely instead of erroring loudly.
+          if ! current_file_sha=$(gh api "repos/fivexl/homebrew-tap/contents/$CASK_PATH?ref=$TAP_BRANCH" --jq .sha 2>&1); then
+            if echo "$current_file_sha" | grep -q "HTTP 404"; then
+              echo "$CASK_PATH doesn't exist on $TAP_BRANCH right now -- nothing to revert"
+              exit 0
+            else
+              echo "::error::Could not confirm whether $CASK_PATH currently exists on $TAP_BRANCH (fetch failed for a reason other than 404): $current_file_sha"
+              echo "::error::Refusing to guess -- not deleting or overwriting $CASK_PATH. Revert it manually once this is investigated."
+              exit 1
+            fi
+          fi
           if [ -z "$current_file_sha" ]; then
             echo "$CASK_PATH doesn't exist on $TAP_BRANCH right now -- nothing to revert"
             exit 0
