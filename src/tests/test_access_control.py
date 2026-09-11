@@ -996,6 +996,110 @@ def test_make_decision_on_approve_request(test_cases_for_approve_request_decisio
     )
 
 
+def test_make_decision_on_approve_request_recognizes_self_approval_despite_case_mismatch():
+    """Regression test for a real self-approval bypass found in a final
+    pre-delivery review: for a CLI-sourced request, requester_email passed
+    in here is the pinned, verified Identity Center email
+    (handle_button_click's eligibility_email), while approver_email is
+    whoever clicked Approve's *current Slack profile* email -- two
+    different identity sources for the same physical person. A raw `==`
+    comparison made a same-person click that merely differed in case
+    register as is_self_approval=False, which the decision's own boolean
+    (`is_self_approval and allow_self_approval or not is_self_approval`)
+    then treated as "a different, legitimate approver approved this" --
+    silently permitting the grant even though allow_self_approval is
+    explicitly false for this statement. The same person must be
+    recognized as such regardless of case."""
+    # Domain kept lowercase throughout, deliberately: pydantic's EmailStr
+    # lowercases the *domain* part on its own (verified separately -- e.g.
+    # "Alice@Corp.com" becomes "Alice@corp.com"), which would otherwise
+    # make approver_email fail the `in statement.approvers` membership
+    # check for an unrelated reason and never even reach the
+    # is_self_approval comparison this test means to isolate. Only the
+    # *local* part's case differs between approver_email and
+    # requester_email here -- EmailStr leaves that alone, so this cleanly
+    # exercises just the fix.
+    statement = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approvers": ["Alice@corp.com"],
+            "allow_self_approval": False,
+        }
+    )
+    decision = make_decision_on_approve_request(
+        action=entities.ApproverAction.Approve,
+        statements=frozenset([statement]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        # Exactly matches the statement's own approvers entry, so the
+        # membership check passes regardless of normalization -- isolating
+        # is_self_approval as the only thing left that can differ.
+        approver_email="Alice@corp.com",
+        # The requester's pinned, verified email differs from the approver
+        # entry only by local-part case -- the same person, resolved via a
+        # different identity source (exactly what a CLI request's
+        # verified_email vs. a Slack profile email produces).
+        requester_email="alice@corp.com",
+    )
+    assert decision.permit is False, "a case-differing self-approval must still be recognized as self-approval and denied"
+    assert decision.grant is False
+
+
+def test_make_decision_on_approve_request_still_allows_self_approval_when_permitted():
+    """Companion to the test above: when allow_self_approval is true, a
+    case-differing self-approval must still be *granted*, not accidentally
+    denied by the same normalization fix -- this proves the fix correctly
+    recognizes the match (not just happens to fail closed)."""
+    statement = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approvers": ["Alice@corp.com"],
+            "allow_self_approval": True,
+        }
+    )
+    decision = make_decision_on_approve_request(
+        action=entities.ApproverAction.Approve,
+        statements=frozenset([statement]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        approver_email="Alice@corp.com",
+        requester_email="alice@corp.com",
+    )
+    assert decision.permit is True
+    assert decision.grant is True
+
+
+def test_make_decision_on_approve_request_still_denies_a_different_person_approving():
+    """Companion test: normalizing case must not make two genuinely
+    different people's emails collide -- only an exact case-insensitive
+    match should be treated as the same person."""
+    statement = Statement.model_validate(
+        {
+            "resource_type": "Account",
+            "resource": ["111111111111"],
+            "permission_set": ["AdministratorAccess"],
+            "approvers": ["alice@corp.com", "bob@corp.com"],
+            "allow_self_approval": False,
+        }
+    )
+    decision = make_decision_on_approve_request(
+        action=entities.ApproverAction.Approve,
+        statements=frozenset([statement]),
+        account_id="111111111111",
+        permission_set_name="AdministratorAccess",
+        approver_email="Bob@corp.com",
+        requester_email="alice@corp.com",
+    )
+    # Bob approving Alice's request is a normal, legitimate approval, not a
+    # self-approval -- must still be permitted.
+    assert decision.permit is True
+    assert decision.grant is True
+
+
 def test_execute_access_request_decision(
     test_cases_for_access_request_decision,
     execute_decision_info,

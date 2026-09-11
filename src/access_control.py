@@ -198,19 +198,41 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
     decision_based_on_statements: set[Statement] | set[GroupStatement] = set()
     potential_approvers = set()
 
+    # Case-insensitive, matching requester_allowed's own normalization
+    # (statement.py) and make_decision_on_approve_request's identical fix
+    # below (a real self-approval bypass found in a final pre-delivery
+    # review): statement.approvers is a pydantic EmailStr set that
+    # preserves whatever case an operator typed in config, and requester_email
+    # can be a pinned, verified Identity Center email (for a CLI-sourced
+    # request) that differs in case from that config entry even for the
+    # exact same person. Left case-sensitive, a requester who IS a listed
+    # approver on their own statement wasn't recognized as one here -- they
+    # neither got auto-granted via SelfApproval when they should have, nor
+    # excluded from potential_approvers, so the request fell through to
+    # RequiresApproval with the requester themselves listed as its only
+    # "approver" -- which the case-sensitive membership check in
+    # make_decision_on_approve_request then *also* failed to match,
+    # permanently blocking approval by anyone.
+    requester_email_normalized = requester_email.lower()
     explicit_deny_self_approval = any(
-        statement.allow_self_approval is False and requester_email in statement.approvers for statement in affected_statements
+        statement.allow_self_approval is False and requester_email_normalized in {a.lower() for a in statement.approvers}
+        for statement in affected_statements
     )
     explicit_deny_approval_not_required = any(statement.approval_is_not_required is False for statement in affected_statements)
 
     for statement in affected_statements:
+        statement_approvers_normalized = {a.lower() for a in statement.approvers}
         if statement.approval_is_not_required and not explicit_deny_approval_not_required:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
             )
-        if requester_email in statement.approvers and statement.allow_self_approval and not explicit_deny_self_approval:
+        if (
+            requester_email_normalized in statement_approvers_normalized
+            and statement.allow_self_approval
+            and not explicit_deny_self_approval
+        ):
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.SelfApproval,
@@ -218,7 +240,7 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
             )
 
         decision_based_on_statements.add(statement)  # type: ignore # noqa: PGH003
-        potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
+        potential_approvers.update(approver for approver in statement.approvers if approver.lower() != requester_email_normalized)
 
     if not decision_based_on_statements:
         return AccessRequestDecision(
@@ -268,9 +290,28 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
     affected_statements = _filter_statements_for_requester(affected_statements, requester_email, requester_group_ids)
 
+    # Case-insensitive from here on (a real self-approval bypass, found in a
+    # final pre-delivery review): statement.approvers is a pydantic EmailStr
+    # set that preserves whatever case an operator typed in config, and for
+    # a CLI-sourced request requester_email is the pinned, verified Identity
+    # Center email while approver_email is the clicking approver's current
+    # Slack profile email -- two genuinely different identity sources for
+    # the *same physical person* when they approve their own request. A raw
+    # `==`/`in` comparison here made a same-person click register as
+    # is_self_approval=False on any case difference between those two
+    # sources (or a configured approvers-list entry), which the boolean
+    # below then treats as "a different, legitimate approver approved this"
+    # -- silently granting even when the statement's own
+    # allow_self_approval is false. requester_allowed (statement.py) already
+    # normalizes this same way for allowed_users; approvers and this
+    # self-approval check need the identical treatment for the identical
+    # reason.
+    approver_email_normalized = approver_email.lower()
+    requester_email_normalized = requester_email.lower()
     for statement in affected_statements:
-        if approver_email in statement.approvers:
-            is_self_approval = approver_email == requester_email
+        statement_approvers_normalized = {a.lower() for a in statement.approvers}
+        if approver_email_normalized in statement_approvers_normalized:
+            is_self_approval = approver_email_normalized == requester_email_normalized
             if is_self_approval and statement.allow_self_approval or not is_self_approval:
                 return ApproveRequestDecision(
                     grant=action == entities.ApproverAction.Approve,
