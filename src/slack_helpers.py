@@ -13,6 +13,7 @@ from slack_sdk.models.blocks import (
     ActionsBlock,
     Block,
     ButtonElement,
+    ContextBlock,
     DividerBlock,
     InputBlock,
     MarkdownTextObject,
@@ -122,6 +123,16 @@ class RequestForAccessView:
                         action_id=cls.REASON_ACTION_ID,
                         placeholder=PlainTextObject(text="Reason will be saved in audit logs. Please be specific."),
                         multiline=True,
+                        # A first line of defense, not the authoritative
+                        # check -- Slack enforces this client-side in the
+                        # modal itself (an inline "too long" error before
+                        # submission is even possible), but max_length is a
+                        # plain character count with no idea that
+                        # escape_mrkdwn can expand some of those characters
+                        # up to 5x. The submission handler's own
+                        # reason_fits_slack_field check is what actually
+                        # guarantees the posted field fits.
+                        max_length=REASON_MODAL_MAX_LENGTH,
                     ),
                 ),
                 DividerBlock(),
@@ -263,6 +274,35 @@ def escape_mrkdwn(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# Slack's section-block text fields cap at 2000 chars, and build_approval_
+# request_message_blocks embeds reason in one as "Reason: {escaped}" -- the
+# cap has to subtract that prefix, and has to be checked against the
+# *escaped* length, not the raw one (escape_mrkdwn can expand a reason up to
+# 5x, e.g. an all-"&" string). Originally only enforced on the CLI path
+# (src/main.py); the Slack/group modals had no cap of any kind, so a pasted
+# stack trace or XML fragment (real "<"/">" content) could produce an
+# oversized field there too, reaching chat_postMessage and being rejected
+# with invalid_blocks -- caught live against a real deployment, reported by
+# Andrey Devyatkin. This is shared by both intake paths now, not duplicated.
+REASON_PREFIX = "Reason: "
+MAX_REASON_LENGTH = 2000 - len(REASON_PREFIX)
+
+
+def reason_fits_slack_field(reason: str) -> bool:
+    return len(escape_mrkdwn(reason)) <= MAX_REASON_LENGTH
+
+
+# The modal input's own client-side max_length -- a plain character count,
+# so it can't know escape_mrkdwn might expand some of those characters up to
+# 5x. Set comfortably below MAX_REASON_LENGTH so a real-world reason (mostly
+# plain text, the occasional stray "&"/"<"/">") has headroom to still pass
+# reason_fits_slack_field's authoritative, escape-aware check after
+# submission -- not tight enough to guarantee it for an adversarial input
+# (a reason that's *all* "&"), which is exactly why that server-side check
+# still exists and must not be removed.
+REASON_MODAL_MAX_LENGTH = 1000
+
+
 def unescape_mrkdwn(text: str) -> str:
     """Inverse of escape_mrkdwn, for recovering the original reason text
     when ButtonClickedPayload/ButtonGroupClickedPayload reconstruct a
@@ -308,18 +348,29 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
         MarkdownTextObject(text=f"Reason: {escape_mrkdwn(reason)}"),
         MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
     ]
-    # Displayed so an approver can apply extra scrutiny to the newer CLI trust
-    # path, and so ButtonClickedPayload.validate_payload can recover
-    # request_source/verified_arn/verified_user_id when it reconstructs the
-    # request from this message's text -- they aren't otherwise persisted
-    # anywhere it can read. Verified UserId is not just display: it's what
-    # execute_decision grants against for a CLI request, rather than
-    # re-resolving requester.email independently at approval time.
+    # In their own context block below (a footer-style, full-width, greyed
+    # line), not in `fields` alongside the decision-relevant info above --
+    # a full role ARN wraps across several lines in fields' two-column
+    # grid and strands a dead gap in the other column, visually outweighing
+    # the who/account/role/reason an approver is actually deciding on with
+    # provenance detail that matters for the audit trail, not the decision
+    # (an actual Andrey Devyatkin review comment on this PR). fields also
+    # has a hard 10-item Slack limit; with account/role/reason/duration/
+    # requester plus these, a request was one more field away from
+    # breaking at serialization -- moving these four out restores headroom.
+    # Still one element per key, not combined onto shared lines: each
+    # element's text must independently start with its own key for
+    # ButtonClickedPayload.validate_payload's find_in_fields/
+    # find_in_fields_optional to recover request_source/verified_arn/
+    # verified_user_id/verified_email when it reconstructs the request --
+    # combining keys onto one line (as text after the line's own start)
+    # would make that scrape silently stop finding them.
+    provenance_elements = []
     if request_source == "cli":
-        fields.append(MarkdownTextObject(text="Source: CLI"))
-        fields.append(MarkdownTextObject(text=f"Verified ARN: {verified_arn}"))
-        fields.append(MarkdownTextObject(text=f"Verified UserId: {verified_user_id}"))
-        fields.append(MarkdownTextObject(text=f"Verified Email: {verified_email}"))
+        provenance_elements.append(MarkdownTextObject(text="Source: CLI"))
+        provenance_elements.append(MarkdownTextObject(text=f"Verified ARN: `{verified_arn}`"))
+        provenance_elements.append(MarkdownTextObject(text=f"Verified UserId: {verified_user_id}"))
+        provenance_elements.append(MarkdownTextObject(text=f"Verified Email: {verified_email}"))
     _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identity_store_client,
         identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
@@ -349,6 +400,8 @@ def build_approval_request_message_blocks(  # noqa: PLR0913
         HeaderSectionBlock.new(color_coding_emoji),
         SectionBlock(block_id="content", fields=fields),
     ]
+    if provenance_elements:
+        blocks.append(ContextBlock(block_id="provenance", elements=provenance_elements))
     if show_buttons:
         blocks.append(
             ActionsBlock(
@@ -447,6 +500,16 @@ class ButtonClickedPayload(BaseModel):
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
         message = values["message"]
         fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
+        # Source/Verified ARN/Verified UserId/Verified Email now live in
+        # their own "provenance" context block, not in `content`'s fields
+        # (moved out to stay clear of fields' 10-item Slack limit -- see
+        # build_approval_request_message_blocks). find_in_fields/
+        # find_in_fields_optional just scan whatever list they're given
+        # for an item whose text starts with the requested key, so folding
+        # both blocks' items into one combined list before searching finds
+        # either kind without needing two separate lookup passes.
+        provenance_elements = jp.search("message.blocks[?block_id == 'provenance'].elements[]", values) or []
+        fields_and_provenance = fields + provenance_elements
         requester_mention = find_in_fields(fields, "Requester")
         requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
         humanized_permission_duration = find_in_fields(fields, "Permission duration")
@@ -457,10 +520,14 @@ class ButtonClickedPayload(BaseModel):
         # present on messages built after each field was added -- default to
         # "slack"/"NA"/"NA"/"NA" so approval clicks on already-posted messages
         # don't fail to parse.
-        request_source = find_in_fields_optional(fields, "Source") or "slack"
-        verified_arn = find_in_fields_optional(fields, "Verified ARN") or "NA"
-        verified_user_id = find_in_fields_optional(fields, "Verified UserId") or "NA"
-        verified_email = find_in_fields_optional(fields, "Verified Email") or "NA"
+        request_source = find_in_fields_optional(fields_and_provenance, "Source") or "slack"
+        # Backtick-wrapped in the message itself (renders as inline code,
+        # and stops Slack from linkifying/smart-quoting parts of the ARN)
+        # -- stripped back off here so the stored value is the real ARN,
+        # not the display-formatted one.
+        verified_arn = (find_in_fields_optional(fields_and_provenance, "Verified ARN") or "NA").strip("`")
+        verified_user_id = find_in_fields_optional(fields_and_provenance, "Verified UserId") or "NA"
+        verified_email = find_in_fields_optional(fields_and_provenance, "Verified Email") or "NA"
         return {
             "action": jp.search("actions[0].value", values),
             "approver_slack_id": jp.search("user.id", values),
@@ -511,24 +578,29 @@ def get_user(client: WebClient, id: str) -> entities.slack.User:
 
 def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
     logger.info(f"Getting slack user by email: {email}")
+    # start is computed once, before the loop -- not re-computed on every
+    # attempt (found in a final pre-delivery review): this used to retry by
+    # *recursing*, and each recursive call recomputed its own fresh `start`,
+    # so `now - start` could never reach timeout_seconds no matter how long
+    # the retries had actually been running. A sustained "ratelimited"
+    # response looped effectively forever (until the Lambda's own execution
+    # timeout killed it) instead of the intended clean, bounded 30s retry
+    # window ending in a real, catchable error.
     start = datetime.datetime.now(timezone.utc)
     timeout_seconds = 30
-    try:
-        r = client.users_lookupByEmail(email=email)
-        logger.info(f"Slack user found: {r}")
-        return parse_user(r.data)  # type: ignore
-    except slack_sdk.errors.SlackApiError as e:
-        if e.response["error"] == "ratelimited":
+    while True:
+        try:
+            r = client.users_lookupByEmail(email=email)
+            logger.info(f"Slack user found: {r}")
+            return parse_user(r.data)  # type: ignore
+        except slack_sdk.errors.SlackApiError as e:
+            if e.response["error"] != "ratelimited":
+                logger.exception(f"Error when getting slack user by email: {e}")
+                raise
             if datetime.datetime.now(timezone.utc) - start >= datetime.timedelta(seconds=timeout_seconds):
-                raise e
+                raise
             logger.info(f"Rate limited when getting slack user by email. Sleeping for 3 seconds. {e}")
             time.sleep(3)
-            return get_user_by_email(client, email)
-        else:
-            logger.error(f"Error when getting slack user by email. {e}")
-            raise e
-    except Exception as e:
-        raise e
 
 
 def remove_buttons_from_message_blocks(
@@ -585,8 +657,18 @@ def get_message_from_timestamp(channel_id: str, message_ts: str, slack_client: s
 def get_max_duration_block(cfg: config.Config) -> list[Option]:
     if cfg.permission_duration_list_override:
         elements = cfg.permission_duration_list_override
-        if len(elements) > 100:  # noqa: PLR2004
-            elements = elements[:99] + elements[-1:]
+        # Slack's StaticSelectElement caps at 99 options (same limit
+        # build_select_account_input_block enforces above), not 100 --
+        # `elements[:99] + elements[-1:]` used to keep 99 elements *plus*
+        # the last one for 100 total, one over the real limit, which
+        # `chat_postMessage`/the modal would reject with invalid_blocks the
+        # moment an operator configured exactly 101+ override entries
+        # (found in a final pre-delivery review). `elements[:98]`, not 99,
+        # preserves the apparent original intent of always keeping the
+        # last (typically longest-duration) entry visible even when
+        # truncating, while landing on the real 99-item cap.
+        if len(elements) > 99:  # noqa: PLR2004
+            elements = elements[:98] + elements[-1:]
         return [Option(text=PlainTextObject(text=s), value=s) for s in elements]
     else:
         max_increments = min(cfg.max_permissions_duration_time * 2, 99)
@@ -604,7 +686,22 @@ def find_approvers_in_slack(client: WebClient, approver_emails: list[str]) -> tu
         try:
             approver = get_user_by_email(client, email)
             approvers.append(approver)
-        except Exception:
+        except slack_sdk.errors.SlackApiError as e:
+            # Only "users_not_found" -- a configured approver email with no
+            # matching Slack account -- is the expected, routine case this
+            # loop exists to handle (found in a final pre-delivery review:
+            # a bare `except Exception:` here used to catch every OTHER
+            # Slack error the same way, with no exception object logged at
+            # all). A rotated/revoked bot token (invalid_auth), a dropped
+            # OAuth scope (missing_scope), or a Slack outage would silently
+            # turn every configured approver into "not found in Slack" --
+            # process_access_request's own "none of the approvers... could
+            # be found" rejection then reads as a config problem when the
+            # real cause is the Slack integration itself being down, with
+            # nothing above a bare, exception-free warning to reveal that.
+            if e.response.get("error") != "users_not_found":
+                logger.exception(f"Unexpected Slack error while looking up approver {email}: {e}")
+                raise
             logger.warning(f"Approver with email {email} not found in Slack")
             approver_emails_not_found.append(email)
 
@@ -670,6 +767,16 @@ class RequestForGroupAccessView:
                         action_id=cls.REASON_ACTION_ID,
                         placeholder=PlainTextObject(text="Reason will be saved in audit logs. Please be specific."),
                         multiline=True,
+                        # A first line of defense, not the authoritative
+                        # check -- Slack enforces this client-side in the
+                        # modal itself (an inline "too long" error before
+                        # submission is even possible), but max_length is a
+                        # plain character count with no idea that
+                        # escape_mrkdwn can expand some of those characters
+                        # up to 5x. The submission handler's own
+                        # reason_fits_slack_field check is what actually
+                        # guarantees the posted field fits.
+                        max_length=REASON_MODAL_MAX_LENGTH,
                     ),
                 ),
                 DividerBlock(),

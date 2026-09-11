@@ -213,9 +213,7 @@ def test_handle_cli_access_request_logs_the_caller_arn_on_an_api_id_mismatch(mai
     assert result == main_module.cli_auth.GENERIC_REJECTION
     expected_arn = event["requestContext"]["authorizer"]["iam"]["userArn"]
     info_calls = mock_logger.info.call_args_list
-    assert any(
-        "apiId" in (c.args[0] if c.args else "") and c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls
-    )
+    assert any("apiId" in (c.args[0] if c.args else "") and c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls)
 
 
 def test_handle_cli_access_request_rejects_missing_api_id(main_module):
@@ -959,6 +957,38 @@ def test_handle_cli_access_request_reports_broken_slack_integration_instead_of_g
     mock_post_message.assert_called_once()
 
 
+def test_handle_cli_access_request_still_returns_500_when_the_error_notification_itself_fails(main_module):
+    """Regression test (#194 B5 residual, found live by Andrey Devyatkin):
+    the blanket handler's own chat_postMessage call -- posting the
+    "unexpected error" notification -- was unguarded, so a second Slack
+    failure there (e.g. invalid_auth on both calls) propagated straight past
+    this except block instead of reaching the documented 500 body below it.
+    The caller got API Gateway's opaque "Internal Server Error" instead of
+    {"message": "An unexpected error occurred..."}."""
+    import slack_sdk.errors
+
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    with (
+        patch.object(
+            main_module.slack_helpers,
+            "get_user_by_email",
+            side_effect=slack_sdk.errors.SlackApiError("invalid_auth", {"ok": False, "error": "invalid_auth"}),
+        ),
+        patch.object(
+            main_module.app.client,
+            "chat_postMessage",
+            side_effect=slack_sdk.errors.SlackApiError("invalid_auth", {"ok": False, "error": "invalid_auth"}),
+        ),
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result["statusCode"] == 500  # noqa: PLR2004
+    assert json.loads(result["body"]) == {"message": "An unexpected error occurred while processing the request."}
+
+
 def test_handle_cli_access_request_reports_unexpected_errors(main_module):
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
@@ -1303,6 +1333,30 @@ def test_handle_button_click_posts_granted_message_on_success(main_module):
     assert main_module.cache_for_dublicate_requests == {}
 
 
+def test_handle_button_click_clears_the_dedup_cache_when_make_decision_on_approve_request_raises(main_module):
+    """Regression test (#194 A3 residual, found live by Andrey Devyatkin):
+    the dedup cache is written just before this call, and every return path
+    around it clears the cache again -- except this one. Left unguarded, an
+    exception here (a malformed statement, anything) propagated straight to
+    @handle_errors with the cache still populated, leaving this exact
+    request permanently stuck reporting "already in progress" to any retry
+    for the rest of this container's life."""
+    body = _button_click_body()
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.access_control, "make_decision_on_approve_request", side_effect=RuntimeError("boom")),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    assert main_module.cache_for_dublicate_requests == {}
+
+
 def test_handle_button_click_strips_buttons_before_execute_decision_runs(main_module):
     """Regression test (#194 A2): the buttons must be removed via their own
     chat_update *before* execute_decision runs, not only afterward together
@@ -1379,9 +1433,7 @@ def test_handle_button_click_evaluates_eligibility_against_pinned_verified_email
 
     with (
         patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
-        patch.object(
-            main_module.access_control, "get_requester_group_ids_if_needed", return_value=frozenset()
-        ) as mock_get_group_ids,
+        patch.object(main_module.access_control, "get_requester_group_ids_if_needed", return_value=frozenset()) as mock_get_group_ids,
         patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision) as mock_make_decision,
         patch.object(main_module.access_control, "execute_decision", return_value=True),
     ):
@@ -1417,3 +1469,55 @@ def test_handle_button_click_notification_failure_after_a_successful_grant_is_no
         result = main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# handle_request_for_access_submittion
+# ---------------------------------------------------------------------------
+
+
+def test_handle_request_for_access_submittion_rejects_reason_too_long_once_escaped(main_module):
+    """Regression test: the Slack modal had no reason-length cap of any
+    kind (unlike the CLI path, which already checked this) -- reported live
+    by Andrey Devyatkin, reproduced against a real deployment with a 399-
+    "&"-character reason (raw length nowhere near any limit, but expands to
+    a 2003-character field once escaped and wrapped in "Reason: "), which
+    Slack's own chat.postMessage rejected with invalid_blocks, surfacing as
+    a 500 plus an "unexpected error" post in the approvals channel. The
+    modal has already closed by the time this lazy listener runs (it's
+    acked unconditionally beforehand), so the only thing left to do is DM
+    the requester and never attempt to post the request at all."""
+    fake_request = MagicMock(requester_slack_id="U_REQ", reason="&" * 400)
+    client = MagicMock()
+
+    with (
+        patch.object(main_module.slack_helpers.RequestForAccessView, "parse", return_value=fake_request),
+        patch.object(main_module.slack_helpers, "get_user", return_value=MagicMock(id="U_REQ", email="req@example.com")),
+        patch.object(main_module, "process_access_request") as mock_process,
+    ):
+        result = main_module.handle_request_for_access_submittion.__wrapped__(body={}, ack=MagicMock(), client=client, context={})
+
+    assert result is None
+    mock_process.assert_not_called()
+    client.chat_postMessage.assert_called_once()
+    assert client.chat_postMessage.call_args.kwargs["channel"] == "U_REQ"
+    assert "too long" in client.chat_postMessage.call_args.kwargs["text"].lower()
+
+
+def test_handle_request_for_access_submittion_still_submits_a_normal_reason(main_module):
+    """Companion to the test above: an ordinary reason must still reach
+    process_access_request unchanged -- the new check must not accidentally
+    reject legitimate requests."""
+    fake_request = MagicMock(requester_slack_id="U_REQ", reason="debugging prod issue")
+    fake_requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+
+    with (
+        patch.object(main_module.slack_helpers.RequestForAccessView, "parse", return_value=fake_request),
+        patch.object(main_module.slack_helpers, "get_user", return_value=fake_requester),
+        patch.object(main_module, "process_access_request") as mock_process,
+    ):
+        main_module.handle_request_for_access_submittion.__wrapped__(body={}, ack=MagicMock(), client=client, context={})
+
+    mock_process.assert_called_once_with(request=fake_request, requester=fake_requester, client=client)
+    client.chat_postMessage.assert_not_called()

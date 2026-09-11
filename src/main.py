@@ -201,26 +201,20 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # (build_approval_request_message_blocks embeds reason in one), and
         # slack_sdk doesn't validate this client-side -- an oversized reason
         # reaches chat_postMessage, gets rejected with invalid_blocks, and
-        # unwinds to the same 500-plus-Slack-post blanket handler. The Slack
-        # modal is implicitly bounded by its own input widget; the CLI isn't.
-        # The cap has to subtract the "Reason: " prefix reason gets wrapped
-        # in for that field, not just Slack's own 2000: a reason of, say,
-        # 1996 characters passed a plain 2000 check but produced a
-        # 2004-character field once wrapped, still overflowing.
-        #
-        # Checked against the *escaped* length, not len(reason): escape_mrkdwn
-        # expands "&" to "&amp;" (5x) and "<"/">" to "&lt;"/"&gt;" (4x), and
-        # that's what actually lands in the field -- 399 "&" characters alone
-        # is enough to blow past Slack's 2000-char limit even though the raw
-        # string is nowhere near it, which is exactly what this cap exists to
-        # prevent.
-        reason_prefix = "Reason: "
-        max_reason_length = 2000 - len(reason_prefix)
-        if len(slack_helpers.escape_mrkdwn(reason)) > max_reason_length:
+        # unwinds to the same 500-plus-Slack-post blanket handler. This is
+        # NOT unique to the CLI: the Slack/group modals have no input-level
+        # cap of any kind either (confirmed live, reported by Andrey
+        # Devyatkin), and share the identical check via
+        # slack_helpers.reason_fits_slack_field -- see its own docstring for
+        # why the cap has to subtract the "Reason: " prefix and be checked
+        # against escape_mrkdwn's output, not raw len(reason).
+        if not slack_helpers.reason_fits_slack_field(reason):
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": f"reason must be at most {max_reason_length} characters (after escaping any of & < >)."}),
+                "body": json.dumps(
+                    {"message": f"reason must be at most {slack_helpers.MAX_REASON_LENGTH} characters (after escaping any of & < >)."}
+                ),
             }
 
         # A strict, length-bounded digit-string match rather than a bare
@@ -472,10 +466,21 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         }
     except Exception as e:
         logger.exception(f"Error handling CLI access request: {e}")
-        app.client.chat_postMessage(
-            channel=cfg.slack_channel_id,
-            text="A CLI access request encountered an unexpected error. Refer to the logs for more details.",
-        )
+        # Guarded separately from the logger.exception above (found live by
+        # Andrey Devyatkin): this chat_postMessage is a best-effort
+        # notification, not part of what this handler promises its caller --
+        # a second Slack failure here (e.g. invalid_auth alongside whatever
+        # already failed) used to propagate uncaught past this except block
+        # entirely, so the caller got API Gateway's opaque "Internal Server
+        # Error" instead of the documented {"message": "An unexpected error
+        # occurred..."} 500 body below.
+        try:
+            app.client.chat_postMessage(
+                channel=cfg.slack_channel_id,
+                text="A CLI access request encountered an unexpected error. Refer to the logs for more details.",
+            )
+        except Exception:
+            logger.exception("Failed to post the CLI access request error notification to Slack")
         return {
             "statusCode": 500,
             "headers": {"content-type": "application/json"},
@@ -738,7 +743,22 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
-    is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+    # Isolated in its own try (#194 A4, extended to this call site in a
+    # final pre-delivery review -- the same fix already applied to
+    # process_access_request below hadn't been propagated here): left
+    # bare, a transient conversations_members hiccup at this point --
+    # right after the approver clicked Approve/Discard, before
+    # execute_decision has even run -- aborted the entire approval outright
+    # instead of just this one, unrelated notification-routing check.
+    # Defaults to False (not confirmed in the channel), matching
+    # process_access_request's own reasoning: fails toward over-notifying
+    # rather than silently skipping the only notification a requester who
+    # genuinely isn't in the channel would see.
+    try:
+        is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to check channel membership; assuming not in channel so the DM fallback still fires: {e}")
+        is_user_in_channel = False
 
     if (
         cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
@@ -798,15 +818,26 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     cache_for_dublicate_requests["account_id"] = payload.request.account_id
     cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
 
-    decision = access_control.make_decision_on_approve_request(
-        action=payload.action,
-        statements=cfg.statements,
-        account_id=payload.request.account_id,
-        permission_set_name=payload.request.permission_set_name,
-        approver_email=approver.email,
-        requester_email=eligibility_email,
-        requester_group_ids=requester_group_ids,
-    )
+    # Cache write above and every clear below (the not-permitted return, and
+    # after execute_decision) are both already covered, but this call itself
+    # was not (#194 A3 residual, found by Andrey Devyatkin): with no handler
+    # of its own, an exception here propagated straight to @handle_errors
+    # with the cache left populated -- leaving this exact request
+    # permanently stuck reporting "already in progress" to any retry, for
+    # the rest of this container's life, with nothing left to ever clear it.
+    try:
+        decision = access_control.make_decision_on_approve_request(
+            action=payload.action,
+            statements=cfg.statements,
+            account_id=payload.request.account_id,
+            permission_set_name=payload.request.permission_set_name,
+            approver_email=approver.email,
+            requester_email=eligibility_email,
+            requester_group_ids=requester_group_ids,
+        )
+    except Exception:
+        cache_for_dublicate_requests.clear()
+        raise
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
     if not decision.permit:
@@ -956,12 +987,25 @@ def process_access_request(  # noqa: PLR0915, PLR0912
     successfully queued for approval, as opposed to e.g. RequiresApproval resolving zero approvers
     in Slack -- which keeps decision.reason == RequiresApproval even though nothing was queued.
     """
+    # Pinned to request.verified_email for a CLI-sourced request, not
+    # requester.email, for the same reason handle_button_click's own
+    # eligibility_email is (#194 B4, and a final pre-delivery review that
+    # confirmed this specific asymmetry): today, at submission time, the two
+    # already agree (requester was resolved by handle_cli_access_request
+    # via this exact identity_email moments earlier), so this is currently
+    # a no-op in practice -- but making the eligibility decision here use
+    # the same pinned identity as the approval-time decision, rather than
+    # requester.email specifically, keeps that invariant true by
+    # construction instead of by coincidence of call order, and removes
+    # the one place a reviewer would otherwise have to reason through why
+    # two structurally identical decisions read two different variables.
+    eligibility_email = request.verified_email if request.request_source == "cli" and request.verified_email != "NA" else requester.email
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
         account_id=request.account_id,
         permission_set_name=request.permission_set_name,
-        requester_email=requester.email,
-        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.statements, requester.email),
+        requester_email=eligibility_email,
+        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.statements, eligibility_email),
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -1194,6 +1238,29 @@ def handle_request_for_access_submittion(
     request = slack_helpers.RequestForAccessView.parse(body)
     logger.info("View submitted", extra={"view": request})
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)
+    # Checked here, before process_access_request ever tries to post the
+    # approval message, not after (a real regression Andrey Devyatkin
+    # reproduced live): the modal has no input-level length cap of its own,
+    # and this view_submission is acked immediately and unconditionally
+    # (ack=acknowledge_request, above) before this lazy listener even runs
+    # -- by the time this function runs, the modal has already closed, so
+    # there's no way to reject the submission back into it. An oversized
+    # reason instead used to reach chat_postMessage and get rejected by
+    # Slack itself with invalid_blocks, surfacing as a 500 plus an
+    # "unexpected error" post to the approvals channel. DMing the requester
+    # and stopping here instead means the failure is at least attributable
+    # to them, not a mystery error in the shared channel.
+    if not slack_helpers.reason_fits_slack_field(request.reason):
+        logger.info("Rejected access request: reason too long once escaped", extra={"requester_slack_id": requester.id})
+        client.chat_postMessage(
+            channel=requester.id,
+            text=(
+                f"Your access request wasn't submitted: the reason is too long "
+                f"(must be at most {slack_helpers.MAX_REASON_LENGTH} characters, fewer if it contains &, <, or >). "
+                "Please shorten it and submit the request again."
+            ),
+        )
+        return
     process_access_request(request=request, requester=requester, client=client)
 
 

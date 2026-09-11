@@ -382,6 +382,46 @@ def test_group_approval_lookup_error_is_retryable(group_module, slack_client):
         assert all("unexpected error" in call.kwargs["text"] for call in slack_client.chat_postMessage.call_args_list)
 
 
+def test_group_button_click_clears_the_dedup_cache_when_make_decision_on_approve_request_raises(group_module, slack_client):
+    """Regression test (#194 A3 residual, found live by Andrey Devyatkin):
+    same gap as main.py's handle_button_click -- the dedup cache is written
+    just before this call, and every other return path around it clears the
+    cache again, but this call had no handler of its own. Left unguarded, an
+    exception here (a malformed statement, anything) reached @handle_errors
+    with the cache still populated, leaving this exact request permanently
+    stuck reporting "already in progress" to any retry for the rest of this
+    container's life."""
+    payload = MagicMock(
+        approver_slack_id=APPROVER_1.id,
+        action=entities.ApproverAction.Approve,
+        channel_id="C_CHAN",
+        thread_ts="1234567890.123456",
+        message={"blocks": list(FAKE_BLOCKS)},
+    )
+    payload.request.requester_slack_id = REQUESTER.id
+    payload.request.group_id = GROUP.id
+
+    with (
+        patch.object(group_module, "slack_helpers") as mock_sh,
+        patch.object(group_module, "access_control") as mock_ac,
+    ):
+        mock_sh.ButtonGroupClickedPayload.model_validate.return_value = payload
+        mock_sh.get_user.side_effect = [APPROVER_1, REQUESTER]
+        mock_sh.check_if_user_is_in_channel.return_value = True
+        mock_ac.get_requester_group_ids_if_needed.return_value = frozenset()
+        mock_ac.make_decision_on_approve_request.side_effect = RuntimeError("boom")
+        group_module.cache_for_dublicate_requests.clear()
+
+        group_module.handle_group_button_click(
+            body={},
+            client=slack_client,
+            context={"user_id": APPROVER_1.id},
+        )
+
+    assert group_module.cache_for_dublicate_requests == {}
+    mock_ac.execute_decision_on_group_request.assert_not_called()
+
+
 def test_group_button_click_reflects_a_grant_failure_and_clears_the_dedup_cache(group_module, slack_client):
     """Regression test (#194 A3): handle_group_button_click had the same
     "recolor green before the grant is attempted" bug main.py's
@@ -435,3 +475,38 @@ def test_group_button_click_reflects_a_grant_failure_and_clears_the_dedup_cache(
     # @handle_errors' own generic post is a separate message, not a fix to
     # the header above -- both must reflect the failure.
     assert any("unexpected error" in (c.kwargs.get("text") or "").lower() for c in slack_client.chat_postMessage.call_args_list)
+
+
+def test_group_submission_rejects_reason_too_long_once_escaped(group_module, slack_client):
+    """Regression test: the group modal had no reason-length cap either,
+    same gap as the account-request modal. The modal has already closed by
+    the time this lazy listener runs, so a DM is the only way left to tell
+    the requester their submission didn't go through."""
+    with (
+        patch.object(group_module, "slack_helpers") as mock_sh,
+        patch.object(group_module, "access_control") as mock_ac,
+        patch.object(group_module, "sso") as mock_sso,
+    ):
+        mock_sh.RequestForGroupAccessView.parse.return_value = MagicMock(
+            requester_slack_id="U_REQ",
+            group_id="g-1234",
+            reason="&" * 400,
+            permission_duration=timedelta(hours=1),
+        )
+        mock_sh.get_user.return_value = REQUESTER
+        mock_sh.reason_fits_slack_field.return_value = False
+        mock_sh.MAX_REASON_LENGTH = 1992
+
+        result = group_module.handle_request_for_group_access_submittion(
+            body={},
+            ack=MagicMock(),
+            client=slack_client,
+            context=MagicMock(),
+        )
+
+    assert result is None
+    mock_sso.describe_group.assert_not_called()
+    mock_ac.make_decision_on_access_request.assert_not_called()
+    slack_client.chat_postMessage.assert_called_once()
+    assert slack_client.chat_postMessage.call_args.kwargs["channel"] == REQUESTER.id
+    assert "too long" in slack_client.chat_postMessage.call_args.kwargs["text"].lower()
