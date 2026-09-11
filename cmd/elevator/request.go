@@ -166,7 +166,7 @@ func runRequest(args []string) {
 	reason := fs.String("reason", "", "Reason for the access request (required)")
 	endpointFlag := fs.String("endpoint", "", "SSO Elevator API invoke URL (overrides ELEVATOR_ENDPOINT and the saved config file if set)")
 	region := fs.String("region", "", "AWS region for SigV4 signing (defaults to the region parsed from --endpoint's own hostname if it's an API Gateway default invoke URL, else the resolved AWS config region, falling back to us-east-1)")
-	exitIfHelpRequested(args)
+	exitIfHelpRequested(fs, args)
 	fs.Parse(args)
 
 	if fs.NArg() > 0 {

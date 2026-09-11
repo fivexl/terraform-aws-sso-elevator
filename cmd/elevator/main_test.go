@@ -1,6 +1,24 @@
 package main
 
-import "testing"
+import (
+	"flag"
+	"testing"
+)
+
+// newRequestFlagSet builds a FlagSet with the same flags runRequest defines,
+// without pulling in runRequest itself -- helpRequested only needs the flag
+// definitions (names and whether each is boolean) to tell a flag token from
+// the value that follows it.
+func newRequestFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("elevator", flag.ContinueOnError)
+	fs.String("account", "", "")
+	fs.String("permission-set", "", "")
+	fs.String("duration", "", "")
+	fs.String("reason", "", "")
+	fs.String("endpoint", "", "")
+	fs.String("region", "", "")
+	return fs
+}
 
 // TestHelpRequested is a regression test (#194 D5): -h/-help/--help must be
 // recognized no matter where in the argument list it appears, not just as
@@ -29,10 +47,18 @@ func TestHelpRequested(t *testing.T) {
 		// must not be mistaken for a help request.
 		{name: "a flag value containing \"help\" is not a help request", args: []string{"--reason", "please help me understand this"}, want: false},
 		{name: "a flag merely prefixed with -h is not a help request", args: []string{"-hello"}, want: false},
+		// Regression (#194, found live by Andrey Devyatkin): "--help" as the
+		// literal *value* of a preceding value-taking flag must not be
+		// mistaken for a help request -- that silently printed usage and
+		// exited 0 without ever submitting the request, reporting a false
+		// success for a request that was never sent.
+		{name: "--help as a flag's own value is not a help request", args: []string{"--account", "123456789012", "--reason", "--help"}, want: false},
+		{name: "--help as a flag's value via = is not a help request", args: []string{"--reason=--help"}, want: false},
+		{name: "a real --help still works after a flag whose value looks like a flag", args: []string{"--reason", "--account", "--help"}, want: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := helpRequested(c.args); got != c.want {
+			if got := helpRequested(newRequestFlagSet(), c.args); got != c.want {
 				t.Errorf("helpRequested(%v) = %v, want %v", c.args, got, c.want)
 			}
 		})
