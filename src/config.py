@@ -180,6 +180,28 @@ class Config(BaseSettings):
     max_permissions_duration_time: int
     permission_duration_list_override: list
 
+    @field_validator("permission_duration_list_override")
+    @classmethod
+    def permission_duration_list_override_entries_must_be_hh_mm(cls, value: list) -> list:  # noqa: ANN101
+        # main.py's _max_allowed_minutes parses every entry as
+        # int(hours):int(minutes) on every single CLI request (it derives
+        # the CLI's own duration ceiling from this same list) -- a
+        # malformed entry ("8" with no colon, "1:00:00" with an extra one,
+        # a non-numeric segment) raised ValueError there, reaching the
+        # blanket exception handler as a 500 plus a Slack post for every
+        # CLI request this deployment ever received, not just a
+        # misconfigured one (found in a final pre-delivery review).
+        # Validating the shape once, at config load, turns a bad Terraform
+        # input into an immediate, loud failure instead of a landmine that
+        # only detonates on live traffic.
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError(f"permission_duration_list_override entries must be strings, got {entry!r}")
+            parts = entry.split(":")
+            if len(parts) != 2 or not all(part.isdigit() for part in parts):  # noqa: PLR2004
+                raise ValueError(f'permission_duration_list_override entries must look like "H:MM" (e.g. "01:30"), got {entry!r}')
+        return value
+
     config_bucket_name: str = "sso-elevator-config"
     config_s3_key: str = ""
     cache_enabled: bool = True
