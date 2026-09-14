@@ -364,8 +364,16 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # access" problem this one did. The identity is still verified by
         # SigV4 + AWS_IAM, iam:GetRole's reserved-path check (round-1 #6's
         # own conclusion: AWS itself blocks non-Identity-Center role
-        # creation there), the session name resolving to a real Identity
-        # Store user, and the email round-trip cross-check below.
+        # creation there -- confirmed live, not just inferred from docs: a
+        # real `aws iam create-role --path /aws-reserved/sso.amazonaws.com/`
+        # call against this deployment's own account was rejected outright
+        # with "InvalidInput: The path '/aws-reserved/sso.amazonaws.com/' is
+        # reserved for AWS use", regardless of the caller's iam:CreateRole
+        # permissions -- so a forged role at that path to impersonate this
+        # check is not achievable through the IAM API, closing #194's
+        # unresolved disagreement over whether this was a real bypass), the
+        # session name resolving to a real Identity Store user, and the
+        # email round-trip cross-check below.
         try:
             requester = slack_helpers.get_user_by_email(app.client, identity_email)
         except slack_sdk.errors.SlackApiError as e:

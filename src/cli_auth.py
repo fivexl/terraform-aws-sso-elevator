@@ -199,7 +199,17 @@ def _is_sso_provisioned_role(role_name: str) -> bool:
     itself scoped to only the reserved-path resource shape, so a role at
     any other path 403s here rather than returning its real (non-matching)
     path — caught the same as any other lookup failure, since either way
-    the answer is "not a genuine SSO role"."""
+    the answer is "not a genuine SSO role".
+
+    Whether someone with iam:CreateRole could forge a role directly at the
+    reserved path (making this whole check moot) was an open disagreement
+    in #194's review, not just a documentation gap: confirmed closed by a
+    live test against this deployment's own account -- `aws iam create-role
+    --path /aws-reserved/sso.amazonaws.com/ ...` was rejected outright with
+    "InvalidInput: The path '/aws-reserved/sso.amazonaws.com/' is reserved
+    for AWS use", independent of the caller's own IAM permissions. AWS
+    enforces this path as reserved at the IAM API level itself, not merely
+    by convention."""
     try:
         role = _iam_client.get_role(RoleName=role_name)["Role"]
     except botocore.exceptions.ClientError as e:
