@@ -404,6 +404,25 @@ def get_cached_users(
 
         users = json.loads(response["Body"].read().decode("utf-8"))
 
+        # Minimal shape validation (#194 High #4 residual, found by Andrey
+        # Devyatkin): unlike get_cached_accounts/get_cached_permission_sets,
+        # which each call .model_validate(...) and degrade to a clean cache
+        # miss on a shape mismatch, this used to trust json.loads' raw
+        # output completely. A malformed cached blob (a corrupted write, a
+        # manual edit, anything) reached find_email_by_username's
+        # user.get("UserName", ...) / user["UserId"] unguarded -- raising
+        # AttributeError or KeyError, caught by neither ClientError nor
+        # BotoCoreError below, surfacing as a 500 plus a Slack post on
+        # every single request until the bad object was fixed or deleted
+        # by hand. Not a full pydantic model like the other two caches
+        # (users aren't cached through one at all, by design -- the raw
+        # Identity Store dict shape is passed through as-is), just enough
+        # structural validation to guarantee what find_email_by_username
+        # and its callers actually dereference unconditionally exists.
+        if not isinstance(users, list) or not all(isinstance(u, dict) and "UserId" in u for u in users):
+            logger.warning("Cached users data has an unexpected shape -- treating as a cache miss")
+            return None
+
         logger.info(f"Retrieved {len(users)} users from cache")
         return users
 

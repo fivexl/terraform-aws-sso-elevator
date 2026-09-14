@@ -399,6 +399,32 @@ class TestGetCachedUsers:
 
         assert result is None
 
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            {"not": "a list"},
+            ["not-a-dict", "also-not-a-dict"],
+            [{"UserName": "alice@example.com"}],  # missing UserId
+        ],
+        ids=["not-a-list", "list-of-non-dicts", "dict-missing-userid"],
+    )
+    def test_malformed_cached_data_degrades_to_a_cache_miss(self, mock_s3_client, cache_config_enabled, malformed):
+        """Regression test (#194 High #4 residual, found live by Andrey
+        Devyatkin): unlike get_cached_accounts/get_cached_permission_sets,
+        which each degrade cleanly via .model_validate(...), this used to
+        trust json.loads' raw output completely. A malformed cached blob
+        reached find_email_by_username's user.get("UserName", ...) /
+        user["UserId"] unguarded downstream -- AttributeError or KeyError,
+        caught by neither ClientError nor BotoCoreError, surfacing as a 500
+        plus a Slack post on every single request until fixed by hand."""
+        body_mock = Mock()
+        body_mock.read.return_value = json.dumps(malformed).encode("utf-8")
+        mock_s3_client.get_object.return_value = {"Body": body_mock}
+
+        result = cache_module.get_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890")
+
+        assert result is None
+
 
 class TestSetCachedUsers:
     """Tests for set_cached_users function (#193 item 2)."""
