@@ -1,6 +1,6 @@
 module "access_requester_slack_handler" {
   source  = "terraform-aws-modules/lambda/aws"
-  version = "8.1.2"
+  version = "8.8.0"
 
   function_name = var.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"

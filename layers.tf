@@ -1,7 +1,7 @@
 module "sso_elevator_dependencies" {
   count           = var.use_pre_created_image ? 0 : 1
   source          = "terraform-aws-modules/lambda/aws"
-  version         = "8.1.2"
+  version         = "8.8.0"
   create_layer    = true
   create_function = false
   layer_name      = "sso_elevator_dependencies"
