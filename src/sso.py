@@ -450,28 +450,34 @@ def find_email_by_username(list_of_users: dict, username: str) -> tuple[str, str
     get_user_principal_id_by_email for group-statement resolution) should fetch
     once and reuse it instead of each lookup re-fetching independently.
 
-    Known, unconfirmed caveat (#194 B9): this exact-match check is only as
-    trustworthy as the RoleSessionName IAM Identity Center itself generated
-    being unique to one real username. If Identity Center's own truncation
-    or illegal-character substitution for usernames over 64 chars can ever
-    collide two different real usernames onto the same generated session
-    name, this would resolve to whichever of them happens to appear first
-    in list_of_users, not necessarily the actual caller -- something this
-    function has no way to detect or distinguish, since by the time
-    `username` reaches here it's already just a string with no record of
-    which real username it came from. This is flagged as a hypothesis, not
-    a confirmed behavior: it hasn't been verified against a real directory
-    with genuinely long/character-substituted usernames. Deployments using
-    usernames near or over the 64-char limit should confirm this doesn't
-    apply to their directory before relying on it."""
-    for user in list_of_users["Users"]:
-        if user.get("UserName", "") != username:
-            continue
-        emails = user.get("Emails", [])
-        primary = next((e["Value"] for e in emails if e.get("Primary")), None)
-        email = primary if primary else (emails[0]["Value"] if emails else None)
-        return (email, user["UserId"]) if email else None
-    return None
+    Was an open, unconfirmed caveat (#194 B9): a possible Identity Center
+    truncation/character-substitution collision on RoleSessionName's
+    64-char limit could in principle collide two different real usernames
+    onto the same generated session name, and this function had no way to
+    detect that -- it just returned whichever matching user happened to
+    appear first in list_of_users, possibly not the actual caller. Rendered
+    moot rather than confirmed or disproven: mirrors
+    find_user_principal_id_by_email_strict's own collect-and-refuse shape
+    below -- if more than one user's UserName matches (collision or not),
+    this raises instead of guessing, the same way that function already
+    does for a duplicate email. Whether the underlying AWS collision
+    question is real no longer matters, since either way this function no
+    longer picks one silently."""
+    matching_users = [user for user in list_of_users["Users"] if user.get("UserName", "") == username]
+    if len(matching_users) > 1:
+        matching_user_ids = sorted(user.get("UserId", "") for user in matching_users)
+        logger.error(
+            "Multiple SSO users share this username -- refusing to pick one",
+            extra={"username": username, "candidate_user_ids": matching_user_ids},
+        )
+        raise errors.AmbiguousSSOUser(f"Multiple SSO users share the username {username!r}; refusing to pick one")
+    if not matching_users:
+        return None
+    user = matching_users[0]
+    emails = user.get("Emails", [])
+    primary = next((e["Value"] for e in emails if e.get("Primary")), None)
+    email = primary if primary else (emails[0]["Value"] if emails else None)
+    return (email, user["UserId"]) if email else None
 
 
 def find_user_principal_id_by_email_strict(email: str, list_of_users: dict) -> str | None:
