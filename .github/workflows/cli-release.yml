@@ -198,7 +198,7 @@ jobs:
           sha=$(gh api "repos/fivexl/homebrew-tap/commits/$branch" --jq .sha)
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # refs/tags/<name>, not the bare name inputs.tag/github.ref_name
           # resolve to (#194 C1): an unqualified ref given to actions/checkout
@@ -327,7 +327,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - if: matrix.checkout == 'pinned-tag'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # refs/tags/<name>, not the bare name -- see the identical
           # comment on the goreleaser job's own checkout above (#194 C1).
@@ -339,7 +339,7 @@ jobs:
           # itself never pushes anything.
           persist-credentials: false
       - if: matrix.checkout == 'documented-oneliner'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
