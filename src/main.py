@@ -116,9 +116,12 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # boundary is the IAM policy on who may invoke this Lambda at all;
         # see the README's CLI section. cli_expected_api_id defaults to ""
         # when the CLI route doesn't exist, and a forged event carrying
-        # "apiId": "" (or simply omitting requestContext.apiId, since the
-        # `or {}` above then yields "") satisfies this check too -- it is
-        # NOT itself a fail-closed guard against a deliberate forgery in
+        # "apiId": "" satisfies this check too -- so does simply omitting
+        # requestContext.apiId (or requestContext itself), since .get's own
+        # missing-key default is None, not this comment's own prior claim of
+        # "", though None != "" is also true, so the comparison below still
+        # rejects it the same way (#194 B1) -- it is NOT itself a
+        # fail-closed guard against a deliberate forgery in
         # that configuration. The deployment still fails closed overall in
         # that case, but via a different check: cli_auth.extract_identity's
         # cli_expected_account_id comparison, which also defaults to ""

@@ -134,6 +134,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           TRIGGER_SHA: ${{ github.sha }}
+          TRIGGER_REF: ${{ github.ref }}
         run: |
           set -eu
           object_type=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.type)
@@ -148,6 +149,21 @@ jobs:
           fi
           if [ "$tag_commit_sha" != "$TRIGGER_SHA" ]; then
             echo "::error::This run was dispatched from commit $TRIGGER_SHA, but tag $TAG points at $tag_commit_sha -- select the $TAG tag itself in the \"Run workflow from\" dropdown, not a branch, so the build-provenance attestation reflects the real source"
+            exit 1
+          fi
+          # A commit-only comparison isn't enough on its own (#194 C4, found
+          # by Andrey Devyatkin): main (the default/obvious dropdown choice)
+          # can legitimately point at the exact same commit as a
+          # just-created tag, in which case the check above alone would
+          # pass even though the operator picked main, not the tag -- the
+          # attestation's own "ref" field (github.ref, from unforgeable OIDC
+          # claims this workflow has no way to override) would then read
+          # "refs/heads/main", not "refs/tags/$TAG", regardless of the
+          # commit matching. This second check is what actually makes this
+          # step's own error message ("select the tag itself in the
+          # dropdown") true, rather than just the commit happening to agree.
+          if [ "$TRIGGER_REF" != "refs/tags/$TAG" ]; then
+            echo "::error::This run was dispatched from ref $TRIGGER_REF, not refs/tags/$TAG -- select the $TAG tag itself in the \"Run workflow from\" dropdown (not a branch, even one currently pointing at the same commit), so the build-provenance attestation's own ref matches"
             exit 1
           fi
 

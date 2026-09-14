@@ -275,12 +275,35 @@ data "aws_iam_policy_document" "slack_handler" {
     effect = "Allow"
     actions = [
       "s3:GetObject",
-      "s3:PutObject",
       "s3:ListBucket",
     ]
     resources = [
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
+    ]
+  }
+  # Read (above) still covers the whole bucket -- this Lambda genuinely
+  # needs to read both config/approval-config.json and every cache object.
+  # Write is scoped to only the cache key shapes cache.py's CacheKey
+  # constants define (accounts.json, permission_sets/*, users/*), not
+  # config/approval-config.json itself: that file is Terraform-managed
+  # (aws_s3_object.approval_config), never written by this Lambda at
+  # runtime, and a blanket PutObject on the whole bucket meant this
+  # Lambda could, in principle, rewrite its own approval rules -- the
+  # revoker Lambda's equivalent statement is correctly read-only, since it
+  # never writes here at all (#194 note, found by Andrey Devyatkin: newly
+  # load-bearing now that #198 also put identity data in this same
+  # bucket).
+  statement {
+    sid    = "AllowS3CacheWrite"
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+    ]
+    resources = [
+      "${module.config_bucket.s3_bucket_arn}/accounts.json",
+      "${module.config_bucket.s3_bucket_arn}/permission_sets/*",
+      "${module.config_bucket.s3_bucket_arn}/users/*",
     ]
   }
   # Only granted when an operator actually configured their own key --
