@@ -36,8 +36,31 @@ jobs:
           terraform_version: "1.14.2"
 
       - name: Install tflint
+        # The previous install_linux.sh convenience script this step used to
+        # curl-pipe-to-bash no longer exists in the tflint repo at all (404
+        # on both its master and main branches, confirmed live) -- upstream
+        # removed it in favor of downloading and verifying the release
+        # archive directly, per tflint's own current README. That 404
+        # response, piped into bash, is what broke this job (exit 127: bash
+        # tried to run GitHub's 404 page text as a script) -- this wasn't
+        # something any change in this PR caused, and broke identically on
+        # a clean re-run.
+        #
+        # Pinned to an exact version with a checksum check, not just a
+        # direct download, matching this workflow's checksum-free
+        # terraform-docs install below only in spirit -- consistent with
+        # this repo's C2 SHA/version-pinning convention elsewhere (see
+        # cli-release.yml's syft-version and GoReleaser version pins).
+        env:
+          TFLINT_VERSION: v0.64.0
+          TFLINT_ZIP_SHA256: cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
         run: |
-          curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+          set -euo pipefail
+          curl -sSLO "https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_amd64.zip"
+          echo "${TFLINT_ZIP_SHA256}  tflint_linux_amd64.zip" | sha256sum -c -
+          unzip -q tflint_linux_amd64.zip
+          sudo install -c -v tflint /usr/local/bin/
+          rm -f tflint_linux_amd64.zip tflint
 
       - name: Install terraform-docs
         run: |
