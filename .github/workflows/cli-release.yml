@@ -72,10 +72,17 @@ jobs:
         # accept in agreement.
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
+        # "+"-prefixed build metadata is deliberately not accepted (#194
+        # C5/decision, resolved: disallow it in this tag namespace) -- kept
+        # in agreement with install.sh's own validate_version, which
+        # documents why: the hyphen-only prerelease heuristics this project
+        # uses downstream (this file's own publication-state job,
+        # .goreleaser.yaml's cask skip_upload) would silently misclassify a
+        # "+build"-only tag as a normal release otherwise.
         run: |
           set -eu
-          echo "$TAG" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
-            || { echo "::error::refusing tag outside this workflow's namespace or shape: $TAG (expected elevator-vX.Y.Z, optionally with a -prerelease and/or +build suffix, matching install.sh's own validate_version)"; exit 1; }
+          echo "$TAG" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
+            || { echo "::error::refusing tag outside this workflow's namespace or shape: $TAG (expected elevator-vX.Y.Z, optionally with a -prerelease suffix; +build metadata is not supported, matching install.sh's own validate_version)"; exit 1; }
       - name: Refuse a ref that isn't actually a tag
         # Dispatch-only: a tag push is, by definition, already a real tag --
         # this guards against the dispatch dropdown's "Run workflow from"

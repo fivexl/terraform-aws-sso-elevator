@@ -67,15 +67,25 @@ validate_version() {
   # false safety claim, not just a redundant one. grep -E gives a real
   # anchored regex, actually requiring digit-only version components.
   #
-  # The suffix pattern follows SemVer 2.0's own grammar (dot-separated
-  # alphanumeric-or-hyphen identifiers for prerelease, optionally followed by
-  # a "+"-prefixed build-metadata block of the same shape) rather than the
-  # narrower version that used to reject legitimate tags like
-  # "elevator-v1.2.3-rc-1" (a hyphen inside the prerelease identifier itself)
-  # and "elevator-v1.2.3+build.7" (build metadata) -- both are tags
+  # The prerelease suffix follows SemVer 2.0's own grammar (dot-separated
+  # alphanumeric-or-hyphen identifiers), rather than the narrower version
+  # that used to reject a legitimate tag like "elevator-v1.2.3-rc-1" (a
+  # hyphen inside the prerelease identifier itself) -- a tag
   # cli-release.yml's own validate-tag job (elevator-v* only) would accept.
-  echo "$1" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
-    || die "invalid version format: $1 (expected elevator-vX.Y.Z, optionally with a -prerelease and/or +build suffix)"
+  #
+  # "+"-prefixed build metadata is deliberately NOT accepted here, even
+  # though it's also valid SemVer 2.0 (#194 C5/decision, resolved: disallow
+  # it in this tag namespace) -- the prerelease-detection heuristics this
+  # project uses elsewhere (cli-release.yml's publication-state job,
+  # .goreleaser.yaml's cask skip_upload) both check only for a hyphen, not
+  # "+", so a tag like "elevator-v1.2.3+linux-amd64" would be silently
+  # misclassified as a normal release downstream: no cask push, stuck
+  # prerelease:true forever, invisible to install.sh's own prerelease-only
+  # filter below, all with a 0 exit code and no error anywhere. Simpler to
+  # keep this namespace out of that shape entirely than to teach every
+  # consumer of a release tag to parse "+build" correctly.
+  echo "$1" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
+    || die "invalid version format: $1 (expected elevator-vX.Y.Z, optionally with a -prerelease suffix; +build metadata is not supported)"
 }
 
 get_latest_version() {
