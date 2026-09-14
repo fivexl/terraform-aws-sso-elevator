@@ -378,6 +378,24 @@ class TestSetCachedUsers:
         # Should not raise exception
         cache_module.set_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890", sample_users)
 
+    def test_a_payload_over_the_generic_cache_limit_still_writes(self, mock_s3_client, cache_config_enabled):
+        """Regression test (#194 High #4, found live by Andrey Devyatkin):
+        a representative user record is ~445 bytes, so the generic
+        MAX_DATA_SIZE (5MB, sized for the small accounts/permission-sets
+        caches) is crossed at just 11,616 users -- above that, this used to
+        silently fail to write anything at all, so the fallback this cache
+        exists to provide didn't exist on exactly the directories large
+        enough to need it. set_cached_users must use the much higher
+        MAX_USERS_DATA_SIZE instead."""
+        # One record is ~50 bytes; 150,000 of them (~7.5MB) comfortably
+        # exceeds the old 5MB MAX_DATA_SIZE while staying under the new
+        # 50MB MAX_USERS_DATA_SIZE.
+        many_users = [{"UserId": f"u-{i}", "UserName": f"user{i}@example.com"} for i in range(150_000)]
+
+        cache_module.set_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890", many_users)
+
+        mock_s3_client.put_object.assert_called_once()
+
 
 class TestCacheResilience:
     """Tests for with_cache_resilience function."""
@@ -444,3 +462,77 @@ class TestCacheResilience:
                 cache_setter=cache_setter,
                 resource_name="test",
             )
+
+    def test_empty_api_result_does_not_overwrite_a_good_cache(self, sample_accounts):
+        """Regression test (#194 High #4, found live by Andrey Devyatkin):
+        the only guard before writing API data to the cache used to be "is
+        it not None", not a sanity check on its content. A genuinely empty
+        API response (a pagination fluke, a transient AWS-side bug -- a real
+        deployment actually using this module always has at least one real
+        account/permission-set/user) must not silently overwrite a real,
+        non-empty cache, destroying the fallback this cache exists to
+        provide. The empty result is still returned to the caller, though --
+        this is a cache-write safeguard, not a change to what's reported as
+        the current live answer."""
+        cache_getter = Mock(return_value=sample_accounts)
+        api_getter = Mock(return_value=[])
+        cache_setter = Mock()
+
+        result = cache_module.with_cache_resilience(
+            cache_getter=cache_getter,
+            api_getter=api_getter,
+            cache_setter=cache_setter,
+            resource_name="test",
+        )
+
+        assert result == []
+        cache_setter.assert_not_called()
+
+    def test_empty_api_result_still_writes_when_cache_was_already_empty(self):
+        """Companion to the test above: an empty result is only suspicious
+        relative to a non-empty cache. With no prior cache at all, storing
+        the (still possibly-correct) empty result is the same "no cached
+        data, store API result" path as any other first-ever write."""
+        cache_getter = Mock(return_value=None)
+        api_getter = Mock(return_value=[])
+        cache_setter = Mock()
+
+        result = cache_module.with_cache_resilience(
+            cache_getter=cache_getter,
+            api_getter=api_getter,
+            cache_setter=cache_setter,
+            resource_name="test",
+        )
+
+        assert result == []
+        cache_setter.assert_called_once_with([])
+
+    def test_a_stalled_cache_read_does_not_block_an_already_successful_api_call(self, sample_accounts, monkeypatch):
+        """Regression test (#194 High #4, found live by Andrey Devyatkin):
+        the cache-read side of the parallel lookup used to have no timeout
+        at all, so a stalled S3 read blocked the whole call even after the
+        API call -- running concurrently on its own thread -- had already
+        returned successfully. Patches the timeout down to keep this test
+        fast rather than actually waiting out the real default."""
+        import time
+
+        monkeypatch.setattr(cache_module, "CACHE_LOOKUP_TIMEOUT_SECONDS", 0.05)
+
+        def slow_cache_getter():
+            time.sleep(0.5)
+            return sample_accounts
+
+        api_getter = Mock(return_value=sample_accounts)
+        cache_setter = Mock()
+
+        start = time.monotonic()
+        result = cache_module.with_cache_resilience(
+            cache_getter=slow_cache_getter,
+            api_getter=api_getter,
+            cache_setter=cache_setter,
+            resource_name="test",
+        )
+        elapsed = time.monotonic() - start
+
+        assert result == sample_accounts
+        assert elapsed < 0.5, "should not have waited out the full slow cache read once the API call succeeded"
