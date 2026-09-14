@@ -117,10 +117,11 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # see the README's CLI section. cli_expected_api_id defaults to ""
         # when the CLI route doesn't exist, and a forged event carrying
         # "apiId": "" satisfies this check too -- so does simply omitting
-        # requestContext.apiId (or requestContext itself), since .get's own
-        # missing-key default is None, not this comment's own prior claim of
-        # "", though None != "" is also true, so the comparison below still
-        # rejects it the same way (#194 B1) -- it is NOT itself a
+        # requestContext.apiId (or requestContext itself), since dict.get
+        # returns None by default when a key is missing, not this comment's
+        # own prior claim of "" -- though None != "" is also true, so the
+        # comparison below still rejects it the same way (#194 B1) -- it is
+        # NOT itself a
         # fail-closed guard against a deliberate forgery in
         # that configuration. The deployment still fails closed overall in
         # that case, but via a different check: cli_auth.extract_identity's
@@ -720,7 +721,7 @@ cache_for_dublicate_requests = {}
 
 
 @handle_errors
-def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # noqa: ARG001, PLR0915
+def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # noqa: ARG001, PLR0912, PLR0915
     # Registered as a Bolt lazy listener below -- its return value isn't
     # consumed by the framework, so the None the final best-effort
     # notification block can now produce (if that whole block fails) isn't
