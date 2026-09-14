@@ -821,7 +821,17 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         if payload.request.request_source == "cli" and payload.request.verified_email != "NA"
         else requester.email
     )
-    requester_group_ids = access_control.get_requester_group_ids_if_needed(cfg.statements, eligibility_email)
+    # Passed alongside eligibility_email, not instead of it (#194 B4
+    # residual, found by Andrey Devyatkin): get_requester_group_ids_if_needed
+    # uses this to look up group membership directly against the
+    # already-verified principal, skipping the email-to-principal
+    # resolution (secondary-domain fallback included) eligibility_email
+    # alone would still have gone through -- which could otherwise resolve
+    # to a *different* principal than the one actually being granted.
+    eligibility_verified_user_id = (
+        payload.request.verified_user_id if payload.request.request_source == "cli" and payload.request.verified_user_id != "NA" else None
+    )
+    requester_group_ids = access_control.get_requester_group_ids_if_needed(cfg.statements, eligibility_email, eligibility_verified_user_id)
     cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
     cache_for_dublicate_requests["account_id"] = payload.request.account_id
     cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
@@ -1008,12 +1018,20 @@ def process_access_request(  # noqa: PLR0915, PLR0912
     # the one place a reviewer would otherwise have to reason through why
     # two structurally identical decisions read two different variables.
     eligibility_email = request.verified_email if request.request_source == "cli" and request.verified_email != "NA" else requester.email
+    # See handle_button_click's identical eligibility_verified_user_id for
+    # why this is passed alongside eligibility_email (#194 B4 residual,
+    # found by Andrey Devyatkin).
+    eligibility_verified_user_id = (
+        request.verified_user_id if request.request_source == "cli" and request.verified_user_id != "NA" else None
+    )
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
         account_id=request.account_id,
         permission_set_name=request.permission_set_name,
         requester_email=eligibility_email,
-        requester_group_ids=access_control.get_requester_group_ids_if_needed(cfg.statements, eligibility_email),
+        requester_group_ids=access_control.get_requester_group_ids_if_needed(
+            cfg.statements, eligibility_email, eligibility_verified_user_id
+        ),
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 

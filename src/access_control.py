@@ -1,6 +1,6 @@
 import datetime
 from enum import Enum
-from typing import FrozenSet, Literal
+from typing import FrozenSet, Literal, Optional
 
 import boto3
 
@@ -55,14 +55,30 @@ def requester_email_variants(requester_email: str) -> FrozenSet[str]:
     return frozenset(variants)
 
 
-def get_requester_group_ids(requester_email: str) -> FrozenSet[str]:
+def get_requester_group_ids(requester_email: str, verified_user_id: Optional[str] = None) -> FrozenSet[str]:
     """Resolve the SSO group IDs the requester belongs to.
+
+    verified_user_id, when given, is a CLI request's already-verified
+    Identity Store principal -- group membership is then looked up directly
+    against it via sso.list_groups_for_user, skipping
+    get_user_principal_id_by_email's own email-to-principal resolution
+    entirely, secondary-domain fallback included (#194 B4 residual, found
+    by Andrey Devyatkin). Without this, requester_email was re-resolved to a
+    principal ID through that same fallback logic src/main.py's identity
+    verification explicitly distrusts on the CLI path -- so eligibility
+    groups could belong to a *different* Identity Store principal than
+    verified_user_id, the one execute_decision actually grants against.
+    requester_email is still used to resolve the principal when
+    verified_user_id isn't available (the Slack modal path, which has no
+    pre-verified identity of its own).
 
     Lookup errors are propagated so they cannot be confused with a successful lookup returning
     no memberships.
     """
     try:
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+        if verified_user_id:
+            return sso.list_groups_for_user(sso_instance.identity_store_id, verified_user_id, identitystore_client)
         user_principal_id, _ = sso.get_user_principal_id_by_email(
             identity_store_client=identitystore_client,
             identity_store_id=sso_instance.identity_store_id,
@@ -78,11 +94,15 @@ def get_requester_group_ids(requester_email: str) -> FrozenSet[str]:
 def get_requester_group_ids_if_needed(
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     requester_email: str,
+    verified_user_id: Optional[str] = None,
 ) -> FrozenSet[str]:
-    """Resolve requester group memberships only when some statement restricts by ``allowed_groups``."""
+    """Resolve requester group memberships only when some statement restricts by ``allowed_groups``.
+
+    See get_requester_group_ids for what verified_user_id changes.
+    """
     if not any(statement.allowed_groups for statement in statements):
         return frozenset()
-    return get_requester_group_ids(requester_email)
+    return get_requester_group_ids(requester_email, verified_user_id)
 
 
 def _filter_statements_for_requester(

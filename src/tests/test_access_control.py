@@ -1273,3 +1273,57 @@ def test_execute_decision_fails_closed_for_a_cli_request_missing_verified_user_i
 
     mock_resolve_by_email.assert_not_called()
     mock_create_assignment.assert_not_called()
+
+
+def test_get_requester_group_ids_uses_verified_user_id_directly_for_cli_requests():
+    """Regression test (#194 B4 residual, found live by Andrey Devyatkin):
+    when a CLI request's already-verified UserId is available, group
+    membership must be looked up directly against that principal via
+    sso.list_groups_for_user -- not re-derived by resolving requester_email
+    through get_user_principal_id_by_email, which applies the same
+    secondary-domain fuzzy-match fallback the CLI identity path elsewhere
+    explicitly distrusts. Re-deriving could resolve to a *different*
+    principal than verified_user_id, the one actually being granted access
+    -- making the eligibility decision and the grant target evaluate two
+    different people. Verified by asserting get_user_principal_id_by_email
+    is never called at all, not just that the right groups come back."""
+    expected_group_ids = frozenset({"g-1", "g-2"})
+
+    with (
+        patch.object(
+            access_control.sso,
+            "describe_sso_instance",
+            return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+        ),
+        patch.object(access_control.sso, "get_user_principal_id_by_email") as mock_resolve_by_email,
+        patch.object(access_control.sso, "list_groups_for_user", return_value=expected_group_ids) as mock_list_groups,
+    ):
+        result = access_control.get_requester_group_ids("req@example.com", verified_user_id="u-verified-from-cli-session")
+
+    assert result == expected_group_ids
+    mock_resolve_by_email.assert_not_called()
+    mock_list_groups.assert_called_once_with("d-1234", "u-verified-from-cli-session", access_control.identitystore_client)
+
+
+def test_get_requester_group_ids_still_resolves_by_email_when_no_verified_user_id():
+    """Companion to the test above: without a verified_user_id (the Slack
+    modal path, which has no pre-verified identity of its own), group
+    membership resolution must fall back to the pre-existing
+    email-based lookup unchanged."""
+    expected_group_ids = frozenset({"g-3"})
+    resolved_user_id = "u-resolved-by-email"
+
+    with (
+        patch.object(
+            access_control.sso,
+            "describe_sso_instance",
+            return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+        ),
+        patch.object(access_control.sso, "get_user_principal_id_by_email", return_value=(resolved_user_id, False)) as mock_resolve_by_email,
+        patch.object(access_control.sso, "list_groups_for_user", return_value=expected_group_ids) as mock_list_groups,
+    ):
+        result = access_control.get_requester_group_ids("req@example.com")
+
+    assert result == expected_group_ids
+    mock_resolve_by_email.assert_called_once()
+    mock_list_groups.assert_called_once_with("d-1234", resolved_user_id, access_control.identitystore_client)
