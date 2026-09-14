@@ -42,3 +42,18 @@ updates:
       - "dependencies"
       - "go"
       - "cli"
+
+  # Every action in .github/workflows is now SHA-pinned (#194 C2) --
+  # without this, nothing ever bumps those pinned SHAs forward, silently
+  # freezing every workflow on whatever commit happened to be current when
+  # each was pinned instead of picking up upstream fixes (including
+  # security fixes to the actions themselves).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "github-actions"
+    labels:
+      - "dependencies"
+      - "github-actions"

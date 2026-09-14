@@ -107,6 +107,23 @@ def handle_request_for_group_access_submittion(
     logger.info("View submitted", extra={"view": request})
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)
 
+    # Same check, same reasoning as main.py's handle_request_for_access_submittion:
+    # this modal has no input-level reason length cap either, and this
+    # view_submission is already acked (and the modal already closed) by
+    # the time this lazy listener runs, so a DM is the only way left to
+    # tell the requester their submission didn't go through.
+    if not slack_helpers.reason_fits_slack_field(request.reason):
+        logger.info("Rejected group access request: reason too long once escaped", extra={"requester_slack_id": requester.id})
+        client.chat_postMessage(
+            channel=requester.id,
+            text=(
+                f"Your access request wasn't submitted: the reason is too long "
+                f"(must be at most {slack_helpers.MAX_REASON_LENGTH} characters, fewer if it contains &, <, or >). "
+                "Please shorten it and submit the request again."
+            ),
+        )
+        return None
+
     group = sso.describe_group(identity_store_id, request.group_id, identity_store_client)
 
     decision = access_control.make_decision_on_access_request(
@@ -152,7 +169,20 @@ def handle_request_for_group_access_submittion(
 
     text, dm_text, color_coding_emoji = _group_access_decision_messages(client, decision)
 
-    is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+    # Isolated in its own try (#194 A4, extended to this call site in a
+    # final pre-delivery review -- the fix already applied to main.py's
+    # process_access_request hadn't been propagated here): left bare, a
+    # transient conversations_members hiccup here aborted the entire group
+    # request submission outright, before execute_decision_on_group_request
+    # even runs, instead of just this one, unrelated notification-routing
+    # check. Defaults to False, same reasoning as main.py: fails toward
+    # over-notifying rather than silently skipping the only notification a
+    # requester who genuinely isn't in the channel would see.
+    try:
+        is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to check channel membership; assuming not in channel so the DM fallback still fires: {e}")
+        is_user_in_channel = False
 
     # execute_decision_on_group_request runs before every notification below
     # (#194 A3, mirroring main.py's process_access_request) -- not after,
@@ -181,7 +211,7 @@ def handle_request_for_group_access_submittion(
     except Exception as e:  # noqa: BLE001
         grant_error = e
         logger.exception(
-            "execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome",
+            f"execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome: {e}",
             extra={"decision": decision.dict()},
         )
         color_coding_emoji = cfg.bad_result_emoji
@@ -227,8 +257,8 @@ def handle_request_for_group_access_submittion(
                     channel=requester.id,
                     text="Your request was processed, permissions granted.",
                 )
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to fully post/update notifications about this request's outcome (best-effort, not re-raised)")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to fully post/update notifications about this request's outcome (best-effort, not re-raised): {e}")
 
     if grant_error is not None:
         raise grant_error
@@ -244,7 +274,14 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     logger.info("Button click payload", extra={"payload": payload})
     approver = slack_helpers.get_user(client, id=payload.approver_slack_id)
     requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
-    is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+    # Isolated in its own try -- see the identical comment on the
+    # submission-side call site above (#194 A4, extended here in a final
+    # pre-delivery review).
+    try:
+        is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to check channel membership; assuming not in channel so the DM fallback still fires: {e}")
+        is_user_in_channel = False
 
     if (
         cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
@@ -287,14 +324,24 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
     cache_for_dublicate_requests["group_id"] = payload.request.group_id
 
-    decision = access_control.make_decision_on_approve_request(
-        action=payload.action,
-        statements=cfg.group_statements,  # type: ignore # noqa: PGH003
-        group_id=payload.request.group_id,
-        approver_email=approver.email,
-        requester_email=requester.email,
-        requester_group_ids=requester_group_ids,
-    )
+    # Same gap, same fix as main.py's handle_button_click (#194 A3 residual,
+    # found by Andrey Devyatkin): with no handler of its own, an exception
+    # from this call propagated straight to @handle_errors with the cache
+    # left populated -- leaving this exact request permanently stuck
+    # reporting "already in progress" to any retry, for the rest of this
+    # container's life, with nothing left to ever clear it.
+    try:
+        decision = access_control.make_decision_on_approve_request(
+            action=payload.action,
+            statements=cfg.group_statements,  # type: ignore # noqa: PGH003
+            group_id=payload.request.group_id,
+            approver_email=approver.email,
+            requester_email=requester.email,
+            requester_group_ids=requester_group_ids,
+        )
+    except Exception:
+        cache_for_dublicate_requests.clear()
+        raise
 
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
@@ -325,8 +372,8 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             blocks=slack_helpers.remove_blocks(payload.message["blocks"], block_ids=["buttons"]),
             text=f"<@{approver.id}> is processing this request...",
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to strip buttons before granting (best-effort, not re-raised)")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to strip buttons before granting (best-effort, not re-raised): {e}")
 
     # execute_decision_on_group_request runs before the chat_update/
     # notifications below, not after: the old order recolored the message
@@ -347,7 +394,7 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
     except Exception as e:  # noqa: BLE001
         grant_error = e
         logger.exception(
-            "execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome",
+            f"execute_decision_on_group_request failed -- overriding the message to reflect the actual outcome: {e}",
             extra={"decision": decision.dict()},
         )
         text = f"An error occurred while granting access: {e}"
@@ -387,8 +434,8 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             text=text,
             thread_ts=payload.thread_ts,
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to fully post/update notifications about this approval's outcome (best-effort, not re-raised)")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to fully post/update notifications about this approval's outcome (best-effort, not re-raised): {e}")
 
     if grant_error is not None:
         raise grant_error

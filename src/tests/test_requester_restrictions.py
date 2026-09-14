@@ -352,7 +352,7 @@ class TestRequesterGroupResolution:
         assert access_control.get_requester_group_ids_if_needed(statements, "dev@test.com") == frozenset()
 
     def test_group_lookup_performed_when_statement_restricts_by_group(self, monkeypatch):
-        monkeypatch.setattr(access_control, "get_requester_group_ids", lambda _email: frozenset([GROUP_A]))
+        monkeypatch.setattr(access_control, "get_requester_group_ids", lambda _email, _verified_user_id=None: frozenset([GROUP_A]))
         statements = frozenset([Statement.model_validate({**account_statement().model_dump(), "allowed_groups": [GROUP_A]})])
         assert access_control.get_requester_group_ids_if_needed(statements, "dev@test.com") == frozenset([GROUP_A])
 

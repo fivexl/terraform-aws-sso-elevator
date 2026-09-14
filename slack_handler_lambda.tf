@@ -54,7 +54,6 @@ module "access_requester_slack_handler" {
 
 
       SSO_INSTANCE_ARN                            = local.sso_instance_arn
-      POWERTOOLS_LOGGER_LOG_EVENT                 = true
       SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
       REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
       REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
@@ -71,6 +70,15 @@ module "access_requester_slack_handler" {
       CONFIG_BUCKET_NAME                          = local.config_bucket_name
       CONFIG_S3_KEY                               = "config/approval-config.json"
       CACHE_ENABLED                               = var.cache_enabled
+      # "" when unset, not a real null -- Lambda environment variables can't
+      # carry one. src/config.py's config_bucket_kms_key_arn field uses the
+      # same empty-string sentinel already established for
+      # cli_expected_api_id. Lets the account/permission-set/user caches
+      # this Lambda writes into this same bucket use the operator's own KMS
+      # key too, instead of always hardcoding AES256 regardless of what
+      # encryption the bucket's other object (approval-config.json, below)
+      # already uses (#194 High #5, found by Andrey Devyatkin).
+      CONFIG_BUCKET_KMS_KEY_ARN = var.config_bucket_kms_key_arn != null ? var.config_bucket_kms_key_arn : ""
     },
     # Only set when the CLI route actually exists. Gated on both flags, not
     # enable_access_requester_cli alone: create_api_gateway = false means
@@ -267,13 +275,55 @@ data "aws_iam_policy_document" "slack_handler" {
     effect = "Allow"
     actions = [
       "s3:GetObject",
-      "s3:PutObject",
       "s3:ListBucket",
     ]
     resources = [
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
+  }
+  # Read (above) still covers the whole bucket -- this Lambda genuinely
+  # needs to read both config/approval-config.json and every cache object.
+  # Write is scoped to only the cache key shapes cache.py's CacheKey
+  # constants define (accounts.json, permission_sets/*, users/*), not
+  # config/approval-config.json itself: that file is Terraform-managed
+  # (aws_s3_object.approval_config), never written by this Lambda at
+  # runtime, and a blanket PutObject on the whole bucket meant this
+  # Lambda could, in principle, rewrite its own approval rules -- the
+  # revoker Lambda's equivalent statement is correctly read-only, since it
+  # never writes here at all (#194 note, found by Andrey Devyatkin: newly
+  # load-bearing now that #198 also put identity data in this same
+  # bucket).
+  statement {
+    sid    = "AllowS3CacheWrite"
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+    ]
+    resources = [
+      "${module.config_bucket.s3_bucket_arn}/accounts.json",
+      "${module.config_bucket.s3_bucket_arn}/permission_sets/*",
+      "${module.config_bucket.s3_bucket_arn}/users/*",
+    ]
+  }
+  # Only granted when an operator actually configured their own key --
+  # kms:GenerateDataKey and kms:Decrypt are what a PutObject/GetObject using
+  # SSEKMSKeyId actually needs; without this statement, set_cached_* would
+  # 403 on every write once CONFIG_BUCKET_KMS_KEY_ARN is set, since the
+  # AllowS3Config statement above only covers S3 actions, not the KMS calls
+  # S3 makes on this Lambda's behalf to use that key (#194 High #5, found
+  # by Andrey Devyatkin).
+  dynamic "statement" {
+    for_each = var.config_bucket_kms_key_arn != null ? [var.config_bucket_kms_key_arn] : []
+    content {
+      sid    = "AllowConfigBucketKMS"
+      effect = "Allow"
+      actions = [
+        "kms:GenerateDataKey",
+        "kms:Decrypt",
+      ]
+      resources = [statement.value]
+    }
   }
 }
 

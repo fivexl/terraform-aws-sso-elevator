@@ -193,6 +193,29 @@ def test_handle_cli_access_request_rejects_mismatched_api_id(main_module):
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
+def test_handle_cli_access_request_logs_the_caller_arn_on_an_api_id_mismatch(main_module):
+    """Regression test (#194 B10): the apiId-mismatch rejection is one of
+    the earliest, most security-relevant rejections on this path, but used
+    to log no identity information at all -- the caller ARN was only
+    captured later, and only at DEBUG (which the default LOG_LEVEL=INFO
+    deployment never emits). An operator investigating a wave of these
+    rejections had no identity to go on. The caller's asserted ARN (API
+    Gateway's own AWS_IAM-authorizer-verified value, not attacker-controlled
+    body content) must now be logged at INFO alongside this rejection."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+        api_id="some-other-api-id",
+    )
+    with patch.object(main_module, "logger") as mock_logger:
+        result = main_module.handle_cli_access_request(event)
+
+    assert result == main_module.cli_auth.GENERIC_REJECTION
+    expected_arn = event["requestContext"]["authorizer"]["iam"]["userArn"]
+    info_calls = mock_logger.info.call_args_list
+    assert any("apiId" in (c.args[0] if c.args else "") and c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls)
+
+
 def test_handle_cli_access_request_rejects_missing_api_id(main_module):
     """A direct lambda:InvokeFunction call that omits requestContext.apiId
     entirely (rather than forging a wrong one) must also be rejected --
@@ -375,6 +398,22 @@ def test_handle_cli_access_request_rejects_non_object_json_body(main_module):
     assert result["statusCode"] == 400
 
 
+def test_handle_cli_access_request_rejects_missing_body_with_an_otherwise_valid_identity(main_module):
+    """Regression test (#194 test gap): a request with no body at all
+    (event["body"] is None -- _cli_request_event's own default when no body
+    dict is given) from an otherwise-genuinely-verifiable identity must be
+    rejected as a clean 400 (missing required fields), the same as an empty
+    "{}" body, not crash or fall through to the 500 handler. `event.get("body")
+    or "{}"` is what makes a missing body behave like an empty JSON object in
+    the first place; this pins that specific behavior down explicitly."""
+    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
+    assert event["body"] is None
+    with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
+        result = main_module.handle_cli_access_request(event)
+    mock_extract_identity.assert_not_called()
+    assert result["statusCode"] == 400
+
+
 def test_handle_cli_access_request_rejects_malformed_body_without_resolving_identity(main_module):
     """Regression test (#193 item 1): cheap request-body validation must run
     before cli_auth.extract_identity, not after -- that call does an
@@ -389,6 +428,52 @@ def test_handle_cli_access_request_rejects_malformed_body_without_resolving_iden
         result = main_module.handle_cli_access_request(event)
     mock_extract_identity.assert_not_called()
     assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_decodes_a_base64_encoded_body(main_module):
+    """Regression test (#194 B7): API Gateway HTTP APIs base64-encode the
+    body onto this same "body" field (rather than using a separate one)
+    whenever isBase64Encoded is true. The shipped Go CLI always sends
+    application/json, which HTTP APIs never encode this way, so this never
+    triggers against it in practice -- but ignoring the flag would silently
+    misreport a different signed client's genuinely valid, merely-encoded
+    request as "not valid JSON" instead of actually decoding it first."""
+    import base64
+
+    raw_json = json.dumps({"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
+    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
+    event["body"] = base64.b64encode(raw_json.encode("utf-8")).decode("ascii")
+    event["isBase64Encoded"] = True
+
+    with patch.object(
+        main_module.cli_auth, "extract_identity", side_effect=RuntimeError("stop-here-deliberately")
+    ) as mock_extract_identity:
+        result = main_module.handle_cli_access_request(event)
+
+    # Reaching extract_identity at all proves the base64 body decoded into
+    # valid JSON that passed the account/permission_set/reason checks --
+    # a body that was never decoded would have failed JSON parsing first
+    # and never gotten this far. (The RuntimeError above is deliberately
+    # unrelated to base64/JSON, just a way to stop execution right at that
+    # point without needing to mock everything downstream of it too; it
+    # surfaces as the generic 500 handler's response, not a decode failure.)
+    mock_extract_identity.assert_called_once()
+    assert result["statusCode"] == 500  # noqa: PLR2004
+
+
+def test_handle_cli_access_request_rejects_undecodable_base64_body(main_module):
+    """Companion to the test above: isBase64Encoded=True with a body that
+    isn't valid base64 at all must still be rejected as a clean 400, not an
+    unhandled exception."""
+    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
+    event["body"] = "not valid base64!!!"
+    event["isBase64Encoded"] = True
+
+    with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
+        result = main_module.handle_cli_access_request(event)
+
+    mock_extract_identity.assert_not_called()
+    assert result["statusCode"] == 400  # noqa: PLR2004
 
 
 def test_handle_cli_access_request_rejects_oversized_reason(main_module):
@@ -470,6 +555,32 @@ def test_handle_cli_access_request_rejects_wildcard_permission_set_not_in_the_re
     assert main_module.cfg.permission_sets == {"*"}  # sanity check on the fixture's own config
     result = main_module.handle_cli_access_request(event)
     assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_gives_identical_responses_for_bad_account_vs_bad_permission_set(main_module):
+    """Regression test (#194 B8): the account-not-configured and
+    permission_set-not-configured checks used to return distinct message
+    text, letting any authenticated SSO caller (this route's AWS_IAM
+    authorizer only proves signing capability, not that the signer is one
+    this deployment's policy actually intends to allow) walk the account ID
+    and permission-set name spaces separately -- confirming each real value
+    one field at a time via which of the two messages came back, rather than
+    needing a whole matching pair before learning anything. Both failure
+    modes must now be indistinguishable."""
+    event_bad_account = _cli_request_event(
+        body={"account": "000000000000", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    event_bad_permission_set = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "made-up-permission-set", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    result_bad_account = main_module.handle_cli_access_request(event_bad_account)
+    result_bad_permission_set = main_module.handle_cli_access_request(event_bad_permission_set)
+
+    assert result_bad_account["statusCode"] == 400  # noqa: PLR2004
+    assert result_bad_permission_set["statusCode"] == 400  # noqa: PLR2004
+    assert result_bad_account["body"] == result_bad_permission_set["body"]
 
 
 def test_handle_cli_access_request_rejects_malformed_account_id(main_module):
@@ -803,13 +914,79 @@ def test_handle_cli_access_request_rejects_verified_identity_with_no_slack_accou
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     with (
-        patch.object(main_module.slack_helpers, "get_user_by_email", side_effect=slack_sdk.errors.SlackApiError("users_not_found", None)),
+        patch.object(
+            main_module.slack_helpers,
+            "get_user_by_email",
+            side_effect=slack_sdk.errors.SlackApiError("users_not_found", {"ok": False, "error": "users_not_found"}),
+        ),
         patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
     ):
         result = main_module.handle_cli_access_request(event)
 
     assert result == main_module.cli_auth.GENERIC_REJECTION
     mock_post_message.assert_not_called()
+
+
+def test_handle_cli_access_request_reports_broken_slack_integration_instead_of_generic_rejection(main_module):
+    """Regression test (#194 B5): a Slack error other than "users_not_found"
+    -- invalid_auth/missing_scope from a rotated bot token or a dropped
+    OAuth scope, or an internal_error/outage -- says nothing about whether
+    the caller's AWS credentials are valid, so it must not be folded into
+    GENERIC_REJECTION's "credentials not associated with SSO session"
+    response. It must instead be treated like any other unexpected error:
+    logged loudly, posted to the approvals channel, and reported to the
+    caller as a 500, not a false claim their credentials are bad."""
+    import slack_sdk.errors
+
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    with (
+        patch.object(
+            main_module.slack_helpers,
+            "get_user_by_email",
+            side_effect=slack_sdk.errors.SlackApiError("invalid_auth", {"ok": False, "error": "invalid_auth"}),
+        ),
+        patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result != main_module.cli_auth.GENERIC_REJECTION
+    assert result["statusCode"] == 500  # noqa: PLR2004
+    mock_post_message.assert_called_once()
+
+
+def test_handle_cli_access_request_still_returns_500_when_the_error_notification_itself_fails(main_module):
+    """Regression test (#194 B5 residual, found live by Andrey Devyatkin):
+    the blanket handler's own chat_postMessage call -- posting the
+    "unexpected error" notification -- was unguarded, so a second Slack
+    failure there (e.g. invalid_auth on both calls) propagated straight past
+    this except block instead of reaching the documented 500 body below it.
+    The caller got API Gateway's opaque "Internal Server Error" instead of
+    {"message": "An unexpected error occurred..."}."""
+    import slack_sdk.errors
+
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    with (
+        patch.object(
+            main_module.slack_helpers,
+            "get_user_by_email",
+            side_effect=slack_sdk.errors.SlackApiError("invalid_auth", {"ok": False, "error": "invalid_auth"}),
+        ),
+        patch.object(
+            main_module.app.client,
+            "chat_postMessage",
+            side_effect=slack_sdk.errors.SlackApiError("invalid_auth", {"ok": False, "error": "invalid_auth"}),
+        ),
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result["statusCode"] == 500  # noqa: PLR2004
+    assert json.loads(result["body"]) == {"message": "An unexpected error occurred while processing the request."}
 
 
 def test_handle_cli_access_request_reports_unexpected_errors(main_module):
@@ -841,6 +1018,29 @@ def test_handle_cli_access_request_returns_503_on_transient_iam_error(main_modul
 
     assert result["statusCode"] == 503
     mock_post_message.assert_not_called()
+
+
+def test_handle_cli_access_request_logs_the_caller_arn_when_identity_cannot_be_verified(main_module):
+    """Regression test (#194 B10): an unresolvable identity (a signed
+    request whose session name doesn't match any real Identity Store user)
+    is the other of the two earliest, most security-relevant rejections
+    that used to carry no identity fields at all. The caller's asserted ARN
+    must now be logged at INFO alongside this rejection too, same as the
+    apiId-mismatch case."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    with (
+        patch.object(main_module.cli_auth, "extract_identity", return_value=None),
+        patch.object(main_module, "logger") as mock_logger,
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result == main_module.cli_auth.GENERIC_REJECTION
+    expected_arn = event["requestContext"]["authorizer"]["iam"]["userArn"]
+    info_calls = mock_logger.info.call_args_list
+    assert any(c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -1133,6 +1333,30 @@ def test_handle_button_click_posts_granted_message_on_success(main_module):
     assert main_module.cache_for_dublicate_requests == {}
 
 
+def test_handle_button_click_clears_the_dedup_cache_when_make_decision_on_approve_request_raises(main_module):
+    """Regression test (#194 A3 residual, found live by Andrey Devyatkin):
+    the dedup cache is written just before this call, and every return path
+    around it clears the cache again -- except this one. Left unguarded, an
+    exception here (a malformed statement, anything) propagated straight to
+    @handle_errors with the cache still populated, leaving this exact
+    request permanently stuck reporting "already in progress" to any retry
+    for the rest of this container's life."""
+    body = _button_click_body()
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.access_control, "make_decision_on_approve_request", side_effect=RuntimeError("boom")),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    assert main_module.cache_for_dublicate_requests == {}
+
+
 def test_handle_button_click_strips_buttons_before_execute_decision_runs(main_module):
     """Regression test (#194 A2): the buttons must be removed via their own
     chat_update *before* execute_decision runs, not only afterward together
@@ -1177,6 +1401,48 @@ def test_handle_button_click_strips_buttons_before_execute_decision_runs(main_mo
     assert client.chat_update.call_count == 2  # noqa: PLR2004
 
 
+def test_handle_button_click_evaluates_eligibility_against_pinned_verified_email_for_cli_requests(main_module):
+    """Regression test (#194 B4): for a CLI-sourced request, eligibility
+    (requester_group_ids and make_decision_on_approve_request's
+    requester_email) must be computed from the submission-time verified
+    email round-tripped through the message's "Verified Email" field, not a
+    fresh Slack lookup of the requester's *current* profile email -- the
+    latter can drift between submission and approval (a Slack profile
+    change, a directory update) while the grant itself stays pinned to
+    verified_user_id from submission time. Evaluating eligibility against a
+    different identity than the one actually granted would be internally
+    inconsistent -- e.g. permitting the decision based on group membership
+    that person no longer even has, or denying it based on membership the
+    actually-granted identity does have."""
+    body = _button_click_body()
+    body["message"]["blocks"][0]["fields"] += [
+        {"text": "Source: CLI"},
+        {"text": "Verified ARN: arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/pinned.user"},
+        {"text": "Verified UserId: pinned-user-id"},
+        {"text": "Verified Email: pinned@example.com"},
+    ]
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    # The requester's *current* Slack profile email is deliberately different
+    # from "Verified Email" above, simulating a profile change since
+    # submission.
+    requester = MagicMock(id="U_REQ", email="drifted-current@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+
+    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.access_control, "get_requester_group_ids_if_needed", return_value=frozenset()) as mock_get_group_ids,
+        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision) as mock_make_decision,
+        patch.object(main_module.access_control, "execute_decision", return_value=True),
+    ):
+        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    assert mock_get_group_ids.call_args.args[1] == "pinned@example.com"
+    assert mock_make_decision.call_args.kwargs["requester_email"] == "pinned@example.com"
+
+
 def test_handle_button_click_notification_failure_after_a_successful_grant_is_not_reported_as_failure(main_module):
     """Regression test for the reorder's own regression: once
     execute_decision succeeds, a Slack API failure while posting/updating
@@ -1203,3 +1469,55 @@ def test_handle_button_click_notification_failure_after_a_successful_grant_is_no
         result = main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# handle_request_for_access_submittion
+# ---------------------------------------------------------------------------
+
+
+def test_handle_request_for_access_submittion_rejects_reason_too_long_once_escaped(main_module):
+    """Regression test: the Slack modal had no reason-length cap of any
+    kind (unlike the CLI path, which already checked this) -- reported live
+    by Andrey Devyatkin, reproduced against a real deployment with a 399-
+    "&"-character reason (raw length nowhere near any limit, but expands to
+    a 2003-character field once escaped and wrapped in "Reason: "), which
+    Slack's own chat.postMessage rejected with invalid_blocks, surfacing as
+    a 500 plus an "unexpected error" post in the approvals channel. The
+    modal has already closed by the time this lazy listener runs (it's
+    acked unconditionally beforehand), so the only thing left to do is DM
+    the requester and never attempt to post the request at all."""
+    fake_request = MagicMock(requester_slack_id="U_REQ", reason="&" * 400)
+    client = MagicMock()
+
+    with (
+        patch.object(main_module.slack_helpers.RequestForAccessView, "parse", return_value=fake_request),
+        patch.object(main_module.slack_helpers, "get_user", return_value=MagicMock(id="U_REQ", email="req@example.com")),
+        patch.object(main_module, "process_access_request") as mock_process,
+    ):
+        result = main_module.handle_request_for_access_submittion.__wrapped__(body={}, ack=MagicMock(), client=client, context={})
+
+    assert result is None
+    mock_process.assert_not_called()
+    client.chat_postMessage.assert_called_once()
+    assert client.chat_postMessage.call_args.kwargs["channel"] == "U_REQ"
+    assert "too long" in client.chat_postMessage.call_args.kwargs["text"].lower()
+
+
+def test_handle_request_for_access_submittion_still_submits_a_normal_reason(main_module):
+    """Companion to the test above: an ordinary reason must still reach
+    process_access_request unchanged -- the new check must not accidentally
+    reject legitimate requests."""
+    fake_request = MagicMock(requester_slack_id="U_REQ", reason="debugging prod issue")
+    fake_requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+
+    with (
+        patch.object(main_module.slack_helpers.RequestForAccessView, "parse", return_value=fake_request),
+        patch.object(main_module.slack_helpers, "get_user", return_value=fake_requester),
+        patch.object(main_module, "process_access_request") as mock_process,
+    ):
+        main_module.handle_request_for_access_submittion.__wrapped__(body={}, ack=MagicMock(), client=client, context={})
+
+    mock_process.assert_called_once_with(request=fake_request, requester=fake_requester, client=client)
+    client.chat_postMessage.assert_not_called()

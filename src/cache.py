@@ -24,11 +24,35 @@ ARN_PATTERN = re.compile(r"^arn:aws(?:-[a-z0-9]+){0,5}:sso:::\w+/[\w-]+$")
 # Maximum ARN length to prevent excessively long input
 MAX_ARN_LENGTH = 1024
 
-# Maximum size for serialized data to prevent excessively large payloads (in bytes)
+# Maximum size for serialized data to prevent excessively large payloads (in bytes).
+# Sized for the accounts/permission-sets caches, which are genuinely small
+# (kilobytes) for any real org -- a company doesn't have thousands of AWS
+# accounts or permission sets.
 MAX_DATA_SIZE = 5 * 1024 * 1024  # 5MB limit for S3 objects
+
+# The users cache needs a much higher ceiling than MAX_DATA_SIZE (#194 High
+# #4, found by Andrey Devyatkin): a representative ListUsers record is ~445
+# bytes, so MAX_DATA_SIZE's 5MB is crossed at just 11,616 users -- above
+# that, set_cached_users silently failed to write anything at all (caught,
+# logged as a warning, cache left empty), so the fallback this cache exists
+# to provide didn't exist on exactly the large directories most likely to
+# hit a throttle in the first place. 50MB comfortably covers a directory of
+# roughly 100k+ users; S3 itself supports objects up to 5TB, so there's no
+# real ceiling being worked around here, just headroom against a runaway
+# payload.
+MAX_USERS_DATA_SIZE = 50 * 1024 * 1024  # 50MB limit for the users cache specifically
 
 # Pattern for validating S3 bucket names
 BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+
+# with_cache_resilience waits on this before treating the cache lookup as
+# failed (#194 High #4, found by Andrey Devyatkin): the cache read used to
+# have no timeout at all, so a stalled S3 GetObject call blocked the whole
+# request even after the live API call -- running in parallel on a separate
+# thread -- had already returned successfully. A few seconds is generous for
+# a same-region S3 read; anything slower than that is not a cache worth
+# waiting on when a real answer is already in hand.
+CACHE_LOOKUP_TIMEOUT_SECONDS = 5
 
 
 @dataclass
@@ -37,6 +61,9 @@ class CacheConfig:
 
     bucket_name: str
     enabled: bool
+    # "" (not None) when unset, matching cfg.config_bucket_kms_key_arn's own
+    # sentinel -- see that field's docstring in config.py.
+    kms_key_arn: str = ""
 
     @staticmethod
     def from_config(cfg: config.Config) -> "CacheConfig":
@@ -44,6 +71,7 @@ class CacheConfig:
         return CacheConfig(
             bucket_name=cfg.config_bucket_name,
             enabled=cfg.cache_enabled,
+            kms_key_arn=cfg.config_bucket_kms_key_arn,
         )
 
 
@@ -129,11 +157,15 @@ def _validate_bucket_name(bucket_name: str) -> str:
     return bucket_name
 
 
-def _sanitize_json_data(data: list[dict[str, Any]]) -> str:
+def _sanitize_json_data(data: list[dict[str, Any]], max_size: int = MAX_DATA_SIZE) -> str:
     """Sanitize and validate data before storing in S3.
 
     Args:
         data: List of dictionaries to serialize
+        max_size: Maximum allowed serialized size in bytes -- defaults to
+            MAX_DATA_SIZE (sized for the small accounts/permission-sets
+            caches); set_cached_users passes MAX_USERS_DATA_SIZE instead,
+            since a real user directory can be orders of magnitude larger.
 
     Returns:
         JSON string of the sanitized data
@@ -150,10 +182,27 @@ def _sanitize_json_data(data: list[dict[str, Any]]) -> str:
         raise ValueError(f"Data contains non-serializable content: {e}") from e
 
     data_size = len(serialized.encode("utf-8"))
-    if data_size > MAX_DATA_SIZE:
-        raise ValueError(f"Data size ({data_size} bytes) exceeds maximum allowed size ({MAX_DATA_SIZE} bytes)")
+    if data_size > max_size:
+        raise ValueError(f"Data size ({data_size} bytes) exceeds maximum allowed size ({max_size} bytes)")
 
     return serialized
+
+
+def _encryption_kwargs(cache_config: CacheConfig) -> dict[str, str]:
+    """put_object kwargs for whichever encryption this bucket is actually
+    configured for.
+
+    An explicit ServerSideEncryption on a PUT overrides the bucket's own
+    default (documented S3 behaviour) -- hardcoding "AES256" here regardless
+    of cache_config.kms_key_arn would silently ignore an operator's own KMS
+    key even when they've already set one up for this exact bucket (the
+    Terraform-managed approval-config.json object in it already honours
+    config_bucket_kms_key_arn; #194 High #5, found by Andrey Devyatkin).
+    Falls back to plain AES256 -- the same default this bucket and every
+    write here already used -- when no key is configured."""
+    if cache_config.kms_key_arn:
+        return {"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": cache_config.kms_key_arn}
+    return {"ServerSideEncryption": "AES256"}
 
 
 def get_cached_accounts(
@@ -222,7 +271,7 @@ def set_cached_accounts(
             Key=CacheKey.ACCOUNTS,
             Body=sanitized_data.encode("utf-8"),
             ContentType="application/json",
-            ServerSideEncryption="AES256",
+            **_encryption_kwargs(cache_config),
         )
 
         logger.info(f"Cached {len(accounts)} accounts")
@@ -311,7 +360,7 @@ def set_cached_permission_sets(
             Key=key,
             Body=sanitized_data.encode("utf-8"),
             ContentType="application/json",
-            ServerSideEncryption="AES256",
+            **_encryption_kwargs(cache_config),
         )
 
         logger.info(f"Cached {len(permission_sets)} permission sets")
@@ -355,6 +404,25 @@ def get_cached_users(
 
         users = json.loads(response["Body"].read().decode("utf-8"))
 
+        # Minimal shape validation (#194 High #4 residual, found by Andrey
+        # Devyatkin): unlike get_cached_accounts/get_cached_permission_sets,
+        # which each call .model_validate(...) and degrade to a clean cache
+        # miss on a shape mismatch, this used to trust json.loads' raw
+        # output completely. A malformed cached blob (a corrupted write, a
+        # manual edit, anything) reached find_email_by_username's
+        # user.get("UserName", ...) / user["UserId"] unguarded -- raising
+        # AttributeError or KeyError, caught by neither ClientError nor
+        # BotoCoreError below, surfacing as a 500 plus a Slack post on
+        # every single request until the bad object was fixed or deleted
+        # by hand. Not a full pydantic model like the other two caches
+        # (users aren't cached through one at all, by design -- the raw
+        # Identity Store dict shape is passed through as-is), just enough
+        # structural validation to guarantee what find_email_by_username
+        # and its callers actually dereference unconditionally exists.
+        if not isinstance(users, list) or not all(isinstance(u, dict) and "UserId" in u for u in users):
+            logger.warning("Cached users data has an unexpected shape -- treating as a cache miss")
+            return None
+
         logger.info(f"Retrieved {len(users)} users from cache")
         return users
 
@@ -388,7 +456,7 @@ def set_cached_users(
         validated_bucket_name = _validate_bucket_name(cache_config.bucket_name)
         validated_identity_store_id = _validate_identity_store_id(identity_store_id)
 
-        sanitized_data = _sanitize_json_data(users)
+        sanitized_data = _sanitize_json_data(users, max_size=MAX_USERS_DATA_SIZE)
 
         key = f"{CacheKey.USERS_PREFIX}{validated_identity_store_id}.json"
 
@@ -397,7 +465,7 @@ def set_cached_users(
             Key=key,
             Body=sanitized_data.encode("utf-8"),
             ContentType="application/json",
-            ServerSideEncryption="AES256",
+            **_encryption_kwargs(cache_config),
         )
 
         logger.info(f"Cached {len(users)} users")
@@ -467,6 +535,25 @@ def _update_cache_if_needed(
         resource_name: Name of resource for logging
         compare_func: Optional custom comparison function
     """
+    # An empty API result must not silently overwrite a real, non-empty
+    # cache (#194 High #4, found by Andrey Devyatkin): the only guard here
+    # used to be "is api_data not None", not a sanity check -- a genuinely
+    # empty ListUsers/ListAccounts/ListPermissionSets response (a pagination
+    # fluke, a transient AWS-side bug, anything) was treated as an
+    # authoritative "there are now zero of these" and wrote right over a
+    # good prior snapshot, destroying the exact fallback this cache exists
+    # to provide. A live deployment actually using SSO Elevator always has
+    # at least one real account/permission-set/user, so an empty result
+    # while a non-empty cache already exists is far more likely to be a bug
+    # on the API side than genuine ground truth -- skip the write and keep
+    # the last known-good snapshot instead.
+    if not api_data and cached_data:
+        logger.warning(
+            f"API returned an empty {resource_name} result while a non-empty cache already exists -- "
+            "not overwriting the cache with what's more likely a transient bug than genuine ground truth"
+        )
+        return
+
     if cached_data is not None:
         data_matches = _compare_data(api_data, cached_data, compare_func)
 
@@ -519,26 +606,41 @@ def with_cache_resilience(
     api_data = None
     api_error = None
 
-    # Execute API and cache calls in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        cache_future = executor.submit(cache_getter)
-        api_future = executor.submit(api_getter)
+    # Execute API and cache calls in parallel. Not a `with` block: ThreadPoolExecutor.__exit__
+    # calls shutdown(wait=True) unconditionally, which would block this
+    # function until the cache thread actually finishes regardless of the
+    # timeout below -- exactly the "a stalled S3 read blocks a request whose
+    # live call already succeeded" bug (#194 High #4, found live by Andrey
+    # Devyatkin) the timeout exists to prevent. shutdown(wait=False) below
+    # lets this function return as soon as it has an answer; the abandoned
+    # cache thread runs to completion (or its own boto3-level timeout) in
+    # the background and is then discarded -- a bounded, self-resolving cost
+    # against every such call otherwise blocking for the same duration.
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    cache_future = executor.submit(cache_getter)
+    api_future = executor.submit(api_getter)
 
-        # Get cache result
-        try:
-            cached_data = cache_future.result()
-            if cached_data is not None:
-                logger.debug(f"Cache data available for {resource_name}")
-        except Exception as e:
-            logger.warning(f"Cache lookup failed for {resource_name}: {e}")
+    # Get cache result -- bounded by CACHE_LOOKUP_TIMEOUT_SECONDS, not
+    # unbounded: a concurrent.futures.TimeoutError here is just another
+    # cache-lookup failure to the except Exception below (it's a plain
+    # Exception subclass), so the API result -- likely already sitting
+    # ready on api_future by now -- is still returned normally.
+    try:
+        cached_data = cache_future.result(timeout=CACHE_LOOKUP_TIMEOUT_SECONDS)
+        if cached_data is not None:
+            logger.debug(f"Cache data available for {resource_name}")
+    except Exception as e:
+        logger.warning(f"Cache lookup failed for {resource_name}: {e}")
 
-        # Get API result
-        try:
-            api_data = api_future.result()
-            logger.info(f"Successfully fetched {resource_name} from API")
-        except Exception as e:
-            api_error = e
-            logger.warning(f"API call failed for {resource_name}: {e}")
+    # Get API result
+    try:
+        api_data = api_future.result()
+        logger.info(f"Successfully fetched {resource_name} from API")
+    except Exception as e:
+        api_error = e
+        logger.warning(f"API call failed for {resource_name}: {e}")
+
+    executor.shutdown(wait=False)
 
     # If API succeeded, update cache if needed and return API data
     if api_data is not None:

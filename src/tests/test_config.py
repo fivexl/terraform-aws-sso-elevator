@@ -56,7 +56,7 @@ def config_dict(
         st.lists(strategies.json_safe_text, max_size=10, min_size=1)  # noqa: B008
     ),
     permission_duration_list_override: SearchStrategy = strategies.jsonstr(  # noqa: B008
-        st.lists(strategies.json_safe_text, max_size=10, min_size=1)  # noqa: B008
+        st.lists(strategies.duration_override_entry, max_size=10, min_size=1)  # noqa: B008
     ),
 ):
     return st.fixed_dictionaries(
@@ -155,7 +155,7 @@ def test_config_load_environment_variables(dict_config: dict):
         statements=st.lists(strategies.statement_dict(), max_size=20),
         group_statements=st.lists(strategies.group_statement_dict(), max_size=20),
         secondary_fallback_email_domains=st.lists(strategies.json_safe_text, max_size=10, min_size=1),
-        permission_duration_list_override=st.lists(strategies.json_safe_text, max_size=10, min_size=1),
+        permission_duration_list_override=st.lists(strategies.duration_override_entry, max_size=10, min_size=1),
     )
 )
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))

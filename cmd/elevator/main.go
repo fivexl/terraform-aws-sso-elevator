@@ -7,9 +7,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"strings"
 )
 
 // version, buildCommit, and buildDate are set via -ldflags -X by
@@ -22,6 +25,12 @@ var (
 )
 
 func main() {
+	// The stdlib log package's default flags prefix every log.Fatal*/
+	// log.Print* line with a date and time (#194 D4) -- expected for a
+	// long-running service's logs, but unusual and noisy for a one-shot
+	// CLI's error output, where the invocation itself already establishes
+	// "when".
+	log.SetFlags(0)
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "help", "-h", "--help":
@@ -36,6 +45,87 @@ func main() {
 		}
 	}
 	runRequest(os.Args[1:])
+}
+
+// exitIfHelpRequested prints the same usage text `elevator help`/`-h`/`--help`
+// does, to the same stream (stdout), and exits 0 if any of those appear
+// anywhere in args -- called by each subcommand, with its own FlagSet (fully
+// populated with that subcommand's flags, but not yet given args to parse),
+// before that FlagSet.Parse.
+//
+// Without this, a `-h`/`-help` that isn't the very first argument (e.g.
+// `elevator --account 123456789012 --help`, or any `elevator configure -h`)
+// never reaches main's own top-level switch at all -- it's parsed by
+// FlagSet.Parse itself, whose built-in handling always writes to
+// fs.Output(), which defaults to stderr unless a FlagSet explicitly
+// overrides it. That produced the same help text on two different streams
+// depending on where in the command line -h/-help happened to appear (#194
+// D5). Genuine flag *errors* (an unknown flag, a missing required value)
+// still go through FlagSet.Parse's own handling on fs.Output() unchanged --
+// only usage requested via -h/-help/--help is intercepted here, so an error
+// mid-parse still reads as an error, on stderr, not usage text on stdout.
+func exitIfHelpRequested(fs *flag.FlagSet, args []string) {
+	if helpRequested(fs, args) {
+		usage(os.Stdout)
+		os.Exit(0)
+	}
+}
+
+// helpRequested reports whether args contains -h, -help, or --help as a flag
+// token in its own right. Split out from exitIfHelpRequested as a pure
+// function purely so it's testable without exercising the os.Exit(0) call.
+//
+// fs is used only to tell a value-taking flag's name from its value: a flag
+// like `--reason "--help"` must not be mistaken for a help request just
+// because "--help" appears somewhere in args (#194, found live by Andrey
+// Devyatkin -- `--reason "--help"` silently opened the help text and exited
+// 0 instead of submitting the request, exactly the kind of "reported success
+// but nothing happened" failure the D1 fix elsewhere in this CLI exists to
+// prevent). This runs before fs.Parse, so it has to do its own lightweight
+// walk of args rather than relying on fs.Args()/fs.NArg() -- it mirrors just
+// enough of FlagSet.Parse's own token-splitting logic (name[=value] vs a
+// separate value argument, and skipping a bool flag's value only when
+// spelled with "=") to draw that line correctly.
+func helpRequested(fs *flag.FlagSet, args []string) bool {
+	skipNext := false
+	for _, a := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		switch a {
+		case "-h", "-help", "--help":
+			return true
+		}
+		name, hasInlineValue := splitFlagToken(a)
+		if name == "" || hasInlineValue {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			continue
+		}
+		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			continue
+		}
+		skipNext = true
+	}
+	return false
+}
+
+// splitFlagToken reports the flag name a "-name" or "--name[=value]" token
+// refers to, and whether it already carries its value via "=". Returns
+// name == "" for anything that isn't a flag token at all (doesn't start with
+// "-").
+func splitFlagToken(a string) (name string, hasInlineValue bool) {
+	if len(a) < 2 || a[0] != '-' {
+		return "", false
+	}
+	name = strings.TrimLeft(a, "-")
+	if eq := strings.IndexByte(name, '='); eq >= 0 {
+		return name[:eq], true
+	}
+	return name, false
 }
 
 // usage is the single source of truth for elevator's help text — reached both

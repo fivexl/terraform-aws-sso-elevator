@@ -54,9 +54,8 @@ module "attribute_syncer" {
     SLACK_BOT_TOKEN  = var.slack_bot_token
     SLACK_CHANNEL_ID = var.slack_channel_id
 
-    SSO_INSTANCE_ARN            = local.sso_instance_arn
-    IDENTITY_STORE_ID           = local.identity_store_id
-    POWERTOOLS_LOGGER_LOG_EVENT = true
+    SSO_INSTANCE_ARN  = local.sso_instance_arn
+    IDENTITY_STORE_ID = local.identity_store_id
 
     S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
     S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix

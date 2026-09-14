@@ -101,6 +101,23 @@ def test_find_email_by_username_does_not_prefix_match_a_truncated_username():
     assert sso.find_email_by_username(list_of_users, full_username[:44]) is None
 
 
+def test_find_email_by_username_refuses_to_pick_between_two_matching_users():
+    """Regression test (#194 B9, resolved by mirroring
+    find_user_principal_id_by_email_strict's own collect-and-refuse shape):
+    previously returned whichever matching user happened to appear first in
+    list_of_users -- silently resolving to a possibly-wrong person on any
+    RoleSessionName collision -- instead of refusing to guess."""
+    list_of_users = _users(
+        [
+            {"UserId": "u-1", "UserName": "jsmith", "Emails": [{"Value": "john.smith@company.com", "Primary": True}]},
+            {"UserId": "u-2", "UserName": "jsmith", "Emails": [{"Value": "jane.smith@company.com", "Primary": True}]},
+        ]
+    )
+
+    with pytest.raises(errors.AmbiguousSSOUser, match="jsmith"):
+        sso.find_email_by_username(list_of_users, "jsmith")
+
+
 def test_find_user_principal_id_by_email_strict_matches_case_insensitively():
     list_of_users = _users([{"UserId": "u-1", "Emails": [{"Value": "Jane.Smith@Company.com"}]}])
 

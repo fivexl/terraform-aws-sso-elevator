@@ -62,6 +62,17 @@ json_safe_text = st.text(
     max_size=200,
 )
 
+# permission_duration_list_override entries must be "H:MM"-shaped
+# (config.Config's own field_validator enforces this, since main.py's
+# _max_allowed_minutes parses every entry as int(hours):int(minutes) on
+# every CLI request) -- arbitrary json_safe_text is no longer a valid
+# generator for this specific field.
+duration_override_entry = st.builds(
+    lambda hours, minutes: f"{hours}:{minutes:02d}",
+    st.integers(min_value=0, max_value=999),
+    st.integers(min_value=0, max_value=59),
+)
+
 
 def resource_type_st(resource_type: Literal["Account", "OU", "Any"] = "Any"):
     if resource_type == "Account":

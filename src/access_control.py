@@ -1,6 +1,6 @@
 import datetime
 from enum import Enum
-from typing import FrozenSet
+from typing import FrozenSet, Literal, Optional
 
 import boto3
 
@@ -55,14 +55,30 @@ def requester_email_variants(requester_email: str) -> FrozenSet[str]:
     return frozenset(variants)
 
 
-def get_requester_group_ids(requester_email: str) -> FrozenSet[str]:
+def get_requester_group_ids(requester_email: str, verified_user_id: Optional[str] = None) -> FrozenSet[str]:
     """Resolve the SSO group IDs the requester belongs to.
+
+    verified_user_id, when given, is a CLI request's already-verified
+    Identity Store principal -- group membership is then looked up directly
+    against it via sso.list_groups_for_user, skipping
+    get_user_principal_id_by_email's own email-to-principal resolution
+    entirely, secondary-domain fallback included (#194 B4 residual, found
+    by Andrey Devyatkin). Without this, requester_email was re-resolved to a
+    principal ID through that same fallback logic src/main.py's identity
+    verification explicitly distrusts on the CLI path -- so eligibility
+    groups could belong to a *different* Identity Store principal than
+    verified_user_id, the one execute_decision actually grants against.
+    requester_email is still used to resolve the principal when
+    verified_user_id isn't available (the Slack modal path, which has no
+    pre-verified identity of its own).
 
     Lookup errors are propagated so they cannot be confused with a successful lookup returning
     no memberships.
     """
     try:
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+        if verified_user_id:
+            return sso.list_groups_for_user(sso_instance.identity_store_id, verified_user_id, identitystore_client)
         user_principal_id, _ = sso.get_user_principal_id_by_email(
             identity_store_client=identitystore_client,
             identity_store_id=sso_instance.identity_store_id,
@@ -78,11 +94,15 @@ def get_requester_group_ids(requester_email: str) -> FrozenSet[str]:
 def get_requester_group_ids_if_needed(
     statements: FrozenSet[Statement] | FrozenSet[GroupStatement],
     requester_email: str,
+    verified_user_id: Optional[str] = None,
 ) -> FrozenSet[str]:
-    """Resolve requester group memberships only when some statement restricts by ``allowed_groups``."""
+    """Resolve requester group memberships only when some statement restricts by ``allowed_groups``.
+
+    See get_requester_group_ids for what verified_user_id changes.
+    """
     if not any(statement.allowed_groups for statement in statements):
         return frozenset()
-    return get_requester_group_ids(requester_email)
+    return get_requester_group_ids(requester_email, verified_user_id)
 
 
 def _filter_statements_for_requester(
@@ -198,19 +218,41 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
     decision_based_on_statements: set[Statement] | set[GroupStatement] = set()
     potential_approvers = set()
 
+    # Case-insensitive, matching requester_allowed's own normalization
+    # (statement.py) and make_decision_on_approve_request's identical fix
+    # below (a real self-approval bypass found in a final pre-delivery
+    # review): statement.approvers is a pydantic EmailStr set that
+    # preserves whatever case an operator typed in config, and requester_email
+    # can be a pinned, verified Identity Center email (for a CLI-sourced
+    # request) that differs in case from that config entry even for the
+    # exact same person. Left case-sensitive, a requester who IS a listed
+    # approver on their own statement wasn't recognized as one here -- they
+    # neither got auto-granted via SelfApproval when they should have, nor
+    # excluded from potential_approvers, so the request fell through to
+    # RequiresApproval with the requester themselves listed as its only
+    # "approver" -- which the case-sensitive membership check in
+    # make_decision_on_approve_request then *also* failed to match,
+    # permanently blocking approval by anyone.
+    requester_email_normalized = requester_email.lower()
     explicit_deny_self_approval = any(
-        statement.allow_self_approval is False and requester_email in statement.approvers for statement in affected_statements
+        statement.allow_self_approval is False and requester_email_normalized in {a.lower() for a in statement.approvers}
+        for statement in affected_statements
     )
     explicit_deny_approval_not_required = any(statement.approval_is_not_required is False for statement in affected_statements)
 
     for statement in affected_statements:
+        statement_approvers_normalized = {a.lower() for a in statement.approvers}
         if statement.approval_is_not_required and not explicit_deny_approval_not_required:
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.ApprovalNotRequired,
                 based_on_statements=frozenset([statement]),  # type: ignore # noqa: PGH003
             )
-        if requester_email in statement.approvers and statement.allow_self_approval and not explicit_deny_self_approval:
+        if (
+            requester_email_normalized in statement_approvers_normalized
+            and statement.allow_self_approval
+            and not explicit_deny_self_approval
+        ):
             return AccessRequestDecision(
                 grant=True,
                 reason=DecisionReason.SelfApproval,
@@ -218,7 +260,7 @@ def make_decision_on_access_request(  # noqa: PLR0911, PLR0913
             )
 
         decision_based_on_statements.add(statement)  # type: ignore # noqa: PGH003
-        potential_approvers.update(approver for approver in statement.approvers if approver != requester_email)
+        potential_approvers.update(approver for approver in statement.approvers if approver.lower() != requester_email_normalized)
 
     if not decision_based_on_statements:
         return AccessRequestDecision(
@@ -268,9 +310,28 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     affected_statements = determine_affected_statements(statements, account_id, permission_set_name, group_id)
     affected_statements = _filter_statements_for_requester(affected_statements, requester_email, requester_group_ids)
 
+    # Case-insensitive from here on (a real self-approval bypass, found in a
+    # final pre-delivery review): statement.approvers is a pydantic EmailStr
+    # set that preserves whatever case an operator typed in config, and for
+    # a CLI-sourced request requester_email is the pinned, verified Identity
+    # Center email while approver_email is the clicking approver's current
+    # Slack profile email -- two genuinely different identity sources for
+    # the *same physical person* when they approve their own request. A raw
+    # `==`/`in` comparison here made a same-person click register as
+    # is_self_approval=False on any case difference between those two
+    # sources (or a configured approvers-list entry), which the boolean
+    # below then treats as "a different, legitimate approver approved this"
+    # -- silently granting even when the statement's own
+    # allow_self_approval is false. requester_allowed (statement.py) already
+    # normalizes this same way for allowed_users; approvers and this
+    # self-approval check need the identical treatment for the identical
+    # reason.
+    approver_email_normalized = approver_email.lower()
+    requester_email_normalized = requester_email.lower()
     for statement in affected_statements:
-        if approver_email in statement.approvers:
-            is_self_approval = approver_email == requester_email
+        statement_approvers_normalized = {a.lower() for a in statement.approvers}
+        if approver_email_normalized in statement_approvers_normalized:
+            is_self_approval = approver_email_normalized == requester_email_normalized
             if is_self_approval and statement.allow_self_approval or not is_self_approval:
                 return ApproveRequestDecision(
                     grant=action == entities.ApproverAction.Approve,
@@ -293,9 +354,14 @@ def execute_decision(  # noqa: PLR0913
     approver: entities.slack.User,
     requester: entities.slack.User,
     reason: str,
-    request_source: str = "slack",
-    verified_arn: str = "NA",
-    verified_user_id: str = "NA",
+    # No defaults (#194 duplication cleanup): both production call sites
+    # (main.py's handle_button_click and process_access_request) always
+    # pass all three explicitly, so a default here was pure unused surface
+    # -- AGENTS.md says not to maintain backward-compatibility shims, and
+    # this wasn't even that, just dead flexibility nothing exercised.
+    request_source: Literal["slack", "cli"],
+    verified_arn: str,
+    verified_user_id: str,
 ) -> bool:
     logger.info("Executing decision")
     if not decision.grant:
@@ -304,7 +370,7 @@ def execute_decision(  # noqa: PLR0913
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
-    if request_source == "cli" and verified_user_id != "NA":
+    if request_source == "cli":
         # Grant against the exact UserId the CLI's SigV4-verified session was
         # actually checked against at submission time (cli_auth.extract_identity,
         # cross-checked again by handle_cli_access_request's email round-trip),
@@ -318,6 +384,23 @@ def execute_decision(  # noqa: PLR0913
         # create_account_assignment_and_wait_for_result below fails outright
         # rather than silently substituting a different, currently-resolvable
         # user -- fail closed instead of granting to the wrong person.
+        #
+        # A "cli" request with verified_user_id still "NA" (#194 B6) is not
+        # treated as "no verification available, fall back to the email
+        # lookup" -- that would silently re-enable, for a message explicitly
+        # labeled "Source: CLI", the exact fuzzy email-based resolution
+        # (secondary-domain fallback included) the CLI path exists to avoid
+        # trusting. The only way this combination occurs is a pending
+        # request message posted before verified_user_id existed on this
+        # field; failing closed here means such a request must be
+        # re-submitted after upgrade rather than silently granted through
+        # the weaker mechanism. This is a deliberate, narrow behavior change
+        # from earlier versions, not an oversight.
+        if verified_user_id == "NA":
+            raise ValueError(
+                "CLI-sourced request has no verified UserId to grant against "
+                "(likely a pending request from before this field existed) -- refusing to fall back to email-based resolution."
+            )
         sso_user_principal_id = verified_user_id
         secondary_domain_was_used = False
     else:

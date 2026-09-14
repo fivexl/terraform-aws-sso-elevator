@@ -94,6 +94,36 @@ class TestCacheConfig:
         assert config.bucket_name == "test-config-bucket"
         assert config.enabled is False
 
+    def test_kms_key_arn_defaults_to_unset(self):
+        """No kms_key_arn passed -- must default to the "" unset sentinel,
+        not None, matching config.Config.config_bucket_kms_key_arn's own
+        sentinel (Lambda environment variables can't carry a real null)."""
+        config = cache_module.CacheConfig(bucket_name="test-config-bucket", enabled=True)
+        assert config.kms_key_arn == ""
+
+
+class TestEncryptionKwargs:
+    """Tests for _encryption_kwargs (#194 High #5, found by Andrey
+    Devyatkin): an explicit ServerSideEncryption on a PUT overrides the
+    bucket's own default, so hardcoding AES256 regardless of
+    cache_config.kms_key_arn would silently ignore an operator's own KMS
+    key even when they've already set one up for this exact bucket."""
+
+    def test_no_key_configured_uses_aes256(self):
+        cache_config = cache_module.CacheConfig(bucket_name="test-config-bucket", enabled=True)
+        assert cache_module._encryption_kwargs(cache_config) == {"ServerSideEncryption": "AES256"}
+
+    def test_key_configured_uses_that_key(self):
+        cache_config = cache_module.CacheConfig(
+            bucket_name="test-config-bucket",
+            enabled=True,
+            kms_key_arn="arn:aws:kms:us-east-1:111111111111:key/test-key",
+        )
+        assert cache_module._encryption_kwargs(cache_config) == {
+            "ServerSideEncryption": "aws:kms",
+            "SSEKMSKeyId": "arn:aws:kms:us-east-1:111111111111:key/test-key",
+        }
+
 
 class TestGetCachedAccounts:
     """Tests for get_cached_accounts function."""
@@ -216,6 +246,24 @@ class TestSetCachedAccounts:
 
         # Should not raise exception
         cache_module.set_cached_accounts(mock_s3_client, cache_config_enabled, sample_accounts)
+
+    def test_write_uses_operators_kms_key_when_configured(self, mock_s3_client, sample_accounts):
+        """Regression test (#194 High #5, found live by Andrey Devyatkin):
+        when the operator has configured their own KMS key for this bucket
+        (the same one Terraform already uses for approval-config.json in
+        it), every cache write into that bucket must use it too, not
+        silently fall back to plain AES256."""
+        cache_config = cache_module.CacheConfig(
+            bucket_name="test-config-bucket",
+            enabled=True,
+            kms_key_arn="arn:aws:kms:us-east-1:111111111111:key/test-key",
+        )
+
+        cache_module.set_cached_accounts(mock_s3_client, cache_config, sample_accounts)
+
+        call_args = mock_s3_client.put_object.call_args
+        assert call_args[1]["ServerSideEncryption"] == "aws:kms"
+        assert call_args[1]["SSEKMSKeyId"] == "arn:aws:kms:us-east-1:111111111111:key/test-key"
 
 
 class TestGetCachedPermissionSets:
@@ -351,6 +399,32 @@ class TestGetCachedUsers:
 
         assert result is None
 
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            {"not": "a list"},
+            ["not-a-dict", "also-not-a-dict"],
+            [{"UserName": "alice@example.com"}],  # missing UserId
+        ],
+        ids=["not-a-list", "list-of-non-dicts", "dict-missing-userid"],
+    )
+    def test_malformed_cached_data_degrades_to_a_cache_miss(self, mock_s3_client, cache_config_enabled, malformed):
+        """Regression test (#194 High #4 residual, found live by Andrey
+        Devyatkin): unlike get_cached_accounts/get_cached_permission_sets,
+        which each degrade cleanly via .model_validate(...), this used to
+        trust json.loads' raw output completely. A malformed cached blob
+        reached find_email_by_username's user.get("UserName", ...) /
+        user["UserId"] unguarded downstream -- AttributeError or KeyError,
+        caught by neither ClientError nor BotoCoreError, surfacing as a 500
+        plus a Slack post on every single request until fixed by hand."""
+        body_mock = Mock()
+        body_mock.read.return_value = json.dumps(malformed).encode("utf-8")
+        mock_s3_client.get_object.return_value = {"Body": body_mock}
+
+        result = cache_module.get_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890")
+
+        assert result is None
+
 
 class TestSetCachedUsers:
     """Tests for set_cached_users function (#193 item 2)."""
@@ -377,6 +451,24 @@ class TestSetCachedUsers:
 
         # Should not raise exception
         cache_module.set_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890", sample_users)
+
+    def test_a_payload_over_the_generic_cache_limit_still_writes(self, mock_s3_client, cache_config_enabled):
+        """Regression test (#194 High #4, found live by Andrey Devyatkin):
+        a representative user record is ~445 bytes, so the generic
+        MAX_DATA_SIZE (5MB, sized for the small accounts/permission-sets
+        caches) is crossed at just 11,616 users -- above that, this used to
+        silently fail to write anything at all, so the fallback this cache
+        exists to provide didn't exist on exactly the directories large
+        enough to need it. set_cached_users must use the much higher
+        MAX_USERS_DATA_SIZE instead."""
+        # One record is ~50 bytes; 150,000 of them (~7.5MB) comfortably
+        # exceeds the old 5MB MAX_DATA_SIZE while staying under the new
+        # 50MB MAX_USERS_DATA_SIZE.
+        many_users = [{"UserId": f"u-{i}", "UserName": f"user{i}@example.com"} for i in range(150_000)]
+
+        cache_module.set_cached_users(mock_s3_client, cache_config_enabled, "d-1234567890", many_users)
+
+        mock_s3_client.put_object.assert_called_once()
 
 
 class TestCacheResilience:
@@ -444,3 +536,77 @@ class TestCacheResilience:
                 cache_setter=cache_setter,
                 resource_name="test",
             )
+
+    def test_empty_api_result_does_not_overwrite_a_good_cache(self, sample_accounts):
+        """Regression test (#194 High #4, found live by Andrey Devyatkin):
+        the only guard before writing API data to the cache used to be "is
+        it not None", not a sanity check on its content. A genuinely empty
+        API response (a pagination fluke, a transient AWS-side bug -- a real
+        deployment actually using this module always has at least one real
+        account/permission-set/user) must not silently overwrite a real,
+        non-empty cache, destroying the fallback this cache exists to
+        provide. The empty result is still returned to the caller, though --
+        this is a cache-write safeguard, not a change to what's reported as
+        the current live answer."""
+        cache_getter = Mock(return_value=sample_accounts)
+        api_getter = Mock(return_value=[])
+        cache_setter = Mock()
+
+        result = cache_module.with_cache_resilience(
+            cache_getter=cache_getter,
+            api_getter=api_getter,
+            cache_setter=cache_setter,
+            resource_name="test",
+        )
+
+        assert result == []
+        cache_setter.assert_not_called()
+
+    def test_empty_api_result_still_writes_when_cache_was_already_empty(self):
+        """Companion to the test above: an empty result is only suspicious
+        relative to a non-empty cache. With no prior cache at all, storing
+        the (still possibly-correct) empty result is the same "no cached
+        data, store API result" path as any other first-ever write."""
+        cache_getter = Mock(return_value=None)
+        api_getter = Mock(return_value=[])
+        cache_setter = Mock()
+
+        result = cache_module.with_cache_resilience(
+            cache_getter=cache_getter,
+            api_getter=api_getter,
+            cache_setter=cache_setter,
+            resource_name="test",
+        )
+
+        assert result == []
+        cache_setter.assert_called_once_with([])
+
+    def test_a_stalled_cache_read_does_not_block_an_already_successful_api_call(self, sample_accounts, monkeypatch):
+        """Regression test (#194 High #4, found live by Andrey Devyatkin):
+        the cache-read side of the parallel lookup used to have no timeout
+        at all, so a stalled S3 read blocked the whole call even after the
+        API call -- running concurrently on its own thread -- had already
+        returned successfully. Patches the timeout down to keep this test
+        fast rather than actually waiting out the real default."""
+        import time
+
+        monkeypatch.setattr(cache_module, "CACHE_LOOKUP_TIMEOUT_SECONDS", 0.05)
+
+        def slow_cache_getter():
+            time.sleep(0.5)
+            return sample_accounts
+
+        api_getter = Mock(return_value=sample_accounts)
+        cache_setter = Mock()
+
+        start = time.monotonic()
+        result = cache_module.with_cache_resilience(
+            cache_getter=slow_cache_getter,
+            api_getter=api_getter,
+            cache_setter=cache_setter,
+            resource_name="test",
+        )
+        elapsed = time.monotonic() - start
+
+        assert result == sample_accounts
+        assert elapsed < 0.5, "should not have waited out the full slow cache read once the API call succeeded"

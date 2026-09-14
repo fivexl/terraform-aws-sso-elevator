@@ -19,26 +19,26 @@ jobs:
     steps:
       # Step 1: Checkout the repository and provide your AWS credentials
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          
+
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          aws-region: eu-central-1 
+          aws-region: eu-central-1
           role-to-assume: ${{ secrets.DEVELOPMENT_ACCOUNT_ROLE_ARN }}
           role-duration-seconds: 3600
           role-session-name: ${{ github.event.repository.name }}
-      
+
       # Step 2: Add CodeGuru Reviewer Action
       - name: CodeGuru Reviewer
-        uses: aws-actions/codeguru-reviewer@v1.1
+        uses: aws-actions/codeguru-reviewer@e96af14e3ba9bac3cca62a524bd5a8345038c684 # v1.1
         with:
           s3_bucket: codeguru-reviewer-mambo-jumbo
-       
+
       # Step 3: Upload results into GitHub
       - name: Upload review result
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
         with:
           sarif_file: codeguru-results.sarif.json

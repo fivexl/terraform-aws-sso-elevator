@@ -74,7 +74,7 @@ def _throttled() -> botocore.exceptions.ClientError:
 
 def _unrecognized_5xx() -> botocore.exceptions.ClientError:
     # A 5xx whose error code isn't in the transient-code allowlist -- only
-    # _is_transient's HTTP-status fallback can catch this one.
+    # sso.is_transient_aws_error's HTTP-status fallback can catch this one.
     return botocore.exceptions.ClientError(
         error_response={
             "Error": {"Code": "SomeUnmappedServiceError", "Message": "unavailable"},
