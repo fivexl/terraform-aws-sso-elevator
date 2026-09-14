@@ -94,6 +94,36 @@ class TestCacheConfig:
         assert config.bucket_name == "test-config-bucket"
         assert config.enabled is False
 
+    def test_kms_key_arn_defaults_to_unset(self):
+        """No kms_key_arn passed -- must default to the "" unset sentinel,
+        not None, matching config.Config.config_bucket_kms_key_arn's own
+        sentinel (Lambda environment variables can't carry a real null)."""
+        config = cache_module.CacheConfig(bucket_name="test-config-bucket", enabled=True)
+        assert config.kms_key_arn == ""
+
+
+class TestEncryptionKwargs:
+    """Tests for _encryption_kwargs (#194 High #5, found by Andrey
+    Devyatkin): an explicit ServerSideEncryption on a PUT overrides the
+    bucket's own default, so hardcoding AES256 regardless of
+    cache_config.kms_key_arn would silently ignore an operator's own KMS
+    key even when they've already set one up for this exact bucket."""
+
+    def test_no_key_configured_uses_aes256(self):
+        cache_config = cache_module.CacheConfig(bucket_name="test-config-bucket", enabled=True)
+        assert cache_module._encryption_kwargs(cache_config) == {"ServerSideEncryption": "AES256"}
+
+    def test_key_configured_uses_that_key(self):
+        cache_config = cache_module.CacheConfig(
+            bucket_name="test-config-bucket",
+            enabled=True,
+            kms_key_arn="arn:aws:kms:us-east-1:111111111111:key/test-key",
+        )
+        assert cache_module._encryption_kwargs(cache_config) == {
+            "ServerSideEncryption": "aws:kms",
+            "SSEKMSKeyId": "arn:aws:kms:us-east-1:111111111111:key/test-key",
+        }
+
 
 class TestGetCachedAccounts:
     """Tests for get_cached_accounts function."""
@@ -216,6 +246,24 @@ class TestSetCachedAccounts:
 
         # Should not raise exception
         cache_module.set_cached_accounts(mock_s3_client, cache_config_enabled, sample_accounts)
+
+    def test_write_uses_operators_kms_key_when_configured(self, mock_s3_client, sample_accounts):
+        """Regression test (#194 High #5, found live by Andrey Devyatkin):
+        when the operator has configured their own KMS key for this bucket
+        (the same one Terraform already uses for approval-config.json in
+        it), every cache write into that bucket must use it too, not
+        silently fall back to plain AES256."""
+        cache_config = cache_module.CacheConfig(
+            bucket_name="test-config-bucket",
+            enabled=True,
+            kms_key_arn="arn:aws:kms:us-east-1:111111111111:key/test-key",
+        )
+
+        cache_module.set_cached_accounts(mock_s3_client, cache_config, sample_accounts)
+
+        call_args = mock_s3_client.put_object.call_args
+        assert call_args[1]["ServerSideEncryption"] == "aws:kms"
+        assert call_args[1]["SSEKMSKeyId"] == "arn:aws:kms:us-east-1:111111111111:key/test-key"
 
 
 class TestGetCachedPermissionSets:

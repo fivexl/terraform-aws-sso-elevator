@@ -392,7 +392,7 @@ variable "config_bucket_name" {
 }
 
 variable "cache_enabled" {
-  description = "Enable caching of AWS accounts and permission sets in S3. If set to false, caching is disabled but the S3 bucket will still be created for future config storage."
+  description = "Enable caching of AWS accounts, permission sets, and Identity Store users (names, usernames, emails) in S3, as a fallback if the live AWS API call fails. If set to false, caching is disabled but the S3 bucket will still be created for future config storage."
   type        = bool
   default     = true
 }

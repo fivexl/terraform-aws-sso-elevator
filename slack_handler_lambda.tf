@@ -70,6 +70,15 @@ module "access_requester_slack_handler" {
       CONFIG_BUCKET_NAME                          = local.config_bucket_name
       CONFIG_S3_KEY                               = "config/approval-config.json"
       CACHE_ENABLED                               = var.cache_enabled
+      # "" when unset, not a real null -- Lambda environment variables can't
+      # carry one. src/config.py's config_bucket_kms_key_arn field uses the
+      # same empty-string sentinel already established for
+      # cli_expected_api_id. Lets the account/permission-set/user caches
+      # this Lambda writes into this same bucket use the operator's own KMS
+      # key too, instead of always hardcoding AES256 regardless of what
+      # encryption the bucket's other object (approval-config.json, below)
+      # already uses (#194 High #5, found by Andrey Devyatkin).
+      CONFIG_BUCKET_KMS_KEY_ARN = var.config_bucket_kms_key_arn != null ? var.config_bucket_kms_key_arn : ""
     },
     # Only set when the CLI route actually exists. Gated on both flags, not
     # enable_access_requester_cli alone: create_api_gateway = false means
@@ -273,6 +282,25 @@ data "aws_iam_policy_document" "slack_handler" {
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
+  }
+  # Only granted when an operator actually configured their own key --
+  # kms:GenerateDataKey and kms:Decrypt are what a PutObject/GetObject using
+  # SSEKMSKeyId actually needs; without this statement, set_cached_* would
+  # 403 on every write once CONFIG_BUCKET_KMS_KEY_ARN is set, since the
+  # AllowS3Config statement above only covers S3 actions, not the KMS calls
+  # S3 makes on this Lambda's behalf to use that key (#194 High #5, found
+  # by Andrey Devyatkin).
+  dynamic "statement" {
+    for_each = var.config_bucket_kms_key_arn != null ? [var.config_bucket_kms_key_arn] : []
+    content {
+      sid    = "AllowConfigBucketKMS"
+      effect = "Allow"
+      actions = [
+        "kms:GenerateDataKey",
+        "kms:Decrypt",
+      ]
+      resources = [statement.value]
+    }
   }
 }
 

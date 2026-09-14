@@ -61,6 +61,9 @@ class CacheConfig:
 
     bucket_name: str
     enabled: bool
+    # "" (not None) when unset, matching cfg.config_bucket_kms_key_arn's own
+    # sentinel -- see that field's docstring in config.py.
+    kms_key_arn: str = ""
 
     @staticmethod
     def from_config(cfg: config.Config) -> "CacheConfig":
@@ -68,6 +71,7 @@ class CacheConfig:
         return CacheConfig(
             bucket_name=cfg.config_bucket_name,
             enabled=cfg.cache_enabled,
+            kms_key_arn=cfg.config_bucket_kms_key_arn,
         )
 
 
@@ -184,6 +188,23 @@ def _sanitize_json_data(data: list[dict[str, Any]], max_size: int = MAX_DATA_SIZ
     return serialized
 
 
+def _encryption_kwargs(cache_config: CacheConfig) -> dict[str, str]:
+    """put_object kwargs for whichever encryption this bucket is actually
+    configured for.
+
+    An explicit ServerSideEncryption on a PUT overrides the bucket's own
+    default (documented S3 behaviour) -- hardcoding "AES256" here regardless
+    of cache_config.kms_key_arn would silently ignore an operator's own KMS
+    key even when they've already set one up for this exact bucket (the
+    Terraform-managed approval-config.json object in it already honours
+    config_bucket_kms_key_arn; #194 High #5, found by Andrey Devyatkin).
+    Falls back to plain AES256 -- the same default this bucket and every
+    write here already used -- when no key is configured."""
+    if cache_config.kms_key_arn:
+        return {"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": cache_config.kms_key_arn}
+    return {"ServerSideEncryption": "AES256"}
+
+
 def get_cached_accounts(
     s3_client: S3Client,
     cache_config: CacheConfig,
@@ -250,7 +271,7 @@ def set_cached_accounts(
             Key=CacheKey.ACCOUNTS,
             Body=sanitized_data.encode("utf-8"),
             ContentType="application/json",
-            ServerSideEncryption="AES256",
+            **_encryption_kwargs(cache_config),
         )
 
         logger.info(f"Cached {len(accounts)} accounts")
@@ -339,7 +360,7 @@ def set_cached_permission_sets(
             Key=key,
             Body=sanitized_data.encode("utf-8"),
             ContentType="application/json",
-            ServerSideEncryption="AES256",
+            **_encryption_kwargs(cache_config),
         )
 
         logger.info(f"Cached {len(permission_sets)} permission sets")
@@ -425,7 +446,7 @@ def set_cached_users(
             Key=key,
             Body=sanitized_data.encode("utf-8"),
             ContentType="application/json",
-            ServerSideEncryption="AES256",
+            **_encryption_kwargs(cache_config),
         )
 
         logger.info(f"Cached {len(users)} users")

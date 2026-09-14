@@ -205,6 +205,15 @@ class Config(BaseSettings):
     config_bucket_name: str = "sso-elevator-config"
     config_s3_key: str = ""
     cache_enabled: bool = True
+    # Empty string, not None, when the operator hasn't set one -- same
+    # "unset" sentinel this codebase already uses for cli_expected_api_id,
+    # since Terraform can't pass a real null through a Lambda environment
+    # variable. Lets the cache module use the operator's own KMS key for
+    # the user/account/permission-set caches it writes into this same
+    # bucket, instead of always hardcoding AES256 regardless of what
+    # encryption this bucket's other object (approval-config.json) already
+    # uses (#194 High #5, found by Andrey Devyatkin).
+    config_bucket_kms_key_arn: str = ""
 
     good_result_emoji: str = ":large_green_circle:"
 
