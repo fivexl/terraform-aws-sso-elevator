@@ -16,11 +16,11 @@ s3: S3Client = boto3.client("s3")
 @dataclass
 class AuditEntry:
     reason: str
-    operation_type: Literal["grant", "revoke", "sync_add", "sync_remove", "manual_detected"]
+    operation_type: Literal["grant", "revoke", "sync_add", "sync_remove", "manual_detected", "declined", "incomplete"]
     permission_duration: Literal["NA"] | timedelta
     sso_user_principal_id: str
     audit_entry_type: Literal["group", "account", "sync_add", "sync_remove", "manual_detected"]
-    version = 1
+    version: int = 2
     role_name: str = "NA"
     account_id: str = "NA"
     requester_slack_id: str = "NA"
@@ -43,6 +43,11 @@ class AuditEntry:
     request_source: str = "NA"
     verified_arn: str = "NA"
     sso_user_email: str = "NA"  # Human-readable email for the SSO user
+    # "declined" entries only: a DecisionReason value, "Discarded" or "Expired".
+    decision_reason: str = "NA"
+    # "incomplete" entries only: the error that stopped an approved request, prefixed
+    # with the failed step when access was already granted.
+    error_message: str = "NA"
 
 
 def log_operation(
@@ -92,6 +97,14 @@ def log_operation(
         ContentType="application/json",
         ServerSideEncryption="AES256",
     )
+
+
+def log_operation_best_effort(audit_entry: AuditEntry) -> None:
+    # For entries whose loss must not fail the caller's flow or mask the error being recorded.
+    try:
+        log_operation(audit_entry=audit_entry)
+    except Exception as e:
+        logger.exception(f"Failed to write {audit_entry.operation_type} audit entry: {e}")
 
 
 @dataclass

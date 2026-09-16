@@ -1,4 +1,6 @@
 import datetime
+import json
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -1107,7 +1109,9 @@ def test_execute_access_request_decision(
     execute_decision_info,
 ):
     if test_cases_for_access_request_decision["out"].grant is not True:
-        assert execute_decision(decision=test_cases_for_access_request_decision["out"], **execute_decision_info) is None
+        # Terminal denials write a "declined" audit entry; keep S3 mocked.
+        with patch.object(access_control.s3, "log_operation"):
+            assert execute_decision(decision=test_cases_for_access_request_decision["out"], **execute_decision_info) is None
 
 
 def test_execute_approve_request_decision(
@@ -1124,7 +1128,9 @@ def test_make_and_excute_access_request_decision(
 ):
     decision = make_decision_on_access_request(**test_cases_for_access_request_decision["in"])
     if decision.grant is not True:
-        assert execute_decision(decision=decision, **execute_decision_info) is None
+        # Terminal denials write a "declined" audit entry; keep S3 mocked.
+        with patch.object(access_control.s3, "log_operation"):
+            assert execute_decision(decision=decision, **execute_decision_info) is None
 
 
 def test_make_and_excute_approve_request_decision(
@@ -1261,6 +1267,7 @@ def test_execute_decision_fails_closed_for_a_cli_request_missing_verified_user_i
         ),
         patch.object(access_control.sso, "get_user_principal_id_by_email") as mock_resolve_by_email,
         patch.object(access_control.sso, "create_account_assignment_and_wait_for_result") as mock_create_assignment,
+        patch.object(access_control.s3, "log_operation") as mock_log_operation,
         pytest.raises(ValueError, match="no verified UserId"),
     ):
         execute_decision(
@@ -1275,6 +1282,14 @@ def test_execute_decision_fails_closed_for_a_cli_request_missing_verified_user_i
 
     mock_resolve_by_email.assert_not_called()
     mock_create_assignment.assert_not_called()
+
+    # A failure before access is live writes exactly one "incomplete" entry.
+    mock_log_operation.assert_called_once()
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "incomplete"
+    assert audit_entry.request_id == "NA"
+    assert audit_entry.sso_user_principal_id == "NA"
+    assert "no verified UserId" in audit_entry.error_message
 
 
 def _grant_patches(schedule_side_effect):  # noqa: ANN001, ANN202
@@ -1389,3 +1404,273 @@ def test_get_requester_group_ids_still_resolves_by_email_when_no_verified_user_i
     assert result == expected_group_ids
     mock_resolve_by_email.assert_called_once()
     mock_list_groups.assert_called_once_with("d-1234", resolved_user_id, access_control.identitystore_client)
+
+
+# ---------------------------------------------------------------------------
+# Audit entries for declined and incomplete requests
+# ---------------------------------------------------------------------------
+
+TERMINAL_DENIAL_REASONS = [DecisionReason.NoStatements, DecisionReason.NoApprovers, DecisionReason.RequesterNotAllowed]
+GROUP = entities.aws.SSOGroup(name="TestGroup", id="g-1234", description="test", identity_store_id="d-1234")
+
+
+def _execute_group(decision):
+    return access_control.execute_decision_on_group_request(
+        decision=decision,
+        group=GROUP,
+        permission_duration=datetime.timedelta(days=1),
+        approver=entities.slack.User(email="approver@email", id="U_APPROVER", real_name="approver"),
+        requester=entities.slack.User(email="email@email", id="123", real_name="123"),
+        reason="",
+        identity_store_id="d-1234",
+        channel_id="C123",
+        message_ts="123.456",
+    )
+
+
+@pytest.mark.parametrize("denial_reason", TERMINAL_DENIAL_REASONS)
+def test_execute_decision_logs_declined_entry_for_terminal_denial_reasons(denial_reason, execute_decision_info):
+    """An auto-denied request (#98) leaves a "declined" entry; no human decided, so approver is NA."""
+    decision = AccessRequestDecision(grant=False, reason=denial_reason, based_on_statements=frozenset())
+
+    with patch.object(access_control.s3, "log_operation") as mock_log_operation:
+        result = execute_decision(decision=decision, **execute_decision_info)
+
+    assert result is None
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "declined"
+    assert audit_entry.decision_reason == denial_reason.value
+    assert audit_entry.sso_user_principal_id == "NA"
+    assert audit_entry.audit_entry_type == "account"
+    assert (audit_entry.approver_slack_id, audit_entry.approver_email) == ("NA", "NA")
+
+
+def test_execute_decision_declined_audit_failure_does_not_raise(execute_decision_info):
+    decision = AccessRequestDecision(grant=False, reason=DecisionReason.NoApprovers, based_on_statements=frozenset())
+
+    with patch.object(access_control.s3, "log_operation", side_effect=RuntimeError("s3 down")):
+        assert execute_decision(decision=decision, **execute_decision_info) is None
+
+
+def test_execute_decision_does_not_log_an_entry_for_requires_approval(execute_decision_info):
+    """RequiresApproval is still pending a human; the later click writes the entry."""
+    decision = AccessRequestDecision(grant=False, reason=DecisionReason.RequiresApproval, based_on_statements=frozenset())
+
+    with patch.object(access_control.s3, "log_operation") as mock_log_operation:
+        result = execute_decision(decision=decision, **execute_decision_info)
+
+    assert result is None
+    mock_log_operation.assert_not_called()
+
+
+@pytest.fixture
+def account_grant_mocks():
+    """Mocks every AWS dependency of a successful account grant, keyed by function name."""
+    with ExitStack() as stack:
+        yield {
+            "describe_sso_instance": stack.enter_context(
+                patch.object(
+                    access_control.sso,
+                    "describe_sso_instance",
+                    return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+                )
+            ),
+            "get_permission_set_by_name": stack.enter_context(
+                patch.object(
+                    access_control.sso,
+                    "get_permission_set_by_name",
+                    return_value=SimpleNamespace(arn="arn:aws:sso:::permissionSet/ssoins-1/ps-1", name="ResolvedPermissionSet"),
+                )
+            ),
+            "get_user_principal_id_by_email": stack.enter_context(
+                patch.object(access_control.sso, "get_user_principal_id_by_email", return_value=("u-resolved", False))
+            ),
+            "create_account_assignment_and_wait_for_result": stack.enter_context(
+                patch.object(
+                    access_control.sso,
+                    "create_account_assignment_and_wait_for_result",
+                    return_value=SimpleNamespace(request_id="req-1"),
+                )
+            ),
+            "schedule_revoke_event": stack.enter_context(patch.object(access_control.schedule, "schedule_revoke_event")),
+            "log_operation": stack.enter_context(patch.object(access_control.s3, "log_operation")),
+        }
+
+
+@pytest.fixture
+def group_grant_mocks():
+    """Mocks every AWS dependency of a successful group grant, keyed by function name."""
+    with ExitStack() as stack:
+        yield {
+            "describe_sso_instance": stack.enter_context(
+                patch.object(
+                    access_control.sso,
+                    "describe_sso_instance",
+                    return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+                )
+            ),
+            "get_user_principal_id_by_email": stack.enter_context(
+                patch.object(access_control.sso, "get_user_principal_id_by_email", return_value=("u-resolved", False))
+            ),
+            "is_user_in_group": stack.enter_context(patch.object(access_control.sso, "is_user_in_group", return_value=None)),
+            "add_user_to_a_group": stack.enter_context(
+                patch.object(access_control.sso, "add_user_to_a_group", return_value={"MembershipId": "m-1"})
+            ),
+            "schedule_group_revoke_event": stack.enter_context(patch.object(access_control.schedule, "schedule_group_revoke_event")),
+            "log_operation": stack.enter_context(patch.object(access_control.s3, "log_operation")),
+        }
+
+
+def test_execute_decision_logs_incomplete_entry_when_the_account_assignment_fails(execute_decision_info, account_grant_mocks):
+    """An approved request whose AWS call fails still leaves an "incomplete" entry."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    account_grant_mocks["get_user_principal_id_by_email"].return_value = ("u-resolved", True)
+    account_grant_mocks["create_account_assignment_and_wait_for_result"].side_effect = RuntimeError("boom: throttled")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        execute_decision(decision=decision, **execute_decision_info)
+
+    account_grant_mocks["log_operation"].assert_called_once()
+    audit_entry = account_grant_mocks["log_operation"].call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "incomplete"
+    assert audit_entry.sso_user_principal_id == "u-resolved"
+    assert audit_entry.secondary_domain_was_used is True
+    # Matches the role_name a "grant" entry carries once the permission set is resolved.
+    assert audit_entry.role_name == "ResolvedPermissionSet"
+    assert audit_entry.error_message == "boom: throttled"
+
+
+def test_execute_decision_incomplete_falls_back_to_requested_permission_set_name(execute_decision_info, account_grant_mocks):
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    account_grant_mocks["get_permission_set_by_name"].side_effect = RuntimeError("permission set not found")
+
+    with pytest.raises(RuntimeError, match="permission set not found"):
+        execute_decision(decision=decision, **execute_decision_info)
+
+    audit_entry = account_grant_mocks["log_operation"].call_args.kwargs["audit_entry"]
+    assert audit_entry.role_name == execute_decision_info["permission_set_name"]
+    assert audit_entry.secondary_domain_was_used is False
+
+
+def test_execute_decision_logs_grant_then_incomplete_when_revoke_scheduling_fails(execute_decision_info, account_grant_mocks):
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    account_grant_mocks["schedule_revoke_event"].side_effect = RuntimeError("scheduler throttled")
+
+    with pytest.raises(access_control.PostGrantError, match="scheduler throttled"):
+        execute_decision(decision=decision, **execute_decision_info)
+
+    entries = [c.kwargs["audit_entry"] for c in account_grant_mocks["log_operation"].call_args_list]
+    assert [e.operation_type for e in entries] == ["grant", "incomplete"]
+    assert entries[0].request_id == entries[1].request_id == "req-1"
+    assert entries[0].role_name == entries[1].role_name == "ResolvedPermissionSet"
+    assert entries[1].sso_user_principal_id == "u-resolved"
+    assert entries[1].error_message == "granted but revoke scheduling failed: scheduler throttled"
+
+
+def test_execute_decision_reraises_grant_audit_failure_even_if_incomplete_write_fails(execute_decision_info, account_grant_mocks):
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    account_grant_mocks["log_operation"].side_effect = [RuntimeError("s3 down on grant"), RuntimeError("s3 down on incomplete")]
+
+    with pytest.raises(access_control.PostGrantError, match="s3 down on grant"):
+        execute_decision(decision=decision, **execute_decision_info)
+
+    entries = [c.kwargs["audit_entry"] for c in account_grant_mocks["log_operation"].call_args_list]
+    assert [e.operation_type for e in entries] == ["grant", "incomplete"]
+    assert entries[1].request_id == "req-1"
+    assert entries[1].error_message == "granted but grant audit write failed: s3 down on grant"
+    # Scheduling despite a failed grant audit write is deferred to issue #238.
+    account_grant_mocks["schedule_revoke_event"].assert_not_called()
+
+
+@pytest.mark.parametrize("denial_reason", TERMINAL_DENIAL_REASONS)
+def test_execute_decision_on_group_request_logs_declined_entry_for_terminal_denial_reasons(denial_reason):
+    """Group mirror of the account auto-deny test."""
+    decision = AccessRequestDecision(grant=False, reason=denial_reason, based_on_statements=frozenset())
+
+    with patch.object(access_control.s3, "log_operation") as mock_log_operation:
+        result = _execute_group(decision)
+
+    assert result is None
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "declined"
+    assert audit_entry.decision_reason == denial_reason.value
+    assert audit_entry.audit_entry_type == "group"
+    assert audit_entry.group_id == "g-1234"
+    assert (audit_entry.approver_slack_id, audit_entry.approver_email) == ("NA", "NA")
+
+
+def test_execute_decision_on_group_request_declined_audit_failure_does_not_raise():
+    decision = AccessRequestDecision(grant=False, reason=DecisionReason.NoApprovers, based_on_statements=frozenset())
+
+    with patch.object(access_control.s3, "log_operation", side_effect=RuntimeError("s3 down")):
+        assert _execute_group(decision) is None
+
+
+def test_execute_decision_on_group_request_logs_incomplete_entry_when_group_membership_fails(group_grant_mocks):
+    """Group mirror: a failed add-to-group still leaves an "incomplete" entry."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    group_grant_mocks["get_user_principal_id_by_email"].return_value = ("u-resolved", True)
+    group_grant_mocks["add_user_to_a_group"].side_effect = RuntimeError("boom: group not found")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _execute_group(decision)
+
+    group_grant_mocks["log_operation"].assert_called_once()
+    audit_entry = group_grant_mocks["log_operation"].call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "incomplete"
+    assert audit_entry.sso_user_principal_id == "u-resolved"
+    assert audit_entry.secondary_domain_was_used is True
+    assert audit_entry.group_membership_id == "NA"
+    assert "boom" in audit_entry.error_message
+
+
+@pytest.mark.parametrize("already_in_group", [False, True])
+def test_execute_decision_on_group_request_logs_grant_then_incomplete_when_revoke_scheduling_fails(already_in_group, group_grant_mocks):
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    group_grant_mocks["is_user_in_group"].return_value = "m-1" if already_in_group else None
+    group_grant_mocks["schedule_group_revoke_event"].side_effect = RuntimeError("scheduler throttled")
+
+    with pytest.raises(access_control.PostGrantError, match="scheduler throttled"):
+        _execute_group(decision)
+
+    assert group_grant_mocks["add_user_to_a_group"].called is not already_in_group
+    entries = [c.kwargs["audit_entry"] for c in group_grant_mocks["log_operation"].call_args_list]
+    assert [e.operation_type for e in entries] == ["grant", "incomplete"]
+    assert entries[0].group_membership_id == entries[1].group_membership_id == "m-1"
+    assert entries[1].error_message == "granted but revoke scheduling failed: scheduler throttled"
+
+
+def test_execute_decision_on_group_request_reraises_grant_audit_failure_even_if_incomplete_write_fails(group_grant_mocks):
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    group_grant_mocks["log_operation"].side_effect = [RuntimeError("s3 down on grant"), RuntimeError("s3 down on incomplete")]
+
+    with pytest.raises(access_control.PostGrantError, match="s3 down on grant"):
+        _execute_group(decision)
+
+    entries = [c.kwargs["audit_entry"] for c in group_grant_mocks["log_operation"].call_args_list]
+    assert [e.operation_type for e in entries] == ["grant", "incomplete"]
+    assert entries[1].group_membership_id == "m-1"
+    assert entries[1].error_message == "granted but grant audit write failed: s3 down on grant"
+    group_grant_mocks["schedule_group_revoke_event"].assert_not_called()
+
+
+def test_log_operation_serializes_schema_version_and_new_fields():
+    with patch.object(access_control.s3.s3, "put_object") as mock_put_object:
+        access_control.s3.log_operation(
+            access_control.s3.AuditEntry(
+                reason="r",
+                operation_type="incomplete",
+                permission_duration=datetime.timedelta(hours=1),
+                sso_user_principal_id="u-1",
+                audit_entry_type="account",
+                decision_reason="Expired",
+                error_message="granted but revoke scheduling failed: boom",
+            ),
+            bucket_name="bucket",
+            bucket_prefix="prefix",
+        )
+
+    body = json.loads(mock_put_object.call_args.kwargs["Body"])
+    assert body["version"] == 2
+    assert body["decision_reason"] == "Expired"
+    assert body["error_message"] == "granted but revoke scheduling failed: boom"

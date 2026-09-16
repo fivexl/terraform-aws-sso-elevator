@@ -18,6 +18,7 @@ import config
 import entities
 import group
 import organizations
+import s3
 import schedule
 import slack_helpers
 import sso
@@ -661,7 +662,27 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
     if payload.action == entities.ApproverAction.Discard:
-        slack_helpers.discard_request(client, payload.channel_id, payload.thread_ts, card, approver.id, requester.id, dm_requester)
+        # Discard ends the request before any decision is made, so it is audited here,
+        # once the buttons are gone (like revoker's Expired path).
+        if slack_helpers.discard_request(client, payload.channel_id, payload.thread_ts, card, approver.id, requester.id, dm_requester):
+            s3.log_operation_best_effort(
+                s3.AuditEntry(
+                    account_id=request.account_id,
+                    role_name=request.permission_set_name,
+                    reason=request.reason,
+                    requester_slack_id=requester.id,
+                    requester_email=requester.email,
+                    approver_slack_id=approver.id,
+                    approver_email=approver.email,
+                    operation_type="declined",
+                    permission_duration=request.permission_duration,
+                    sso_user_principal_id="NA",
+                    audit_entry_type="account",
+                    request_source=request.request_source,
+                    verified_arn=request.verified_arn,
+                    decision_reason="Discarded",
+                ),
+            )
         cache_for_dublicate_requests.clear()
         return None
 
@@ -805,27 +826,28 @@ def process_access_request(
     if outcome.state.is_pending:
         _schedule_pending_request_events(ts)
 
+    # Called for denials too: one that ends the request is audited as "declined".
+    # Granted before the outcome is shown, so a failure is never reported as success.
+    replaced, grant_error = [], None
+    try:
+        replaced = access_control.execute_decision(
+            decision=decision,
+            permission_set_name=request.permission_set_name,
+            account_id=request.account_id,
+            permission_duration=request.permission_duration,
+            approver=requester,
+            requester=requester,
+            reason=request.reason,
+            request_source=request.request_source,
+            verified_arn=request.verified_arn,
+            verified_user_id=request.verified_user_id,
+            channel_id=cfg.slack_channel_id,
+            message_ts=ts,
+        )
+    except Exception as e:  # noqa: BLE001
+        grant_error = e
+        logger.exception(f"execute_decision failed: {e}", extra={"decision": decision.dict()})
     if decision.grant:
-        # Granted before the outcome is shown, so a failure is never reported as success.
-        replaced, grant_error = [], None
-        try:
-            replaced = access_control.execute_decision(
-                decision=decision,
-                permission_set_name=request.permission_set_name,
-                account_id=request.account_id,
-                permission_duration=request.permission_duration,
-                approver=requester,
-                requester=requester,
-                reason=request.reason,
-                request_source=request.request_source,
-                verified_arn=request.verified_arn,
-                verified_user_id=request.verified_user_id,
-                channel_id=cfg.slack_channel_id,
-                message_ts=ts,
-            )
-        except Exception as e:  # noqa: BLE001
-            grant_error = e
-            logger.exception(f"execute_decision failed: {e}", extra={"decision": decision.dict()})
         slack_helpers.report_grant_outcome(
             client,
             channel_id=cfg.slack_channel_id,

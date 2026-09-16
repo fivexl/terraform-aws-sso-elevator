@@ -12,6 +12,7 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
+import s3
 import schedule
 import slack_helpers
 import sso
@@ -74,8 +75,7 @@ def handle_request_for_group_access_submittion(
             time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
         )
 
-    if not decision.grant:
-        return
+    # Called for denials too: one that ends the request is audited as "declined".
     # Granted before the outcome is shown, so a failure is never reported as success.
     replaced, grant_error = [], None
     try:
@@ -93,6 +93,8 @@ def handle_request_for_group_access_submittion(
     except Exception as e:  # noqa: BLE001
         grant_error = e
         logger.exception(f"execute_decision_on_group_request failed: {e}", extra={"decision": decision.dict()})
+    if not decision.grant:
+        return
     slack_helpers.report_grant_outcome(
         client,
         channel_id=cfg.slack_channel_id,
@@ -130,7 +132,24 @@ def handle_group_button_click(payload: slack_helpers.ButtonClickedPayload, clien
             thread_ts=payload.thread_ts,
         )
     if payload.action == entities.ApproverAction.Discard:
-        slack_helpers.discard_request(client, payload.channel_id, payload.thread_ts, card, approver.id, requester.id, dm_requester)
+        # Audited once the buttons are gone; see main.handle_button_click.
+        if slack_helpers.discard_request(client, payload.channel_id, payload.thread_ts, card, approver.id, requester.id, dm_requester):
+            s3.log_operation_best_effort(
+                s3.AuditEntry(
+                    group_id=request.group_id,
+                    group_name=request.group_name or "NA",
+                    reason=request.reason,
+                    requester_slack_id=requester.id,
+                    requester_email=requester.email,
+                    approver_slack_id=approver.id,
+                    approver_email=approver.email,
+                    operation_type="declined",
+                    permission_duration=request.permission_duration,
+                    sso_user_principal_id="NA",
+                    audit_entry_type="group",
+                    decision_reason="Discarded",
+                ),
+            )
         cache_for_dublicate_requests.clear()
         return None
 

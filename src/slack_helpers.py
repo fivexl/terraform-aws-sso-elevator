@@ -562,13 +562,15 @@ def report_grant_outcome(  # noqa: PLR0913
 
 def discard_request(  # noqa: PLR0913
     client: WebClient, channel_id: str, ts: str, card: RequestCard, approver_slack_id: str, requester_slack_id: str, dm_requester: bool
-) -> None:
-    """Tells the requester only once the request shows Discarded; else its buttons are still live."""
+) -> bool:
+    """Tells the requester only once the request shows Discarded; else its buttons are still live.
+    Returns whether the request now shows Discarded."""
     if not update_request_message(client, channel_id, ts, card, RequestState.discarded(approver_slack_id)):
         post_thread_reply(client, channel_id, ts, f"<@{approver_slack_id}> the discard did not go through, please try again.")
-        return
+        return False
     if dm_requester:
         send_dm(client, requester_slack_id, f"Your request was discarded by <@{approver_slack_id}>.")
+    return True
 
 
 def mark_requests_extended(client: WebClient, replaced: list, subject: str, channel_id: str, newer_ts: str) -> None:
