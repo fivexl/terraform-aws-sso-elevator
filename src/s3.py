@@ -16,7 +16,7 @@ s3: S3Client = boto3.client("s3")
 @dataclass
 class AuditEntry:
     reason: str
-    operation_type: Literal["grant", "revoke", "sync_add", "sync_remove", "manual_detected"]
+    operation_type: Literal["grant", "revoke", "sync_add", "sync_remove", "manual_detected", "declined", "incomplete"]
     permission_duration: Literal["NA"] | timedelta
     sso_user_principal_id: str
     audit_entry_type: Literal["group", "account", "sync_add", "sync_remove", "manual_detected"]
@@ -43,6 +43,14 @@ class AuditEntry:
     request_source: str = "NA"
     verified_arn: str = "NA"
     sso_user_email: str = "NA"  # Human-readable email for the SSO user
+    # #98: why a "declined" entry was declined (a DecisionReason value, or
+    # "Discarded"/"NotPermitted"/"NoApproversFoundInSlack" for the outcomes
+    # DecisionReason itself can't express) or, for an "incomplete" entry,
+    # left "NA" in favor of error_message below.
+    decision_reason: str = "NA"
+    # #98: the exception raised while granting an already-approved request
+    # (e.g. IAM Identity Center throttling), for "incomplete" entries only.
+    error_message: str = "NA"
 
 
 def log_operation(
