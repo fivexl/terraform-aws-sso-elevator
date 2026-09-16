@@ -1,6 +1,6 @@
 import json
 import os
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from hypothesis import HealthCheck, example, given, settings
@@ -327,3 +327,69 @@ def test_config_group_statement_parsing_with_s3(mock_s3_client, monkeypatch):
     group_statement = list(cfg.group_statements)[0]
     assert "11e111e1-e111-11ee-e111-1e11e1ee11e1" in group_statement.resource
     assert group_statement.allow_self_approval is True
+
+
+# ---------------------------------------------------------------------------
+# #176: Slack bot token read from SSM Parameter Store
+# ---------------------------------------------------------------------------
+
+
+def test_get_secret_from_ssm_returns_the_decrypted_value():
+    ssm_client = MagicMock()
+    ssm_client.get_parameter.return_value = {"Parameter": {"Value": "the-real-secret"}}
+
+    result = config.get_secret_from_ssm(ssm_client, "/some/path")
+
+    assert result == "the-real-secret"
+    ssm_client.get_parameter.assert_called_once_with(Name="/some/path", WithDecryption=True)
+
+
+def test_get_config_reads_slack_bot_token_from_ssm_when_configured():
+    """When SLACK_BOT_TOKEN_SSM_PARAMETER_NAME is set, get_config() must fetch the real
+    token from SSM rather than requiring a SLACK_BOT_TOKEN environment variable -- the whole
+    point being that Terraform never has to know the real secret to set it there (see
+    revoker_ssm_parameters.tf)."""
+    original_environ = dict(os.environ)
+    original_config = config._config
+    try:
+        env = valid_config_dict()
+        del env["slack_bot_token"]  # not set in the environment in this mode
+        os.environ.clear()
+        os.environ.update({k: str(v) for k, v in env.items()})
+        os.environ["SLACK_BOT_TOKEN_SSM_PARAMETER_NAME"] = "/sso-elevator/revoker/slack-bot-token"
+        config._config = None
+
+        mock_ssm_client = MagicMock()
+        mock_ssm_client.get_parameter.return_value = {"Parameter": {"Value": "xoxb-real-token"}}
+        with patch("boto3.client", return_value=mock_ssm_client):
+            cfg = config.get_config()
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+        config._config = original_config  # do not leak this into other tests
+
+    assert cfg.slack_bot_token == "xoxb-real-token"
+    mock_ssm_client.get_parameter.assert_called_once_with(Name="/sso-elevator/revoker/slack-bot-token", WithDecryption=True)
+
+
+def test_get_config_still_reads_slack_bot_token_from_environment_by_default():
+    """Companion to the test above: without SLACK_BOT_TOKEN_SSM_PARAMETER_NAME set, get_config()
+    must fall back to the pre-existing SLACK_BOT_TOKEN environment variable unchanged, and must
+    not call SSM at all."""
+    original_environ = dict(os.environ)
+    original_config = config._config
+    try:
+        env = valid_config_dict()
+        os.environ.clear()
+        os.environ.update({k: str(v) for k, v in env.items()})
+        config._config = None
+
+        with patch("boto3.client") as mock_boto3_client:
+            cfg = config.get_config()
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+        config._config = original_config
+
+    assert cfg.slack_bot_token == "x"
+    mock_boto3_client.assert_not_called()

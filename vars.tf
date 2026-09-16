@@ -66,6 +66,24 @@ variable "slack_bot_token" {
   type        = string
 }
 
+variable "ssm_parameter_kms_key_id" {
+  description = "Optional customer managed KMS key (id, ARN, or alias) used to encrypt the SecureString SSM parameters this module creates for Lambda secrets. Defaults to the AWS managed alias/aws/ssm key."
+  type        = string
+  default     = null
+}
+
+variable "revoker_slack_bot_token_ssm_parameter_name" {
+  description = "SSM Parameter Store name for the revoker Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see revoker_ssm_parameters.tf)."
+  type        = string
+  default     = "/sso-elevator/revoker/slack-bot-token"
+}
+
+variable "attribute_syncer_slack_bot_token_ssm_parameter_name" {
+  description = "SSM Parameter Store name for the attribute-syncer Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see attribute_syncer_ssm_parameters.tf)."
+  type        = string
+  default     = "/sso-elevator/attribute-syncer/slack-bot-token"
+}
+
 variable "log_level" {
   description = "value for the log level"
   type        = string

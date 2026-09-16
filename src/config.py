@@ -4,6 +4,7 @@ from typing import Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
+from mypy_boto3_ssm import SSMClient
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -66,6 +67,22 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
             exc_info=True,
         )
         raise
+
+
+def get_secret_from_ssm(ssm_client: SSMClient, parameter_name: str) -> str:
+    """Read one SecureString parameter's decrypted value from SSM Parameter Store.
+
+    Used for the handful of actual secrets (the Slack bot token, currently) that Terraform
+    used to push into a Lambda's plaintext environment variables -- and, before that, into
+    the Terraform state file, since a value passed through a Terraform variable ends up
+    there regardless of where it's ultimately written to. The parameter itself is created
+    by Terraform with a placeholder value (see revoker_ssm_parameters.tf /
+    attribute_syncer_ssm_parameters.tf) and its lifecycle ignores further changes to that
+    value, so the real secret is set once, out of band (console or CLI), and never flows
+    through Terraform at all.
+    """
+    response = ssm_client.get_parameter(Name=parameter_name, WithDecryption=True)
+    return response["Parameter"]["Value"]
 
 
 def parse_statement(_dict: dict) -> Statement:
@@ -282,5 +299,15 @@ _config: Optional[Config] = None
 def get_config() -> Config:
     global _config  # noqa: PLW0603
     if _config is None:
-        _config = Config()  # type: ignore # noqa: PGH003
+        overrides = {}
+        # Opt-in per deployment (see revoker_ssm_parameters.tf): when set, the Lambda's own
+        # environment no longer carries SLACK_BOT_TOKEN at all -- it's read from SSM here
+        # instead, so the real secret never has to flow through a Terraform variable, which
+        # is what put it in the state file in the first place.
+        slack_bot_token_ssm_parameter_name = os.environ.get("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "")
+        if slack_bot_token_ssm_parameter_name:
+            import boto3
+
+            overrides["slack_bot_token"] = get_secret_from_ssm(boto3.client("ssm"), slack_bot_token_ssm_parameter_name)
+        _config = Config(**overrides)  # type: ignore # noqa: PGH003
     return _config

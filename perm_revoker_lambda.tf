@@ -46,10 +46,16 @@ module "access_revoker" {
   environment_variables = {
     LOG_LEVEL = var.log_level
 
-    SLACK_SIGNING_SECRET = var.slack_signing_secret
-    SLACK_BOT_TOKEN      = var.slack_bot_token
-    SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = var.schedule_group_name
+    # The Slack bot token lives in SSM Parameter Store instead (see
+    # revoker_ssm_parameters.tf) -- this Lambda reads it from there itself, rather than
+    # having Terraform push the real secret through a variable into an environment variable
+    # (and, in the process, into the Terraform state file). SLACK_SIGNING_SECRET used to be
+    # set here too, but nothing in revoker.py ever reads it -- the revoker only makes
+    # outbound Slack API calls, it never receives Slack's own signed webhook requests -- so
+    # it has been removed outright instead of migrated.
+    SLACK_BOT_TOKEN_SSM_PARAMETER_NAME = aws_ssm_parameter.revoker_slack_bot_token.name
+    SLACK_CHANNEL_ID                   = var.slack_channel_id
+    SCHEDULE_GROUP_NAME                = var.schedule_group_name
 
     SSO_INSTANCE_ARN = local.sso_instance_arn
 
@@ -181,6 +187,32 @@ data "aws_iam_policy_document" "revoker" {
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
+  }
+  statement {
+    sid    = "AllowReadSlackBotTokenFromSSM"
+    effect = "Allow"
+    actions = [
+      "ssm:GetParameter",
+    ]
+    resources = [
+      aws_ssm_parameter.revoker_slack_bot_token.arn,
+    ]
+  }
+  # Needed to read the SecureString parameter. Scoped by kms:ViaService because the AWS
+  # managed alias/aws/ssm key cannot be referenced by ARN, and it is not known which key the
+  # caller passed for var.ssm_parameter_kms_key_id.
+  statement {
+    sid    = "AllowDecryptSSMParameter"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
+    }
   }
 
 }

@@ -51,8 +51,12 @@ module "attribute_syncer" {
   environment_variables = {
     LOG_LEVEL = var.log_level
 
-    SLACK_BOT_TOKEN  = var.slack_bot_token
-    SLACK_CHANNEL_ID = var.slack_channel_id
+    # The Slack bot token lives in SSM Parameter Store instead (see
+    # attribute_syncer_ssm_parameters.tf) -- this Lambda reads it from there itself, rather
+    # than having Terraform push the real secret through a variable into an environment
+    # variable (and, in the process, into the Terraform state file).
+    SLACK_BOT_TOKEN_SSM_PARAMETER_NAME = aws_ssm_parameter.attribute_syncer_slack_bot_token[0].name
+    SLACK_CHANNEL_ID                   = var.slack_channel_id
 
     SSO_INSTANCE_ARN  = local.sso_instance_arn
     IDENTITY_STORE_ID = local.identity_store_id
@@ -135,6 +139,33 @@ data "aws_iam_policy_document" "attribute_syncer" {
       "s3:PutObject",
     ]
     resources = ["${local.s3_bucket_arn}/${var.s3_bucket_partition_prefix}/*"]
+  }
+
+  statement {
+    sid    = "AllowReadSlackBotTokenFromSSM"
+    effect = "Allow"
+    actions = [
+      "ssm:GetParameter",
+    ]
+    resources = [
+      aws_ssm_parameter.attribute_syncer_slack_bot_token[0].arn,
+    ]
+  }
+  # Needed to read the SecureString parameter. Scoped by kms:ViaService because the AWS
+  # managed alias/aws/ssm key cannot be referenced by ARN, and it is not known which key the
+  # caller passed for var.ssm_parameter_kms_key_id.
+  statement {
+    sid    = "AllowDecryptSSMParameter"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
+    }
   }
 }
 

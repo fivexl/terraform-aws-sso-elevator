@@ -485,6 +485,33 @@ Each caller's AWS identity also needs `execute-api:Invoke` permission on this ro
 
 The CLI route isn't currently usable outside the standard `aws` partition: this module's IAM policies hardcode `arn:aws:` throughout, so a GovCloud/China caller's otherwise-valid SSO session fails at the Lambda's own `iam:GetRole` call and is rejected with the same generic message an invalid session gets.
 
+## Revoker and attribute-syncer Slack bot token in SSM Parameter Store
+
+The revoker and attribute-syncer Lambdas read their Slack bot token from AWS Systems Manager Parameter Store instead of a Lambda environment variable. This isn't only about the token being readable via `lambda:GetFunctionConfiguration` -- passing the real secret through a Terraform variable into a resource attribute (an environment variable, or an SSM parameter's own `value`) puts it in the Terraform state file either way, since Terraform has to know the value to manage it.
+
+So the module only **creates** the SSM parameter, as an empty placeholder:
+
+```hcl
+# Defaults shown -- override if you want a different path
+revoker_slack_bot_token_ssm_parameter_name          = "/sso-elevator/revoker/slack-bot-token"
+attribute_syncer_slack_bot_token_ssm_parameter_name = "/sso-elevator/attribute-syncer/slack-bot-token"
+
+# Optional customer managed KMS key for the SecureString parameters.
+# Defaults to the AWS managed alias/aws/ssm key.
+ssm_parameter_kms_key_id = null
+```
+
+After `terraform apply` creates the parameters, set their real values yourself, outside of Terraform:
+
+```sh
+aws ssm put-parameter --name /sso-elevator/revoker/slack-bot-token --type SecureString --overwrite --value "xoxb-..."
+aws ssm put-parameter --name /sso-elevator/attribute-syncer/slack-bot-token --type SecureString --overwrite --value "xoxb-..."
+```
+
+The module's `lifecycle.ignore_changes` on these parameters means every later `terraform apply` leaves whatever value is actually in Parameter Store alone -- it will not be reset back to the placeholder, and Terraform never needs to know the real value again.
+
+The revoker Lambda used to also receive `SLACK_SIGNING_SECRET`, but nothing in its code ever reads it (the revoker only makes outbound Slack API calls; it never receives Slack's own signed webhook requests the way the access-requester Lambda does), so it has been removed from that Lambda's configuration entirely rather than migrated.
+
 # Deployment and Usage
 
 The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
@@ -810,6 +837,8 @@ settings:
 | [aws_scheduler_schedule_group.one_time_schedule_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule_group) | resource |
 | [aws_sns_topic.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
 | [aws_sns_topic_subscription.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
+| [aws_ssm_parameter.attribute_syncer_slack_bot_token](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
+| [aws_ssm_parameter.revoker_slack_bot_token](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
 | [null_resource.attribute_sync_validation](https://registry.terraform.io/providers/hashicorp/null/latest/docs/resources/resource) | resource |
 | [random_string.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
@@ -837,6 +866,7 @@ settings:
 | <a name="input_attribute_sync_rules"></a> [attribute\_sync\_rules](#input\_attribute\_sync\_rules) | Attribute mapping rules for group sync. Each rule specifies a group name and the attribute conditions that must be met for a user to be added to that group.<br/>Example:<br/>[<br/>  {<br/>    group\_name = "Engineering"<br/>    attributes = {<br/>      department = "Engineering"<br/>      employeeType = "FullTime"<br/>    }<br/>  }<br/>] | <pre>list(object({<br/>    group_name = string<br/>    attributes = map(string)<br/>  }))</pre> | `[]` | no |
 | <a name="input_attribute_sync_schedule"></a> [attribute\_sync\_schedule](#input\_attribute\_sync\_schedule) | Schedule expression for attribute sync (e.g., 'rate(1 hour)' or 'cron(0 * * * ? *)'). Determines how often the sync runs. | `string` | `"rate(1 hour)"` | no |
 | <a name="input_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#input\_attribute\_syncer\_lambda\_name) | Name for the attribute syncer Lambda function. | `string` | `"attribute-syncer"` | no |
+| <a name="input_attribute_syncer_slack_bot_token_ssm_parameter_name"></a> [attribute\_syncer\_slack\_bot\_token\_ssm\_parameter\_name](#input\_attribute\_syncer\_slack\_bot\_token\_ssm\_parameter\_name) | SSM Parameter Store name for the attribute-syncer Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see attribute\_syncer\_ssm\_parameters.tf). | `string` | `"/sso-elevator/attribute-syncer/slack-bot-token"` | no |
 | <a name="input_aws_sns_topic_subscription_email"></a> [aws\_sns\_topic\_subscription\_email](#input\_aws\_sns\_topic\_subscription\_email) | value for the email address to subscribe to the SNS topic | `string` | `""` | no |
 | <a name="input_cache_enabled"></a> [cache\_enabled](#input\_cache\_enabled) | Enable caching of AWS accounts, permission sets, and Identity Store users (names, usernames, emails) in S3, as a fallback if the live AWS API call fails. If set to false, caching is disabled but the S3 bucket will still be created for future config storage. | `bool` | `true` | no |
 | <a name="input_cli_sso_role_name_prefix"></a> [cli\_sso\_role\_name\_prefix](#input\_cli\_sso\_role\_name\_prefix) | Required prefix on a CLI caller's assumed-role name for the request to be accepted as an SSO-provisioned session. | `string` | `"AWSReservedSSO_"` | no |
@@ -866,6 +896,7 @@ settings:
 | <a name="input_requester_lambda_name"></a> [requester\_lambda\_name](#input\_requester\_lambda\_name) | value for the requester lambda name | `string` | `"access-requester"` | no |
 | <a name="input_revoker_lambda_name"></a> [revoker\_lambda\_name](#input\_revoker\_lambda\_name) | value for the revoker lambda name | `string` | `"access-revoker"` | no |
 | <a name="input_revoker_post_update_to_slack"></a> [revoker\_post\_update\_to\_slack](#input\_revoker\_post\_update\_to\_slack) | Should revoker send a confirmation of the revocation to Slack? | `bool` | `true` | no |
+| <a name="input_revoker_slack_bot_token_ssm_parameter_name"></a> [revoker\_slack\_bot\_token\_ssm\_parameter\_name](#input\_revoker\_slack\_bot\_token\_ssm\_parameter\_name) | SSM Parameter Store name for the revoker Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see revoker\_ssm\_parameters.tf). | `string` | `"/sso-elevator/revoker/slack-bot-token"` | no |
 | <a name="input_s3_bucket_name_for_audit_entry"></a> [s3\_bucket\_name\_for\_audit\_entry](#input\_s3\_bucket\_name\_for\_audit\_entry) | The name of the S3 bucket that will be used by the module to store logs about every access request.<br/>  If s3\_name\_of\_the\_existing\_bucket is not provided, the module will create a new bucket with this name. | `string` | `"sso-elevator-audit-entry"` | no |
 | <a name="input_s3_bucket_partition_prefix"></a> [s3\_bucket\_partition\_prefix](#input\_s3\_bucket\_partition\_prefix) | The prefix for the S3 audit bucket object partitions.<br/>  Don't use slashes (/) in the prefix, as it will be added automatically, e.g. "logs" will be transformed to "logs/".<br/>  If you want to use the root of the bucket, leave this empty. | `string` | `"logs"` | no |
 | <a name="input_s3_logging"></a> [s3\_logging](#input\_s3\_logging) | Map containing access bucket logging configuration.<br/>  If you are not providing s3\_name\_of\_the\_existing\_bucket variable, then module will create bucket for you.<br/>  If the module is creating an audit bucket for you, then you must provide a logging configuration via this input variable, with at least the target\_bucket key specified. | `map(string)` | `{}` | no |
@@ -882,6 +913,7 @@ settings:
 | <a name="input_slack_bot_token"></a> [slack\_bot\_token](#input\_slack\_bot\_token) | value for the Slack bot token | `string` | n/a | yes |
 | <a name="input_slack_channel_id"></a> [slack\_channel\_id](#input\_slack\_channel\_id) | value for the Slack channel ID | `string` | n/a | yes |
 | <a name="input_slack_signing_secret"></a> [slack\_signing\_secret](#input\_slack\_signing\_secret) | value for the Slack signing secret | `string` | n/a | yes |
+| <a name="input_ssm_parameter_kms_key_id"></a> [ssm\_parameter\_kms\_key\_id](#input\_ssm\_parameter\_kms\_key\_id) | Optional customer managed KMS key (id, ARN, or alias) used to encrypt the SecureString SSM parameters this module creates for Lambda secrets. Defaults to the AWS managed alias/aws/ssm key. | `string` | `null` | no |
 | <a name="input_sso_instance_arn"></a> [sso\_instance\_arn](#input\_sso\_instance\_arn) | value for the SSO instance ARN | `string` | `""` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | A map of tags to assign to resources. | `map(string)` | `{}` | no |
 | <a name="input_use_pre_created_image"></a> [use\_pre\_created\_image](#input\_use\_pre\_created\_image) | If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code. | `bool` | `true` | no |
