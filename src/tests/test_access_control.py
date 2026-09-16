@@ -1105,7 +1105,11 @@ def test_execute_access_request_decision(
     execute_decision_info,
 ):
     if test_cases_for_access_request_decision["out"].grant is not True:
-        assert execute_decision(decision=test_cases_for_access_request_decision["out"], **execute_decision_info) is False
+        # #98: a terminal denial (NoStatements/NoApprovers/RequesterNotAllowed)
+        # now logs a "declined" audit entry before returning -- mocked here
+        # so these otherwise-unrelated cases don't hit the real S3 client.
+        with patch.object(access_control.s3, "log_operation"):
+            assert execute_decision(decision=test_cases_for_access_request_decision["out"], **execute_decision_info) is False
 
 
 def test_execute_approve_request_decision(
@@ -1122,7 +1126,9 @@ def test_make_and_excute_access_request_decision(
 ):
     decision = make_decision_on_access_request(**test_cases_for_access_request_decision["in"])
     if decision.grant is not True:
-        assert execute_decision(decision=decision, **execute_decision_info) is False
+        # #98: see test_execute_access_request_decision above for why this is mocked.
+        with patch.object(access_control.s3, "log_operation"):
+            assert execute_decision(decision=decision, **execute_decision_info) is False
 
 
 def test_make_and_excute_approve_request_decision(
@@ -1259,6 +1265,7 @@ def test_execute_decision_fails_closed_for_a_cli_request_missing_verified_user_i
         ),
         patch.object(access_control.sso, "get_user_principal_id_by_email") as mock_resolve_by_email,
         patch.object(access_control.sso, "create_account_assignment_and_wait_for_result") as mock_create_assignment,
+        patch.object(access_control.s3, "log_operation") as mock_log_operation,
         pytest.raises(ValueError, match="no verified UserId"),
     ):
         execute_decision(
@@ -1273,6 +1280,14 @@ def test_execute_decision_fails_closed_for_a_cli_request_missing_verified_user_i
 
     mock_resolve_by_email.assert_not_called()
     mock_create_assignment.assert_not_called()
+
+    # #98: the fail-closed refusal above is itself an incomplete grant
+    # attempt -- it must not vanish with no audit trail just because it
+    # failed before reaching AWS.
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "incomplete"
+    assert audit_entry.sso_user_principal_id == "NA"
+    assert "no verified UserId" in audit_entry.error_message
 
 
 def test_get_requester_group_ids_uses_verified_user_id_directly_for_cli_requests():
@@ -1327,3 +1342,153 @@ def test_get_requester_group_ids_still_resolves_by_email_when_no_verified_user_i
     assert result == expected_group_ids
     mock_resolve_by_email.assert_called_once()
     mock_list_groups.assert_called_once_with("d-1234", resolved_user_id, access_control.identitystore_client)
+
+
+# ---------------------------------------------------------------------------
+# #98: audit entries for declined and incomplete requests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "denial_reason",
+    [DecisionReason.NoStatements, DecisionReason.NoApprovers, DecisionReason.RequesterNotAllowed],
+)
+def test_execute_decision_logs_declined_entry_for_terminal_denial_reasons(denial_reason, execute_decision_info):
+    """A request that's auto-denied outright (as opposed to RequiresApproval,
+    still pending a human) must leave an audit trail explaining why, not just
+    a Slack message -- that's the actual gap issue #98 is about."""
+    decision = AccessRequestDecision(grant=False, reason=denial_reason, based_on_statements=frozenset())
+
+    with patch.object(access_control.s3, "log_operation") as mock_log_operation:
+        result = execute_decision(decision=decision, **execute_decision_info)
+
+    assert result is False
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "declined"
+    assert audit_entry.decision_reason == denial_reason.value
+    assert audit_entry.sso_user_principal_id == "NA"
+    assert audit_entry.audit_entry_type == "account"
+
+
+def test_execute_decision_does_not_log_an_entry_for_requires_approval():
+    """RequiresApproval means the request is still pending a human decision,
+    not declined -- logging it here would be premature (and, since the
+    eventual Approve/Discard click logs its own entry, a duplicate)."""
+    decision = AccessRequestDecision(grant=False, reason=DecisionReason.RequiresApproval, based_on_statements=frozenset())
+
+    with patch.object(access_control.s3, "log_operation") as mock_log_operation:
+        result = execute_decision(
+            decision=decision,
+            permission_set_name="Foo",
+            account_id="111111111111",
+            permission_duration=datetime.timedelta(days=1),
+            approver=entities.slack.User(email="email@email", id="123", real_name="123"),
+            requester=entities.slack.User(email="email@email", id="123", real_name="123"),
+            reason="",
+            request_source="slack",
+            verified_arn="NA",
+            verified_user_id="NA",
+        )
+
+    assert result is False
+    mock_log_operation.assert_not_called()
+
+
+def test_execute_decision_logs_incomplete_entry_when_the_account_assignment_fails(execute_decision_info):
+    """A request that was approved but never actually granted -- the AWS
+    call itself failed -- must not vanish with no audit trail just because
+    it never reached the existing "grant" log_operation call below it."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+
+    with (
+        patch.object(
+            access_control.sso,
+            "describe_sso_instance",
+            return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+        ),
+        patch.object(
+            access_control.sso,
+            "get_permission_set_by_name",
+            return_value=SimpleNamespace(
+                arn="arn:aws:sso:::permissionSet/ssoins-1/ps-1", name=execute_decision_info["permission_set_name"]
+            ),
+        ),
+        patch.object(access_control.sso, "get_user_principal_id_by_email", return_value=("u-resolved", False)),
+        patch.object(
+            access_control.sso,
+            "create_account_assignment_and_wait_for_result",
+            side_effect=RuntimeError("boom: IAM Identity Center throttled"),
+        ),
+        patch.object(access_control.s3, "log_operation") as mock_log_operation,
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        execute_decision(decision=decision, **execute_decision_info)
+
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "incomplete"
+    # Identity resolution succeeded before the actual AWS call failed, so the
+    # entry still reports who it would have been granted to.
+    assert audit_entry.sso_user_principal_id == "u-resolved"
+    assert "boom" in audit_entry.error_message
+
+
+def test_execute_decision_on_group_request_logs_declined_entry_for_terminal_denial_reasons():
+    """Mirrors test_execute_decision_logs_declined_entry_for_terminal_denial_reasons
+    for the group-request path, which funnels through its own copy of the
+    same terminal-reasons check."""
+    decision = AccessRequestDecision(grant=False, reason=DecisionReason.NoApprovers, based_on_statements=frozenset())
+    group = entities.aws.SSOGroup(name="TestGroup", id="g-1234", description="test", identity_store_id="d-1234")
+
+    with patch.object(access_control.s3, "log_operation") as mock_log_operation:
+        result = access_control.execute_decision_on_group_request(
+            decision=decision,
+            group=group,
+            permission_duration=datetime.timedelta(days=1),
+            approver=entities.slack.User(email="email@email", id="123", real_name="123"),
+            requester=entities.slack.User(email="email@email", id="123", real_name="123"),
+            reason="",
+            identity_store_id="d-1234",
+        )
+
+    assert result is False
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "declined"
+    assert audit_entry.decision_reason == "NoApprovers"
+    assert audit_entry.audit_entry_type == "group"
+    assert audit_entry.group_id == "g-1234"
+
+
+def test_execute_decision_on_group_request_logs_incomplete_entry_when_group_membership_fails():
+    """Mirrors test_execute_decision_logs_incomplete_entry_when_the_account_assignment_fails
+    for the group-request path: an approved group request whose actual AWS
+    call (adding the user to the group) fails must still leave an audit
+    trail, not vanish silently."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    group = entities.aws.SSOGroup(name="TestGroup", id="g-1234", description="test", identity_store_id="d-1234")
+
+    with (
+        patch.object(access_control.sso, "get_user_principal_id_by_email", return_value=("u-resolved", False)),
+        patch.object(
+            access_control.sso,
+            "describe_sso_instance",
+            return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+        ),
+        patch.object(access_control.sso, "is_user_in_group", return_value=None),
+        patch.object(access_control.sso, "add_user_to_a_group", side_effect=RuntimeError("boom: group not found")),
+        patch.object(access_control.s3, "log_operation") as mock_log_operation,
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        access_control.execute_decision_on_group_request(
+            decision=decision,
+            group=group,
+            permission_duration=datetime.timedelta(days=1),
+            approver=entities.slack.User(email="email@email", id="123", real_name="123"),
+            requester=entities.slack.User(email="email@email", id="123", real_name="123"),
+            reason="",
+            identity_store_id="d-1234",
+        )
+
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert audit_entry.operation_type == "incomplete"
+    assert audit_entry.sso_user_principal_id == "u-resolved"
+    assert "boom" in audit_entry.error_message

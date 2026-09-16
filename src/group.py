@@ -12,6 +12,7 @@ from slack_sdk.web.slack_response import SlackResponse
 import access_control
 import config
 import entities
+import s3
 import schedule
 import slack_helpers
 import sso
@@ -169,6 +170,34 @@ def handle_request_for_group_access_submittion(
 
     text, dm_text, color_coding_emoji = _group_access_decision_messages(client, decision)
 
+    # #98: decision.reason == RequiresApproval here means approvers *are*
+    # configured -- so if the message still came back bad_result_emoji,
+    # _group_access_decision_messages hit its "none of the approvers could
+    # be found in Slack" branch. That's a Slack-side failure invisible to
+    # access_control.py (decision.reason itself never changes), so
+    # execute_decision_on_group_request's own terminal-reasons check never
+    # sees it -- this is the only place that can log it. The other
+    # bad_result_emoji reasons (NoStatements/NoApprovers/RequesterNotAllowed)
+    # are already logged there instead, once decision.grant's own
+    # RequiresApproval check below reaches it.
+    if decision.reason == access_control.DecisionReason.RequiresApproval and color_coding_emoji == cfg.bad_result_emoji:
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                group_name=group.name,
+                group_id=group.id,
+                reason=request.reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=requester.id,
+                approver_email=requester.email,
+                operation_type="declined",
+                permission_duration=request.permission_duration,
+                sso_user_principal_id="NA",
+                audit_entry_type="group",
+                decision_reason="NoApproversFoundInSlack",
+            ),
+        )
+
     # Isolated in its own try (#194 A4, extended to this call site in a
     # final pre-delivery review -- the fix already applied to main.py's
     # process_access_request hadn't been propagated here): left bare, a
@@ -293,6 +322,29 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
             thread_ts=payload.thread_ts,
         )
     if payload.action == entities.ApproverAction.Discard:
+        # #98: logged here, not inside execute_decision_on_group_request,
+        # since Discard is handled before a decision is ever made -- this is
+        # the only place that knows it happened.
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                # No group_name here: unlike the grant path (which already
+                # calls sso.describe_group to actually act on the group),
+                # Discard never resolves the group at all -- group_id alone
+                # (already on payload.request) is enough to identify it
+                # without an extra AWS call just for this audit entry.
+                group_id=payload.request.group_id,
+                reason=payload.request.reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="declined",
+                permission_duration=payload.request.permission_duration,
+                sso_user_principal_id="NA",
+                audit_entry_type="group",
+                decision_reason="Discarded",
+            ),
+        )
         blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
             blocks=payload.message["blocks"],
             color_coding_emoji=cfg.bad_result_emoji,
@@ -347,6 +399,24 @@ def handle_group_button_click(body: dict, client: WebClient, context: BoltContex
 
     if not decision.permit:
         cache_for_dublicate_requests.clear()
+        # #98: logged here, not inside execute_decision_on_group_request,
+        # since a not-permitted click never reaches it at all -- this is the
+        # only place that knows it happened.
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                group_id=payload.request.group_id,
+                reason=payload.request.reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="declined",
+                permission_duration=payload.request.permission_duration,
+                sso_user_principal_id="NA",
+                audit_entry_type="group",
+                decision_reason="NotPermitted",
+            ),
+        )
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> you can not approve this request",
