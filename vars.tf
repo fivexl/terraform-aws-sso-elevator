@@ -56,14 +56,18 @@ variable "aws_sns_topic_subscription_email" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "slack_signing_secret" {
-  description = "value for the Slack signing secret"
+  description = "DEPRECATED: no longer used by any Lambda in this module -- the signing secret is now read from requester_slack_signing_secret_ssm_parameter_name instead. Kept optional, not removed, so an existing deployment that still sets this doesn't break. Will be removed in a future version."
   type        = string
+  default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "slack_bot_token" {
-  description = "value for the Slack bot token"
+  description = "DEPRECATED: no longer used by any Lambda in this module -- the bot token is now read from each Lambda's own *_slack_bot_token_ssm_parameter_name instead. Kept optional, not removed, so an existing deployment that still sets this doesn't break. Will be removed in a future version."
   type        = string
+  default     = ""
 }
 
 variable "ssm_parameter_kms_key_id" {
@@ -82,6 +86,18 @@ variable "attribute_syncer_slack_bot_token_ssm_parameter_name" {
   description = "SSM Parameter Store name for the attribute-syncer Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see attribute_syncer_ssm_parameters.tf)."
   type        = string
   default     = "/sso-elevator/attribute-syncer/slack-bot-token"
+}
+
+variable "requester_slack_bot_token_ssm_parameter_name" {
+  description = "SSM Parameter Store name for the access-requester Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see requester_ssm_parameters.tf)."
+  type        = string
+  default     = "/sso-elevator/access-requester/slack-bot-token"
+}
+
+variable "requester_slack_signing_secret_ssm_parameter_name" {
+  description = "SSM Parameter Store name for the access-requester Lambda's Slack signing secret. Terraform only creates this parameter empty -- the real value must be set manually (see requester_ssm_parameters.tf)."
+  type        = string
+  default     = "/sso-elevator/access-requester/slack-signing-secret"
 }
 
 variable "log_level" {
