@@ -557,3 +557,38 @@ class TestBuildMappingRules:
             assert len(rule.conditions) == 1
             assert rule.conditions[0].attribute_name == attr_name
             assert rule.conditions[0].expected_value == attr_value
+
+
+# ---------------------------------------------------------------------------
+# #176: Slack bot token read from SSM Parameter Store
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_slack_bot_token_reads_from_ssm_when_configured(monkeypatch):
+    import attribute_syncer
+    from attribute_syncer import _resolve_slack_bot_token
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/attribute-syncer/slack-bot-token")
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+
+    with patch("attribute_syncer.get_secret_from_ssm", return_value="xoxb-real-token") as mock_get_secret:
+        result = _resolve_slack_bot_token()
+
+    assert result == "xoxb-real-token"
+    mock_get_secret.assert_called_once_with(attribute_syncer._ssm_client, "/sso-elevator/attribute-syncer/slack-bot-token")
+
+
+def test_resolve_slack_bot_token_falls_back_to_environment_variable_by_default(monkeypatch):
+    """Companion to the test above: without SLACK_BOT_TOKEN_SSM_PARAMETER_NAME set, this must
+    fall back to the pre-existing SLACK_BOT_TOKEN environment variable unchanged, and must not
+    call SSM at all."""
+    from attribute_syncer import _resolve_slack_bot_token
+
+    monkeypatch.delenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", raising=False)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-env-token")
+
+    with patch("attribute_syncer.get_secret_from_ssm") as mock_get_secret:
+        result = _resolve_slack_bot_token()
+
+    assert result == "xoxb-env-token"
+    mock_get_secret.assert_not_called()

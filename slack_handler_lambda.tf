@@ -47,10 +47,14 @@ module "access_requester_slack_handler" {
     {
       LOG_LEVEL = var.log_level
 
-      SLACK_SIGNING_SECRET = var.slack_signing_secret
-      SLACK_BOT_TOKEN      = var.slack_bot_token
-      SLACK_CHANNEL_ID     = var.slack_channel_id
-      SCHEDULE_GROUP_NAME  = var.schedule_group_name
+      # The Slack bot token and signing secret live in SSM Parameter Store instead (see
+      # requester_ssm_parameters.tf) -- this Lambda reads them from there itself, rather
+      # than having Terraform push the real secrets through variables into environment
+      # variables (and, in the process, into the Terraform state file).
+      SLACK_BOT_TOKEN_SSM_PARAMETER_NAME      = aws_ssm_parameter.requester_slack_bot_token.name
+      SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME = aws_ssm_parameter.requester_slack_signing_secret.name
+      SLACK_CHANNEL_ID                        = var.slack_channel_id
+      SCHEDULE_GROUP_NAME                     = var.schedule_group_name
 
 
       SSO_INSTANCE_ARN                            = local.sso_instance_arn
@@ -323,6 +327,33 @@ data "aws_iam_policy_document" "slack_handler" {
         "kms:Decrypt",
       ]
       resources = [statement.value]
+    }
+  }
+  statement {
+    sid    = "AllowReadSlackSecretsFromSSM"
+    effect = "Allow"
+    actions = [
+      "ssm:GetParameter",
+    ]
+    resources = [
+      aws_ssm_parameter.requester_slack_bot_token.arn,
+      aws_ssm_parameter.requester_slack_signing_secret.arn,
+    ]
+  }
+  # Needed to read the SecureString parameters. Scoped by kms:ViaService because the AWS
+  # managed alias/aws/ssm key cannot be referenced by ARN, and it is not known which key the
+  # caller passed for var.ssm_parameter_kms_key_id.
+  statement {
+    sid    = "AllowDecryptSSMParameters"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
     }
   }
 }

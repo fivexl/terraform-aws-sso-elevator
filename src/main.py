@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import re
 from datetime import timedelta
 from typing import Callable
@@ -33,8 +34,24 @@ identity_store_client = session.client("identitystore")
 s3_client = session.client("s3")
 
 cfg = config.get_config()
+
+
+def _resolve_slack_secret(ssm_parameter_name_env_var: str) -> str | None:
+    """Read a Slack secret from SSM when its *_SSM_PARAMETER_NAME environment variable is
+    set (see requester_ssm_parameters.tf). Returns None otherwise, so slack_bolt.App falls
+    back to reading the plain SLACK_BOT_TOKEN/SLACK_SIGNING_SECRET environment variables
+    itself (its own documented behavior -- `token = token or os.environ.get(...)`, and
+    likewise for signing_secret), unchanged from before."""
+    ssm_parameter_name = os.environ.get(ssm_parameter_name_env_var, "")
+    if not ssm_parameter_name:
+        return None
+    return config.get_secret_from_ssm(session.client("ssm"), ssm_parameter_name)
+
+
 app = App(
     process_before_response=True,
+    token=_resolve_slack_secret("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME"),
+    signing_secret=_resolve_slack_secret("SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME"),
     # Logger removed to avoid pickle errors with lazy listeners in Lambda
     # Slack Bolt will use its own default logger instead
 )
