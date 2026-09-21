@@ -152,11 +152,15 @@ jobs:
   repository-ci:
     name: Repository CI
     needs: preflight
+    permissions:
+      contents: read
     uses: ./.github/workflows/base.yml
 
   cli-ci:
     name: Elevator CI
     needs: preflight
+    permissions:
+      contents: read
     uses: ./.github/workflows/cli-ci.yml
 
   publish:
