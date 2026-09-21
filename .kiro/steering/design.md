@@ -68,3 +68,19 @@ When adding new configuration parameters:
 - Commit title format: `[spec/fix/feature/refactoring] task name`
 - Commit message: Include detailed task summary
 - Always sign commits
+
+## Releases
+
+- Stable bare SemVer tags such as `4.4.3` are shared by the Terraform module,
+  Elevator CLI, Homebrew cask, and Lambda images. Do not use `elevator-v*`, a
+  leading `v`, or prerelease tags.
+- Prepare releases on `main` and keep `vars.tf`'s `ecr_repo_tag`, generated
+  README documentation, and the intended tag on the same version.
+- Pushing the tag is the only release trigger. GitHub Actions creates the
+  release and generated notes; do not create a GitHub Release manually.
+- Never create, move, delete, or push a release tag without the user's explicit
+  authorization. Agents may prepare and verify a release, but the maintainer
+  owns the publication trigger.
+- macOS releases must remain signed and notarized by Apple Team ID
+  `T962D4K3Y7`. Never make signing conditional or allow missing secrets to
+  degrade into an unsigned release.

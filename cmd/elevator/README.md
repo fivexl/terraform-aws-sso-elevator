@@ -29,7 +29,7 @@ brew install elevator
 curl -fsSL https://raw.githubusercontent.com/fivexl/terraform-aws-sso-elevator/main/install.sh | sh
 ```
 
-Downloads the right binary for your OS/arch from GitHub Releases, verifies its checksum, and installs it to `~/.local/bin` (override with `ELEVATOR_INSTALL_DIR`). Pin a specific version with `ELEVATOR_VERSION=elevator-v1.2.0`.
+Downloads the right binary for your OS/arch from GitHub Releases, verifies its checksum, and installs it to `~/.local/bin` (override with `ELEVATOR_INSTALL_DIR`). Pin a specific version with `ELEVATOR_VERSION=4.4.3`. Repository releases use stable bare `X.Y.Z` tags; the module and CLI always share the same version.
 
 ### Build from source
 
@@ -45,7 +45,7 @@ A plain `go build -o elevator .` (no `-ldflags`) still works, but leaves `main.v
 
 ### Verifying a release
 
-`install.sh` always verifies the downloaded archive's checksum against the release's `checksums.txt` before installing anything, so this section is only for confirming the release itself is genuinely what this repo's CI built — useful if you're distributing the binary further, or just want stronger assurance than "GitHub says so."
+`install.sh` always verifies the downloaded archive's checksum against the release's `checksums.txt`. On macOS it also fails closed unless the binary has a valid Developer ID signature from Apple Team ID `T962D4K3Y7`. Published macOS binaries are notarized by Apple, so Homebrew does not bypass Gatekeeper or clear quarantine attributes.
 
 Each release includes an SBOM (`*.sbom.json`, one per archive) and a [GitHub build provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds) tying that exact archive back to the workflow run and commit that produced it — no separate signing key to fetch or trust, since it's backed by GitHub's own OIDC identity. Verify with the [`gh` CLI](https://cli.github.com/):
 
@@ -56,6 +56,14 @@ gh attestation verify elevator-linux-amd64.tar.gz \
 ```
 
 `--owner fivexl` alone (accepting an attestation from *any* repo in the `fivexl` org) or `--repo` alone (accepting one from *any* workflow in this repo with permission to publish attestations) are both weaker than necessary here — `--signer-workflow` pins verification to the one workflow that actually publishes this release, `cli-release.yml`, the same check `install.sh` itself runs.
+
+Inspect the Apple identity on a downloaded macOS binary with:
+
+```bash
+codesign --verify --strict --verbose=2 elevator
+codesign -dv elevator 2>&1 | grep -E 'TeamIdentifier|Authority'
+codesign --verify -R '=anchor apple generic and certificate leaf[subject.OU] = T962D4K3Y7' elevator
+```
 
 ## Configure
 

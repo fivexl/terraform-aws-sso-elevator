@@ -1,6 +1,7 @@
 name: CLI CI
 
 on:
+  workflow_call:
   push:
     branches: [main]
     paths: ["cmd/elevator/**", "install.sh"]
@@ -44,7 +45,9 @@ jobs:
       # matrix, since its output doesn't depend on the runner OS.
       - name: Shellcheck install.sh
         if: matrix.os == 'ubuntu-latest'
-        run: shellcheck install.sh
+        run: shellcheck install.sh cmd/elevator/install_test.sh
+      - name: Test installer
+        run: sh cmd/elevator/install_test.sh
 
   lint:
     runs-on: ubuntu-latest
