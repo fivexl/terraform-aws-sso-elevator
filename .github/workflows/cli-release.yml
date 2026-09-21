@@ -110,7 +110,7 @@ jobs:
       # Exercise the real signing and Apple notarization path, but stop before
       # creating a GitHub release or updating Homebrew. This catches pending
       # Apple agreements as well as bad certificates and API credentials.
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: "v2.18.1"
           args: release --clean --skip=publish,announce --release-notes ${{ runner.temp }}/preflight-release-notes.md --config cmd/elevator/.goreleaser.yaml
@@ -205,7 +205,7 @@ jobs:
         with:
           syft-version: "v1.51.1"
 
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: "v2.18.1"
           args: release --clean --config cmd/elevator/.goreleaser.yaml
