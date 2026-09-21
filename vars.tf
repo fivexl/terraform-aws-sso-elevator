@@ -22,14 +22,9 @@ variable "ecr_repo_name" {
 variable "ecr_repo_tag" {
   description = "The tag of the image in the ECR repository."
   type        = string
-  # 4.4.1, not 4.4.0: 4.4.0's CLI route accepted requests but then rejected
-  # every one of them (issue #193 -- a defense-in-depth check required the
-  # requester to already hold the exact access being requested, which no
-  # genuine elevation request ever does). This value must match the tag of
-  # the GitHub Release that ships the fix -- build_docker.yml only builds
-  # and pushes an image for a tag once that release is published, so this
-  # default is only real once release 4.4.1 exists.
-  default = "4.4.1"
+  # Repository releases use one version for the module, Elevator CLI, and
+  # pre-built images. Keep this default aligned with the next release tag.
+  default = "4.4.3"
 }
 
 variable "use_pre_created_image" {

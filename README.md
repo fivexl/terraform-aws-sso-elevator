@@ -505,14 +505,17 @@ ecr_owner_account_id = "<example_account_id>"
 
 GitHub CI of this repository pre-builds the requester and revoker lambda Docker images on every release and push them to FivexL's private ECR. Users can use these pre-built Docker images to build lambdas.
 
-### Releasing a new module version
+### Releasing a new version
 
-The image only gets built once, as a side effect of publishing a GitHub Release — nothing builds it in advance, and nothing rebuilds it retroactively for an existing release. Get the order wrong and consumers who apply with defaults either fail to find the image or silently keep pulling the previous version:
+One stable bare SemVer tag releases the Terraform module, [Elevator CLI](cmd/elevator/README.md), Homebrew cask, and Lambda images under the same version. GitHub Actions creates the release and its generated notes; do not create a GitHub Release manually.
 
-1. Merge to `main` first — the release is built from whatever `main` has at release time.
-2. Bump `ecr_repo_tag`'s default in `vars.tf` to the version you're about to release (e.g. `"4.4.0"`), and merge that too.
-3. Publish a GitHub Release on `main` tagged with that exact same version (a bare `X.Y.Z`, no `elevator-` prefix — that namespace is reserved for the separate [CLI binary release](cmd/elevator/README.md)). Publishing is what triggers `build_docker.yml`, which builds and pushes the `requester-X.Y.Z`/`revoker-X.Y.Z`/`attribute-syncer-X.Y.Z` images to ECR.
-4. Only after that workflow finishes does `ecr_repo_tag`'s new default actually resolve to a real image. Until then, anyone applying with defaults against a pre-release `main` would fail to find it — this is why step 2 and step 3's tag must match exactly, and why step 3 must happen promptly after step 2 merges.
+1. Set `ecr_repo_tag`'s default in `vars.tf` to the next version and merge the release-ready commit to `main`.
+2. Confirm `main` is green and the release repository has these Actions secrets: `APP_ID`, `APP_PRIVATE_KEY`, `MACOS_SIGN_P12`, `MACOS_SIGN_PASSWORD`, `MACOS_NOTARY_ISSUER_ID`, `MACOS_NOTARY_KEY_ID`, and `MACOS_NOTARY_KEY`. The GitHub App must be installed only on `fivexl/homebrew-tap` with Contents read/write permission.
+3. Create and push the matching stable tag, for example `4.4.3`. Prerelease tags and `elevator-v*` tags are not supported.
+4. Watch **CLI Release**. It verifies that the tag is on `main`, exercises Apple signing/notarization without publishing, runs the repository and CLI checks, then publishes and smoke-tests the signed binaries and Homebrew cask.
+5. A successful binary release starts **Build and Push Docker Images** asynchronously for `requester-X.Y.Z`, `revoker-X.Y.Z`, and `attribute-syncer-X.Y.Z`. The GitHub release can be available briefly before those images finish pushing.
+
+An Apple error containing `FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED` requires the Apple Account Holder to accept the pending agreement in App Store Connect, then re-run the failed jobs. Never move a successfully published tag; release corrections under the next patch version.
 
 ECR is private for the following reasons:
 
@@ -847,7 +850,7 @@ settings:
 | <a name="input_create_lambda_url"></a> [create\_lambda\_url](#input\_create\_lambda\_url) | If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future<br/>If false, Lambda url will be deleted. | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
-| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.4.1"` | no |
+| <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.4.3"` | no |
 | <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true (and create\_api\_gateway is also true), adds the POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |

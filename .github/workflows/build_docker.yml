@@ -1,10 +1,11 @@
 name: Build and Push Docker Images
 
 on:
-  release:
-    types: [published]
+  # Release tags are dispatched by cli-release.yml only after signed binary
+  # and Homebrew smoke tests pass. Running this workflow does not hold up the
+  # GitHub release itself.
+  workflow_dispatch:
   push:
-    tags: [v*]
     branches: [main]
 
 permissions:
@@ -13,22 +14,6 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # The push-tags trigger above is already scoped to "v*", which never
-    # matches an "elevator-v*" CLI release tag. The release:published
-    # trigger has no such filter, though -- it fires for ANY release this
-    # repo publishes, including the CLI's (#194 documentation fix: this
-    # fires when GoReleaser's own `release --clean` call in cli-release.yml
-    # first creates the release, since .goreleaser.yaml's release.prerelease
-    # is true but draft is never set -- the release exists non-draft
-    # immediately. cli-release.yml's later publication-state job only edits
-    # that already-published release, `--prerelease=false` --
-    # `gh release edit` fires GitHub's release:edited event, not another
-    # release:published; a release can only be "published" once). Without
-    # this guard, every CLI release would also rebuild and push these three
-    # Lambda images to ECR, tagged with a meaningless
-    # "requester-elevator-vX.Y.Z"-style tag.
-    if: github.event_name != 'release' || !startsWith(github.event.release.tag_name, 'elevator-')
-
     steps:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -49,15 +34,15 @@ jobs:
 
       - name: Get short SHA
         id: get_sha
-        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
       - name: Get tag name or SHA
         id: get_tag
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "GIT_TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+            echo "GIT_TAG=${GITHUB_REF##*/}" >> "$GITHUB_ENV"
           else
-            echo "GIT_TAG=${{ env.SHORT_SHA }}" >> $GITHUB_ENV
+            echo "GIT_TAG=${{ env.SHORT_SHA }}" >> "$GITHUB_ENV"
           fi
     
       - name: Build and push requester image

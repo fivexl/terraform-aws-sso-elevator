@@ -5,9 +5,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/fivexl/terraform-aws-sso-elevator/main/install.sh | sh
 #
 # Env overrides:
-#   ELEVATOR_VERSION      Pin to a specific tag (e.g. elevator-v1.2.0) instead of latest.
+#   ELEVATOR_VERSION      Pin to a specific tag (e.g. 4.4.3) instead of latest.
 #   ELEVATOR_INSTALL_DIR  Install directory (default: $HOME/.local/bin).
-#   GITHUB_TOKEN          Used to list releases at the authenticated 5000/hr rate
+#   GITHUB_TOKEN          Used to fetch releases at the authenticated 5000/hr rate
 #                         limit instead of the unauthenticated 60/hr one. Only
 #                         consulted when ELEVATOR_VERSION isn't set.
 set -eu
@@ -35,118 +35,30 @@ detect_arch() {
   esac
 }
 
-# validate_version defends against path-traversal / repo-pivot if
-# ELEVATOR_VERSION is ever set from an untrusted source — only allow a strict
-# elevator-vX.Y.Z(-suffix) shape, nothing else. The elevator- prefix also
-# keeps CLI release tags out of the module's own vX.Y.Z-less version tags
-# (e.g. "4.3.1") and out of any tag-triggered module workflow.
+# Only stable bare SemVer tags are releaseable. Keep the installer on exactly
+# the same contract so a value from an untrusted environment cannot change the
+# download path or select an unpublished tag shape.
 validate_version() {
-  # grep matches per line, not the whole input -- "$(printf 'garbage\nelevator-v1.2.3')"
-  # would pass the anchored check below (its second line matches on its own)
-  # even though the value as a whole isn't a clean tag string. curl happens
-  # to fail safe on a URL containing a raw newline, but that's incidental,
-  # not something this function should rely on -- reject a newline outright.
-  # This check is still load-bearing even with the anchored regex below,
-  # since grep is line-oriented; a standalone "/" rejection here is not
-  # (#194 E3) -- none of the regex's character classes ([0-9A-Za-z-] plus
-  # the literal "." "+" "-" separators) can ever match "/", so a value
-  # containing one already fails that anchored, whole-string match on its
-  # own. A prior version of this function rejected "/" explicitly, before
-  # the match was tightened from a shell case-glob to this real anchored
-  # regex; keeping that check afterward was pure dead code.
   nl='
 '
   case "$1" in
     *"$nl"*) die "invalid version format: $1 (must not contain a newline)" ;;
   esac
-  # A shell case glob can't express "one or more digits" -- [0-9]* means
-  # "a digit, then anything", so the previous version of this check accepted
-  # e.g. "elevator-v1$(id).0.0" or "elevator-v9EVIL.9EVIL.9EVIL". No working
-  # injection was ever found downstream (every expansion here is quoted and
-  # there's no eval), but the comment above claiming a "strict" shape was a
-  # false safety claim, not just a redundant one. grep -E gives a real
-  # anchored regex, actually requiring digit-only version components.
-  #
-  # The prerelease suffix follows SemVer 2.0's own grammar (dot-separated
-  # alphanumeric-or-hyphen identifiers), rather than the narrower version
-  # that used to reject a legitimate tag like "elevator-v1.2.3-rc-1" (a
-  # hyphen inside the prerelease identifier itself) -- a tag
-  # cli-release.yml's own validate-tag job (elevator-v* only) would accept.
-  #
-  # "+"-prefixed build metadata is deliberately NOT accepted here, even
-  # though it's also valid SemVer 2.0 (#194 C5/decision, resolved: disallow
-  # it in this tag namespace) -- the prerelease-detection heuristics this
-  # project uses elsewhere (cli-release.yml's publication-state job,
-  # .goreleaser.yaml's cask skip_upload) both check only for a hyphen, not
-  # "+", so a tag like "elevator-v1.2.3+linux-amd64" would be silently
-  # misclassified as a normal release downstream: no cask push, stuck
-  # prerelease:true forever, invisible to install.sh's own prerelease-only
-  # filter below, all with a 0 exit code and no error anywhere. Simpler to
-  # keep this namespace out of that shape entirely than to teach every
-  # consumer of a release tag to parse "+build" correctly.
-  echo "$1" | grep -Eq '^elevator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
-    || die "invalid version format: $1 (expected elevator-vX.Y.Z, optionally with a -prerelease suffix; +build metadata is not supported)"
+  echo "$1" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
+    || die "invalid version format: $1 (expected stable X.Y.Z)"
 }
 
 get_latest_version() {
-  # This repo also publishes the module's own version releases (e.g. "4.3.1",
-  # no "elevator-" prefix) as GitHub Releases. /releases/latest doesn't
-  # distinguish between the two kinds of release -- it just returns whichever
-  # was published most recently, of either kind -- so a module release
-  # published after the last CLI release would make it resolve to the wrong
-  # one. List releases explicitly instead and take the first non-prerelease
-  # elevator-v* tag, in the order the API returns them (newest first).
-  # per_page=100 (the API's max) rather than 30, so this doesn't start
-  # missing the latest elevator-v* release once enough module releases
-  # accumulate ahead of it.
+  endpoint="https://api.github.com/repos/${REPO}/releases/latest"
   if [ -n "${GITHUB_TOKEN:-}" ]; then
-    response=$(curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" "https://api.github.com/repos/${REPO}/releases?per_page=100") \
-      || die "failed to list releases from the GitHub API"
+    response=$(curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" "$endpoint") \
+      || die "failed to fetch the latest release from the GitHub API"
   else
-    # Unauthenticated requests are capped at 60/hr per source IP -- set
-    # GITHUB_TOKEN to use the authenticated 5000/hr limit instead.
-    response=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=100") \
-      || die "failed to list releases from the GitHub API (if this is a rate limit, set GITHUB_TOKEN and retry)"
+    response=$(curl -fsSL "$endpoint") \
+      || die "failed to fetch the latest release from the GitHub API (if this is a rate limit, set GITHUB_TOKEN and retry)"
   fi
-
-  # Unauthenticated requests never returned draft releases at all, so
-  # filtering on "prerelease" alone was sufficient. Now that GITHUB_TOKEN is
-  # supported (for the higher rate limit), a token with read access to this
-  # repo makes drafts visible too -- and a draft has "prerelease": false, so
-  # it would win this scan ahead of the real latest release, then 404 when
-  # main() tries to download its assets from the public releases/download
-  # URL (draft assets aren't published there). "draft" is tracked the same
-  # way "prerelease" already was, and both must be false to accept a tag.
-  fields=$(printf '%s' "$response" \
-    | grep -E '"tag_name"|"draft"|"prerelease"' \
-    | sed -E 's/^[[:space:]]*"tag_name": *"([^"]*)".*/TAG \1/; s/^[[:space:]]*"draft": *(true|false).*/DRAFT \1/; s/^[[:space:]]*"prerelease": *(true|false).*/PRE \1/')
-
-  version=""
-  tag=""
-  draft=""
-  while IFS= read -r line; do
-    case "$line" in
-      "TAG "*) tag="${line#TAG }"; draft="" ;;
-      "DRAFT "*) draft="${line#DRAFT }" ;;
-      "PRE "*)
-        pre="${line#PRE }"
-        case "$tag" in
-          elevator-v*)
-            if [ "$pre" = "false" ] && [ "$draft" = "false" ]; then
-              version="$tag"
-              break
-            fi
-            ;;
-        esac
-        tag=""
-        draft=""
-        ;;
-    esac
-  done <<EOF
-$fields
-EOF
-
-  [ -n "${version:-}" ] || die "the GitHub API call succeeded but no non-prerelease elevator-v* release was found"
+  version=$(printf '%s\n' "$response" | sed -n 's/^[[:space:]]*"tag_name": *"\([^"]*\)".*/\1/p' | sed -n '1p')
+  [ -n "$version" ] || die "the GitHub API response did not contain a release tag"
   echo "$version"
 }
 
@@ -237,6 +149,19 @@ verify_archive_members() {
   done
 }
 
+verify_macos_signature() {
+  os="$1"
+  file="$2"
+  [ "$os" = darwin ] || return 0
+  command -v codesign >/dev/null 2>&1 || die "codesign is required to verify the macOS release"
+  requirement='=anchor apple generic and certificate leaf[subject.OU] = T962D4K3Y7'
+  codesign --verify --strict --verbose=2 "$file" \
+    || die "invalid Apple code signature for $(basename "$file") — refusing to install"
+  codesign --verify -R "$requirement" "$file" \
+    || die "$(basename "$file") is not signed by expected Apple Team ID T962D4K3Y7 — refusing to install"
+  log "Verified Apple code signature for Team ID T962D4K3Y7"
+}
+
 check_required_commands() {
   for cmd in curl tar; do
     command -v "$cmd" >/dev/null 2>&1 || die "$cmd is required but not found on PATH"
@@ -287,6 +212,7 @@ main() {
   verify_archive_members "${work_dir}/${archive_name}"
 
   tar -xzf "${work_dir}/${archive_name}" -C "$work_dir" "$BINARY_NAME"
+  verify_macos_signature "$os" "${work_dir}/${BINARY_NAME}"
   chmod +x "${work_dir}/${BINARY_NAME}"
   mv "${work_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 

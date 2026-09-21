@@ -1,8 +1,8 @@
 name: 'base'
 
 on:
+  workflow_call:
   push:
-    tags: [ v* ]
     branches: [ main ]
   pull_request:
     branches: [ main ]
