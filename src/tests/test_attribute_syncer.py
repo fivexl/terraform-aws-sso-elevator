@@ -592,3 +592,17 @@ def test_resolve_slack_bot_token_falls_back_to_environment_variable_by_default(m
 
     assert result == "xoxb-env-token"
     mock_get_secret.assert_not_called()
+
+
+def test_resolve_slack_bot_token_degrades_to_empty_string_when_ssm_fails(monkeypatch):
+    """Regression test (found in review): this runs before perform_sync, with nothing else
+    guarding it, so letting an SSM failure propagate would abort the entire group-sync run
+    over what's only ever a notification concern."""
+    from attribute_syncer import _resolve_slack_bot_token
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/attribute-syncer/slack-bot-token")
+
+    with patch("attribute_syncer.get_secret_from_ssm", side_effect=RuntimeError("boom: KMS access denied")):
+        result = _resolve_slack_bot_token()  # must not raise
+
+    assert result == ""

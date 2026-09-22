@@ -344,52 +344,96 @@ def test_get_secret_from_ssm_returns_the_decrypted_value():
     ssm_client.get_parameter.assert_called_once_with(Name="/some/path", WithDecryption=True)
 
 
-def test_get_config_reads_slack_bot_token_from_ssm_when_configured():
+def _set_env_from_dict(monkeypatch, env: dict) -> None:
+    """Set every key from a valid_config_dict()-shaped dict via monkeypatch, one variable at a
+    time -- never os.environ.clear(), which wipes unrelated real environment variables (e.g.
+    Windows' USERPROFILE) that an entirely unrelated import elsewhere in the same test session
+    can depend on (found in review: this broke every test_main.py test that ran after these in
+    the same session, since importing main.py transitively imports a library that calls
+    Path.home() at import time)."""
+    for k, v in env.items():
+        monkeypatch.setenv(k, str(v))
+
+
+def test_get_config_reads_slack_bot_token_from_ssm_when_configured(monkeypatch):
     """When SLACK_BOT_TOKEN_SSM_PARAMETER_NAME is set, get_config() must fetch the real
     token from SSM rather than requiring a SLACK_BOT_TOKEN environment variable -- the whole
     point being that Terraform never has to know the real secret to set it there (see
-    revoker_ssm_parameters.tf)."""
-    original_environ = dict(os.environ)
+    read_slack_secrets_from_ssm in vars.tf)."""
+    env = valid_config_dict()
+    del env["slack_bot_token"]  # not set in the environment in this mode
+    _set_env_from_dict(monkeypatch, env)
+    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/revoker/slack-bot-token")
     original_config = config._config
-    try:
-        env = valid_config_dict()
-        del env["slack_bot_token"]  # not set in the environment in this mode
-        os.environ.clear()
-        os.environ.update({k: str(v) for k, v in env.items()})
-        os.environ["SLACK_BOT_TOKEN_SSM_PARAMETER_NAME"] = "/sso-elevator/revoker/slack-bot-token"
-        config._config = None
+    config._config = None
 
-        mock_ssm_client = MagicMock()
-        mock_ssm_client.get_parameter.return_value = {"Parameter": {"Value": "xoxb-real-token"}}
+    mock_ssm_client = MagicMock()
+    mock_ssm_client.get_parameter.return_value = {"Parameter": {"Value": "xoxb-real-token"}}
+    try:
         with patch("boto3.client", return_value=mock_ssm_client):
             cfg = config.get_config()
     finally:
-        os.environ.clear()
-        os.environ.update(original_environ)
         config._config = original_config  # do not leak this into other tests
 
     assert cfg.slack_bot_token == "xoxb-real-token"
     mock_ssm_client.get_parameter.assert_called_once_with(Name="/sso-elevator/revoker/slack-bot-token", WithDecryption=True)
 
 
-def test_get_config_still_reads_slack_bot_token_from_environment_by_default():
+def test_get_config_still_reads_slack_bot_token_from_environment_by_default(monkeypatch):
     """Companion to the test above: without SLACK_BOT_TOKEN_SSM_PARAMETER_NAME set, get_config()
     must fall back to the pre-existing SLACK_BOT_TOKEN environment variable unchanged, and must
     not call SSM at all."""
-    original_environ = dict(os.environ)
+    _set_env_from_dict(monkeypatch, valid_config_dict())
     original_config = config._config
-    try:
-        env = valid_config_dict()
-        os.environ.clear()
-        os.environ.update({k: str(v) for k, v in env.items()})
-        config._config = None
+    config._config = None
 
+    try:
         with patch("boto3.client") as mock_boto3_client:
             cfg = config.get_config()
     finally:
-        os.environ.clear()
-        os.environ.update(original_environ)
         config._config = original_config
 
     assert cfg.slack_bot_token == "x"
     mock_boto3_client.assert_not_called()
+
+
+def test_get_config_reads_slack_signing_secret_from_ssm_when_configured(monkeypatch):
+    """Companion to the bot-token test above, for the other secret get_config() resolves."""
+    _set_env_from_dict(monkeypatch, valid_config_dict())
+    monkeypatch.setenv("SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME", "/sso-elevator/access-requester/slack-signing-secret")
+    original_config = config._config
+    config._config = None
+
+    mock_ssm_client = MagicMock()
+    mock_ssm_client.get_parameter.return_value = {"Parameter": {"Value": "real-signing-secret"}}
+    try:
+        with patch("boto3.client", return_value=mock_ssm_client):
+            cfg = config.get_config()
+    finally:
+        config._config = original_config
+
+    assert cfg.slack_signing_secret == "real-signing-secret"
+
+
+def test_get_config_degrades_to_an_empty_secret_when_ssm_fails(monkeypatch):
+    """Regression test (found in review): get_config() runs unconditionally at Lambda
+    cold start for every Lambda, including the revoker, whose core job (revoking access) has
+    nothing to do with Slack. A transient SSM/KMS failure while resolving the Slack secret must
+    not prevent Config() from being constructed at all -- that would take the entire Lambda
+    down over what should only ever cost it a Slack notification."""
+    env = valid_config_dict()
+    del env["slack_bot_token"]
+    _set_env_from_dict(monkeypatch, env)
+    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/revoker/slack-bot-token")
+    original_config = config._config
+    config._config = None
+
+    mock_ssm_client = MagicMock()
+    mock_ssm_client.get_parameter.side_effect = RuntimeError("boom: KMS access denied")
+    try:
+        with patch("boto3.client", return_value=mock_ssm_client):
+            cfg = config.get_config()  # must not raise
+    finally:
+        config._config = original_config
+
+    assert cfg.slack_bot_token == ""

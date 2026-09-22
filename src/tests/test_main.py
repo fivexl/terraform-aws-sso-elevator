@@ -136,31 +136,15 @@ def _cli_request_event(body: dict | None = None, user_arn: str | None = None, ap
 
 # ---------------------------------------------------------------------------
 # #176: Slack secrets read from SSM Parameter Store
+#
+# main.py itself no longer resolves these secrets -- it previously had its own duplicate
+# SSM lookup, which was a real bug (a second GetParameter call for the exact same value
+# config.get_config() already resolves into cfg.slack_bot_token/cfg.slack_signing_secret,
+# found in review). Now it's a plain `cfg.slack_bot_token or None` / `cfg.slack_signing_secret
+# or None` passed to slack_bolt.App, so the actual resolution (including SSM opt-in and
+# graceful degradation on failure) is fully covered by test_config.py's get_config() tests
+# instead.
 # ---------------------------------------------------------------------------
-
-
-def test_resolve_slack_secret_reads_from_ssm_when_configured(main_module, monkeypatch):
-    monkeypatch.setenv("SOME_SSM_PARAMETER_NAME_ENV_VAR", "/sso-elevator/access-requester/slack-bot-token")
-
-    with patch.object(main_module.config, "get_secret_from_ssm", return_value="xoxb-real-token") as mock_get_secret:
-        result = main_module._resolve_slack_secret("SOME_SSM_PARAMETER_NAME_ENV_VAR")
-
-    assert result == "xoxb-real-token"
-    assert mock_get_secret.call_args.args[1] == "/sso-elevator/access-requester/slack-bot-token"
-
-
-def test_resolve_slack_secret_returns_none_when_not_configured(main_module, monkeypatch):
-    """Companion to the test above: without the *_SSM_PARAMETER_NAME environment variable set,
-    this must return None (not call SSM at all), so slack_bolt.App falls back to reading the
-    plain SLACK_BOT_TOKEN/SLACK_SIGNING_SECRET environment variables itself, unchanged from
-    before."""
-    monkeypatch.delenv("SOME_UNSET_SSM_PARAMETER_NAME_ENV_VAR", raising=False)
-
-    with patch.object(main_module.config, "get_secret_from_ssm") as mock_get_secret:
-        result = main_module._resolve_slack_secret("SOME_UNSET_SSM_PARAMETER_NAME_ENV_VAR")
-
-    assert result is None
-    mock_get_secret.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

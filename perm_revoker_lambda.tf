@@ -43,40 +43,47 @@ module "access_revoker" {
     module.sso_elevator_dependencies[0].lambda_layer_arn,
   ]
 
-  environment_variables = {
-    LOG_LEVEL = var.log_level
+  environment_variables = merge(
+    {
+      LOG_LEVEL = var.log_level
 
-    # The Slack bot token lives in SSM Parameter Store instead (see
-    # revoker_ssm_parameters.tf) -- this Lambda reads it from there itself, rather than
-    # having Terraform push the real secret through a variable into an environment variable
-    # (and, in the process, into the Terraform state file). SLACK_SIGNING_SECRET used to be
-    # set here too, but nothing in revoker.py ever reads it -- the revoker only makes
-    # outbound Slack API calls, it never receives Slack's own signed webhook requests -- so
-    # it has been removed outright instead of migrated.
-    SLACK_BOT_TOKEN_SSM_PARAMETER_NAME = aws_ssm_parameter.revoker_slack_bot_token.name
-    SLACK_CHANNEL_ID                   = var.slack_channel_id
-    SCHEDULE_GROUP_NAME                = var.schedule_group_name
+      # SLACK_SIGNING_SECRET used to be set here too, but nothing in revoker.py ever reads
+      # it -- the revoker only makes outbound Slack API calls, it never receives Slack's own
+      # signed webhook requests -- so it has been removed outright instead of migrated.
+      SLACK_CHANNEL_ID    = var.slack_channel_id
+      SCHEDULE_GROUP_NAME = var.schedule_group_name
 
-    SSO_INSTANCE_ARN = local.sso_instance_arn
+      SSO_INSTANCE_ARN = local.sso_instance_arn
 
-    POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
-    SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
-    REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
-    REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
-    S3_BUCKET_FOR_AUDIT_ENTRY_NAME              = local.s3_bucket_name
-    S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
-    SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
-    REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
-    MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
-    PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
-    CONFIG_BUCKET_NAME                          = local.config_bucket_name
-    CONFIG_S3_KEY                               = "config/approval-config.json"
+      POST_UPDATE_TO_SLACK                        = var.revoker_post_update_to_slack
+      SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
+      REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
+      REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
+      S3_BUCKET_FOR_AUDIT_ENTRY_NAME              = local.s3_bucket_name
+      S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
+      SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
+      REQUEST_EXPIRATION_HOURS                    = var.request_expiration_hours
+      MAX_PERMISSIONS_DURATION_TIME               = var.max_permissions_duration_time
+      PERMISSION_DURATION_LIST_OVERRIDE           = jsonencode(var.permission_duration_list_override)
+      CONFIG_BUCKET_NAME                          = local.config_bucket_name
+      CONFIG_S3_KEY                               = "config/approval-config.json"
 
-    APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME  = var.approver_renotification_initial_wait_time
-    APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
-    SECONDARY_FALLBACK_EMAIL_DOMAINS           = jsonencode(var.secondary_fallback_email_domains)
-    SEND_DM_IF_USER_NOT_IN_CHANNEL             = var.send_dm_if_user_not_in_channel
-  }
+      APPROVER_RENOTIFICATION_INITIAL_WAIT_TIME  = var.approver_renotification_initial_wait_time
+      APPROVER_RENOTIFICATION_BACKOFF_MULTIPLIER = var.approver_renotification_backoff_multiplier
+      SECONDARY_FALLBACK_EMAIL_DOMAINS           = jsonencode(var.secondary_fallback_email_domains)
+      SEND_DM_IF_USER_NOT_IN_CHANNEL             = var.send_dm_if_user_not_in_channel
+    },
+    # Opt-in per deployment (see read_slack_secrets_from_ssm in vars.tf). Off by default:
+    # this Lambda reads the plain secret variable exactly as it always has, unchanged. Only
+    # when explicitly enabled does it instead read the secret from SSM itself at runtime, by
+    # name -- Terraform never creates, reads, or manages that parameter (see
+    # slack_ssm_secrets.tf for why).
+    var.read_slack_secrets_from_ssm ? {
+      SLACK_BOT_TOKEN_SSM_PARAMETER_NAME = var.revoker_slack_bot_token_ssm_parameter_name
+      } : {
+      SLACK_BOT_TOKEN = var.slack_bot_token
+    }
+  )
 
   allowed_triggers = {
     cron = {
@@ -188,30 +195,48 @@ data "aws_iam_policy_document" "revoker" {
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
   }
-  statement {
-    sid    = "AllowReadSlackBotTokenFromSSM"
-    effect = "Allow"
-    actions = [
-      "ssm:GetParameter",
-    ]
-    resources = [
-      aws_ssm_parameter.revoker_slack_bot_token.arn,
-    ]
+  # Both statements only granted when read_slack_secrets_from_ssm is enabled (see
+  # slack_ssm_secrets.tf) -- otherwise this Lambda never calls SSM for its Slack secret at
+  # all, and granting the permission anyway would just be unused surface.
+  dynamic "statement" {
+    for_each = var.read_slack_secrets_from_ssm ? [1] : []
+    content {
+      sid    = "AllowReadSlackBotTokenFromSSM"
+      effect = "Allow"
+      actions = [
+        "ssm:GetParameter",
+      ]
+      resources = [
+        local.revoker_slack_bot_token_ssm_parameter_arn,
+      ]
+    }
   }
-  # Needed to read the SecureString parameter. Scoped by kms:ViaService because the AWS
-  # managed alias/aws/ssm key cannot be referenced by ARN, and it is not known which key the
-  # caller passed for var.ssm_parameter_kms_key_id.
-  statement {
-    sid    = "AllowDecryptSSMParameter"
-    effect = "Allow"
-    actions = [
-      "kms:Decrypt",
-    ]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
+  # Needed to read the SecureString parameter. kms:ViaService scopes this to calls SSM makes
+  # on this Lambda's behalf; kms:EncryptionContext:PARAMETER_ARN further scopes it to only
+  # this specific parameter (SSM automatically sets this context on every SecureString
+  # decrypt), rather than any SecureString parameter in the account sharing the same KMS key
+  # (found in review) -- Resource has to stay "*" regardless, since the AWS managed
+  # alias/aws/ssm key cannot be referenced by ARN, and a customer managed key's ARN isn't
+  # known here either way.
+  dynamic "statement" {
+    for_each = var.read_slack_secrets_from_ssm ? [1] : []
+    content {
+      sid    = "AllowDecryptSSMParameter"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+      ]
+      resources = ["*"]
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "kms:EncryptionContext:PARAMETER_ARN"
+        values   = [local.revoker_slack_bot_token_ssm_parameter_arn]
+      }
     }
   }
 

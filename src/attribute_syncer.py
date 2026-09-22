@@ -444,14 +444,25 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
 
 
 def _resolve_slack_bot_token() -> str:
-    """Read from SSM when SLACK_BOT_TOKEN_SSM_PARAMETER_NAME is set (see
-    attribute_syncer_ssm_parameters.tf) -- same opt-in mechanism as config.get_config(), for
-    a Lambda that doesn't go through it. Falls back to the plain SLACK_BOT_TOKEN environment
-    variable otherwise, unchanged from before."""
+    """Read from SSM when SLACK_BOT_TOKEN_SSM_PARAMETER_NAME is set (opt-in per deployment --
+    see read_slack_secrets_from_ssm in vars.tf), same mechanism as config.get_config() uses,
+    for a Lambda that doesn't go through it. Falls back to the plain SLACK_BOT_TOKEN
+    environment variable otherwise, unchanged from before.
+
+    A failure to actually reach SSM is caught and logged rather than raised (found in review):
+    this runs before perform_sync, with nothing else guarding it, so letting it propagate would
+    abort the entire group-sync run over what's only ever a notification concern -- degrading
+    to an empty token instead means the Slack notification itself fails, without skipping the
+    actual group membership reconciliation.
+    """
     slack_bot_token_ssm_parameter_name = os.environ.get("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "")
-    if slack_bot_token_ssm_parameter_name:
+    if not slack_bot_token_ssm_parameter_name:
+        return os.environ.get("SLACK_BOT_TOKEN", "")
+    try:
         return get_secret_from_ssm(_ssm_client, slack_bot_token_ssm_parameter_name)
-    return os.environ.get("SLACK_BOT_TOKEN", "")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to read Slack bot token from SSM -- continuing sync with an empty token: {e}")
+        return ""
 
 
 def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  # noqa: ARG001

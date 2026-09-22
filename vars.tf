@@ -56,46 +56,62 @@ variable "aws_sns_topic_subscription_email" {
   default     = ""
 }
 
-# tflint-ignore: terraform_unused_declarations
 variable "slack_signing_secret" {
-  description = "DEPRECATED: no longer used by any Lambda in this module -- the signing secret is now read from requester_slack_signing_secret_ssm_parameter_name instead. Kept optional, not removed, so an existing deployment that still sets this doesn't break. Will be removed in a future version."
+  description = "value for the Slack signing secret. Ignored when read_slack_secrets_from_ssm is true (pass \"\" in that mode) -- see that variable."
   type        = string
-  default     = ""
 }
 
-# tflint-ignore: terraform_unused_declarations
 variable "slack_bot_token" {
-  description = "DEPRECATED: no longer used by any Lambda in this module -- the bot token is now read from each Lambda's own *_slack_bot_token_ssm_parameter_name instead. Kept optional, not removed, so an existing deployment that still sets this doesn't break. Will be removed in a future version."
+  description = "value for the Slack bot token. Ignored when read_slack_secrets_from_ssm is true (pass \"\" in that mode) -- see that variable."
   type        = string
-  default     = ""
 }
 
-variable "ssm_parameter_kms_key_id" {
-  description = "Optional customer managed KMS key (id, ARN, or alias) used to encrypt the SecureString SSM parameters this module creates for Lambda secrets. Defaults to the AWS managed alias/aws/ssm key."
-  type        = string
-  default     = null
+variable "read_slack_secrets_from_ssm" {
+  description = <<-EOT
+  Opt-in, off by default so upgrading this module never changes existing behavior on its own.
+
+  When false (the default): every Lambda reads its Slack secrets from slack_bot_token /
+  slack_signing_secret exactly as before -- Terraform passes the real value through a plain
+  Lambda environment variable, which also means it's captured in the Terraform state file.
+
+  When true: Terraform never creates, reads, or manages the SSM parameters below -- it only
+  grants each Lambda IAM permission to read them at runtime, and passes their *names* (not
+  their values) as environment variables. You must create and populate each parameter
+  yourself, entirely outside of Terraform (console or `aws ssm put-parameter`), before
+  flipping this on -- see the README. This is deliberate: an `aws_ssm_parameter` resource
+  still has its value read back into state on every future refresh even with
+  lifecycle.ignore_changes on `value` (the AWS provider calls GetParameter with decryption
+  to refresh state regardless), so the only way to guarantee Terraform never learns the real
+  secret is for Terraform to never manage the parameter holding it at all.
+
+  Do not enable this until the Lambdas are already running an image built from a version of
+  this module that understands *_SSM_PARAMETER_NAME environment variables -- an older image
+  only knows the plain SLACK_BOT_TOKEN/SLACK_SIGNING_SECRET variables this flag removes.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "revoker_slack_bot_token_ssm_parameter_name" {
-  description = "SSM Parameter Store name for the revoker Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see revoker_ssm_parameters.tf)."
+  description = "SSM Parameter Store name of the revoker Lambda's Slack bot token. Only used when read_slack_secrets_from_ssm is true -- you must create and populate this parameter yourself before then; Terraform never manages it."
   type        = string
   default     = "/sso-elevator/revoker/slack-bot-token"
 }
 
 variable "attribute_syncer_slack_bot_token_ssm_parameter_name" {
-  description = "SSM Parameter Store name for the attribute-syncer Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see attribute_syncer_ssm_parameters.tf)."
+  description = "SSM Parameter Store name of the attribute-syncer Lambda's Slack bot token. Only used when read_slack_secrets_from_ssm is true -- you must create and populate this parameter yourself before then; Terraform never manages it."
   type        = string
   default     = "/sso-elevator/attribute-syncer/slack-bot-token"
 }
 
 variable "requester_slack_bot_token_ssm_parameter_name" {
-  description = "SSM Parameter Store name for the access-requester Lambda's Slack bot token. Terraform only creates this parameter empty -- the real value must be set manually (see requester_ssm_parameters.tf)."
+  description = "SSM Parameter Store name of the access-requester Lambda's Slack bot token. Only used when read_slack_secrets_from_ssm is true -- you must create and populate this parameter yourself before then; Terraform never manages it."
   type        = string
   default     = "/sso-elevator/access-requester/slack-bot-token"
 }
 
 variable "requester_slack_signing_secret_ssm_parameter_name" {
-  description = "SSM Parameter Store name for the access-requester Lambda's Slack signing secret. Terraform only creates this parameter empty -- the real value must be set manually (see requester_ssm_parameters.tf)."
+  description = "SSM Parameter Store name of the access-requester Lambda's Slack signing secret. Only used when read_slack_secrets_from_ssm is true -- you must create and populate this parameter yourself before then; Terraform never manages it."
   type        = string
   default     = "/sso-elevator/access-requester/slack-signing-secret"
 }

@@ -138,6 +138,9 @@ class Config(BaseSettings):
     post_update_to_slack: bool = False
     slack_channel_id: str
     slack_bot_token: str
+    # Empty for the lambdas that do not verify inbound Slack webhook signatures (revoker,
+    # attribute-syncer) -- only the access-requester Lambda ever sets this to a real value.
+    slack_signing_secret: str = ""
 
     approver_renotification_initial_wait_time: int
     approver_renotification_backoff_multiplier: int
@@ -296,18 +299,40 @@ class Config(BaseSettings):
 _config: Optional[Config] = None
 
 
+def _resolve_secret_from_ssm_env(env_var_name: str) -> str | None:
+    """Read a Slack secret from SSM when its *_SSM_PARAMETER_NAME environment variable is
+    set (opt-in per deployment -- see read_slack_secrets_from_ssm in vars.tf). Returns None
+    when the environment variable isn't set at all, so the caller can leave the corresponding
+    Config field at its normal (environment-variable-sourced) value.
+
+    A failure to actually reach SSM (throttling, a KMS/IAM denial, a transient AWS issue) is
+    caught and logged here rather than raised: this runs unconditionally at Config() construction
+    time, for every Lambda including the revoker, whose core job (revoking access) has nothing to
+    do with Slack. Letting an SSM hiccup take down Config() entirely would take the whole Lambda
+    down with it -- degrading to an empty secret instead means Slack notifications fail loudly on
+    their own, without blocking the security-critical work that doesn't depend on them.
+    """
+    parameter_name = os.environ.get(env_var_name, "")
+    if not parameter_name:
+        return None
+    import boto3
+
+    try:
+        return get_secret_from_ssm(boto3.client("ssm"), parameter_name)
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Failed to read {env_var_name} ({parameter_name}) from SSM -- continuing with an empty secret: {e}")
+        return ""
+
+
 def get_config() -> Config:
     global _config  # noqa: PLW0603
     if _config is None:
         overrides = {}
-        # Opt-in per deployment (see revoker_ssm_parameters.tf): when set, the Lambda's own
-        # environment no longer carries SLACK_BOT_TOKEN at all -- it's read from SSM here
-        # instead, so the real secret never has to flow through a Terraform variable, which
-        # is what put it in the state file in the first place.
-        slack_bot_token_ssm_parameter_name = os.environ.get("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "")
-        if slack_bot_token_ssm_parameter_name:
-            import boto3
-
-            overrides["slack_bot_token"] = get_secret_from_ssm(boto3.client("ssm"), slack_bot_token_ssm_parameter_name)
+        slack_bot_token = _resolve_secret_from_ssm_env("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME")
+        if slack_bot_token is not None:
+            overrides["slack_bot_token"] = slack_bot_token
+        slack_signing_secret = _resolve_secret_from_ssm_env("SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME")
+        if slack_signing_secret is not None:
+            overrides["slack_signing_secret"] = slack_signing_secret
         _config = Config(**overrides)  # type: ignore # noqa: PGH003
     return _config
