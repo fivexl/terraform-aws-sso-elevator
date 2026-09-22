@@ -32,9 +32,27 @@ sso_client = session.client("sso-admin")
 identity_store_client = session.client("identitystore")
 s3_client = session.client("s3")
 
-cfg = config.get_config()
+# degrade_slack_secret_failures=False (found in review): this Lambda's entire job is Slack,
+# unlike the revoker/attribute-syncer, so there's no safe "keep working without this secret"
+# mode to protect by degrading to an empty one on an SSM failure. An empty bot token would
+# make slack_bolt.App below refuse to start anyway (it still crashes, just less
+# informatively), and an empty signing secret wouldn't crash at all -- it would silently
+# reject every genuine Slack request for the Lambda's whole uptime instead. See
+# resolve_secret_from_ssm_env's docstring in config.py for the full reasoning.
+cfg = config.get_config(degrade_slack_secret_failures=False)
+
 app = App(
     process_before_response=True,
+    # cfg.slack_bot_token/slack_signing_secret already resolve from SSM themselves, inside
+    # get_config(), when this deployment opted into that (see read_slack_secrets_from_ssm in
+    # vars.tf) -- resolving them separately here as well, a second time, was a duplicate SSM
+    # lookup for the exact same values (found in review). `or None` for the ordinary case
+    # (SSM opt-in off, or a real value already present via the plain environment variables):
+    # slack_bolt.App falls back to reading SLACK_BOT_TOKEN/SLACK_SIGNING_SECRET itself when
+    # passed None (`token = token or os.environ.get(...)`, and likewise for signing_secret),
+    # so this stays correct either way.
+    token=cfg.slack_bot_token or None,
+    signing_secret=cfg.slack_signing_secret or None,
     # Logger removed to avoid pickle errors with lazy listeners in Lambda
     # Slack Bolt will use its own default logger instead
 )

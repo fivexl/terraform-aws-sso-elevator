@@ -48,25 +48,36 @@ module "attribute_syncer" {
     module.sso_elevator_dependencies[0].lambda_layer_arn,
   ]
 
-  environment_variables = {
-    LOG_LEVEL = var.log_level
+  environment_variables = merge(
+    {
+      LOG_LEVEL = var.log_level
 
-    SLACK_BOT_TOKEN  = var.slack_bot_token
-    SLACK_CHANNEL_ID = var.slack_channel_id
+      SLACK_CHANNEL_ID = var.slack_channel_id
 
-    SSO_INSTANCE_ARN  = local.sso_instance_arn
-    IDENTITY_STORE_ID = local.identity_store_id
+      SSO_INSTANCE_ARN  = local.sso_instance_arn
+      IDENTITY_STORE_ID = local.identity_store_id
 
-    S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
-    S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix
+      S3_BUCKET_FOR_AUDIT_ENTRY_NAME  = local.s3_bucket_name
+      S3_BUCKET_PREFIX_FOR_PARTITIONS = var.s3_bucket_partition_prefix
 
-    # Attribute sync specific configuration
-    ATTRIBUTE_SYNC_ENABLED                  = "true"
-    ATTRIBUTE_SYNC_MANAGED_GROUPS           = jsonencode(var.attribute_sync_managed_groups)
-    ATTRIBUTE_SYNC_RULES                    = jsonencode(var.attribute_sync_rules)
-    ATTRIBUTE_SYNC_MANUAL_ASSIGNMENT_POLICY = var.attribute_sync_manual_assignment_policy
-    ATTRIBUTE_SYNC_SCHEDULE                 = var.attribute_sync_schedule
-  }
+      # Attribute sync specific configuration
+      ATTRIBUTE_SYNC_ENABLED                  = "true"
+      ATTRIBUTE_SYNC_MANAGED_GROUPS           = jsonencode(var.attribute_sync_managed_groups)
+      ATTRIBUTE_SYNC_RULES                    = jsonencode(var.attribute_sync_rules)
+      ATTRIBUTE_SYNC_MANUAL_ASSIGNMENT_POLICY = var.attribute_sync_manual_assignment_policy
+      ATTRIBUTE_SYNC_SCHEDULE                 = var.attribute_sync_schedule
+    },
+    # Opt-in per deployment (see read_slack_secrets_from_ssm in vars.tf). Off by default:
+    # this Lambda reads the plain secret variable exactly as it always has, unchanged. Only
+    # when explicitly enabled does it instead read the secret from SSM itself at runtime, by
+    # name -- Terraform never creates, reads, or manages that parameter (see
+    # slack_ssm_secrets.tf for why).
+    var.read_slack_secrets_from_ssm ? {
+      SLACK_BOT_TOKEN_SSM_PARAMETER_NAME = var.attribute_syncer_slack_bot_token_ssm_parameter_name
+      } : {
+      SLACK_BOT_TOKEN = var.slack_bot_token
+    }
+  )
 
   allowed_triggers = {
     attribute_sync_schedule = {
@@ -135,6 +146,51 @@ data "aws_iam_policy_document" "attribute_syncer" {
       "s3:PutObject",
     ]
     resources = ["${local.s3_bucket_arn}/${var.s3_bucket_partition_prefix}/*"]
+  }
+
+  # Both statements only granted when read_slack_secrets_from_ssm is enabled (see
+  # slack_ssm_secrets.tf) -- otherwise this Lambda never calls SSM for its Slack secret at
+  # all, and granting the permission anyway would just be unused surface.
+  dynamic "statement" {
+    for_each = var.read_slack_secrets_from_ssm ? [1] : []
+    content {
+      sid    = "AllowReadSlackBotTokenFromSSM"
+      effect = "Allow"
+      actions = [
+        "ssm:GetParameter",
+      ]
+      resources = [
+        local.attribute_syncer_slack_bot_token_ssm_parameter_arn,
+      ]
+    }
+  }
+  # Needed to read the SecureString parameter. kms:ViaService scopes this to calls SSM makes
+  # on this Lambda's behalf; kms:EncryptionContext:PARAMETER_ARN further scopes it to only
+  # this specific parameter (SSM automatically sets this context on every SecureString
+  # decrypt), rather than any SecureString parameter in the account sharing the same KMS key
+  # (found in review) -- Resource has to stay "*" regardless, since the AWS managed
+  # alias/aws/ssm key cannot be referenced by ARN, and a customer managed key's ARN isn't
+  # known here either way.
+  dynamic "statement" {
+    for_each = var.read_slack_secrets_from_ssm ? [1] : []
+    content {
+      sid    = "AllowDecryptSSMParameter"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+      ]
+      resources = ["*"]
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "kms:EncryptionContext:PARAMETER_ARN"
+        values   = [local.attribute_syncer_slack_bot_token_ssm_parameter_arn]
+      }
+    }
   }
 }
 

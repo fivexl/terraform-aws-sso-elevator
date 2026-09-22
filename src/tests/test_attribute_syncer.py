@@ -557,3 +557,60 @@ class TestBuildMappingRules:
             assert len(rule.conditions) == 1
             assert rule.conditions[0].attribute_name == attr_name
             assert rule.conditions[0].expected_value == attr_value
+
+
+# ---------------------------------------------------------------------------
+# #176: Slack bot token read from SSM Parameter Store
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_slack_bot_token_reads_from_ssm_when_configured(monkeypatch):
+    """_resolve_slack_bot_token delegates to config.resolve_secret_from_ssm_env (found in
+    review: it used to reimplement the same env-var/fallback/degrade logic independently) --
+    this checks it passes through the module-level _ssm_client and gets back what the shared
+    resolver returns."""
+    import attribute_syncer
+    from attribute_syncer import _resolve_slack_bot_token
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/attribute-syncer/slack-bot-token")
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+
+    with patch("attribute_syncer.resolve_secret_from_ssm_env", return_value="xoxb-real-token") as mock_resolve:
+        result = _resolve_slack_bot_token()
+
+    assert result == "xoxb-real-token"
+    mock_resolve.assert_called_once_with(
+        "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=True, ssm_client=attribute_syncer._ssm_client
+    )
+
+
+def test_resolve_slack_bot_token_falls_back_to_environment_variable_by_default(monkeypatch):
+    """Companion to the test above: when the shared resolver returns None (its own signal for
+    "the *_SSM_PARAMETER_NAME environment variable isn't set at all"), this must fall back to
+    the pre-existing SLACK_BOT_TOKEN environment variable unchanged."""
+    from attribute_syncer import _resolve_slack_bot_token
+
+    monkeypatch.delenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", raising=False)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-env-token")
+
+    with patch("attribute_syncer.resolve_secret_from_ssm_env", return_value=None):
+        result = _resolve_slack_bot_token()
+
+    assert result == "xoxb-env-token"
+
+
+def test_resolve_slack_bot_token_degrades_to_empty_string_when_ssm_fails(monkeypatch):
+    """Regression test (found in review): this runs before perform_sync, with nothing else
+    guarding it, so letting an SSM failure propagate would abort the entire group-sync run
+    over what's only ever a notification concern -- the shared resolver itself is what
+    degrades to "" on failure (config.py's own test covers that mechanism directly), this
+    just checks _resolve_slack_bot_token passes that value through rather than second-guessing
+    it."""
+    from attribute_syncer import _resolve_slack_bot_token
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/attribute-syncer/slack-bot-token")
+
+    with patch("attribute_syncer.resolve_secret_from_ssm_env", return_value=""):
+        result = _resolve_slack_bot_token()  # must not raise
+
+    assert result == ""

@@ -19,7 +19,7 @@ from slack_sdk import WebClient
 
 import s3 as s3_module
 from attribute_mapper import AttributeCondition, AttributeMappingRule, AttributeMapper
-from config import get_logger
+from config import get_logger, resolve_secret_from_ssm_env
 from sync_config import (
     SyncConfiguration,
     SyncConfigurationError,
@@ -44,6 +44,7 @@ from sync_state import (
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
     from mypy_boto3_s3 import S3Client
+    from mypy_boto3_ssm import SSMClient
 
 logger = get_logger(service="attribute_syncer")
 
@@ -51,6 +52,7 @@ logger = get_logger(service="attribute_syncer")
 # These are initialized once per container and reused across invocations
 _identity_store_client: IdentityStoreClient = boto3.client("identitystore")
 _s3_client: S3Client = boto3.client("s3")
+_ssm_client: SSMClient = boto3.client("ssm")
 
 
 @dataclass
@@ -441,6 +443,22 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
         return _finalize_result(result)
 
 
+def _resolve_slack_bot_token() -> str:
+    """Read from SSM when SLACK_BOT_TOKEN_SSM_PARAMETER_NAME is set (opt-in per deployment --
+    see read_slack_secrets_from_ssm in vars.tf), via the same resolver config.get_config()
+    uses, for a Lambda that doesn't go through it. Falls back to the plain SLACK_BOT_TOKEN
+    environment variable otherwise, unchanged from before.
+
+    degrade_on_failure=True (found in review, matching config.resolve_secret_from_ssm_env's
+    own reasoning for the revoker): this runs before perform_sync, with nothing else guarding
+    it, so letting an SSM failure propagate would abort the entire group-sync run over what's
+    only ever a notification concern -- degrading to an empty token instead means the Slack
+    notification itself fails, without skipping the actual group membership reconciliation.
+    """
+    token = resolve_secret_from_ssm_env("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=True, ssm_client=_ssm_client)
+    return token if token is not None else os.environ.get("SLACK_BOT_TOKEN", "")
+
+
 def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  # noqa: ARG001
     """Lambda handler entry point for attribute sync.
 
@@ -473,9 +491,8 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
             "body": {"message": "Attribute sync is disabled", "success": True},
         }
 
-    # Initialize Slack client (token may change, so not module-level)
-    slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    slack_client = WebClient(token=slack_bot_token)
+    # Initialize Slack client (token may change, so not module-level).
+    slack_client = WebClient(token=_resolve_slack_bot_token())
 
     # Get identity store ID from environment
     identity_store_id = os.environ.get("IDENTITY_STORE_ID", "")
