@@ -18,6 +18,7 @@ import config
 import entities
 import group
 import organizations
+import s3
 import schedule
 import slack_helpers
 import sso
@@ -783,6 +784,27 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
     if payload.action == entities.ApproverAction.Discard:
+        # #98: logged here, not inside execute_decision, since Discard is
+        # handled before a decision is ever made -- this is the only place
+        # that knows it happened.
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                account_id=payload.request.account_id,
+                role_name=payload.request.permission_set_name,
+                reason=payload.request.reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="declined",
+                permission_duration=payload.request.permission_duration,
+                sso_user_principal_id="NA",
+                audit_entry_type="account",
+                request_source=payload.request.request_source,
+                verified_arn=payload.request.verified_arn,
+                decision_reason="Discarded",
+            ),
+        )
         blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
             blocks=payload.message["blocks"],
             color_coding_emoji=cfg.bad_result_emoji,
@@ -864,6 +886,27 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
 
     if not decision.permit:
         cache_for_dublicate_requests.clear()
+        # #98: logged here, not inside execute_decision, since a
+        # not-permitted click never reaches execute_decision at all -- this
+        # is the only place that knows it happened.
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                account_id=payload.request.account_id,
+                role_name=payload.request.permission_set_name,
+                reason=payload.request.reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="declined",
+                permission_duration=payload.request.permission_duration,
+                sso_user_principal_id="NA",
+                audit_entry_type="account",
+                request_source=payload.request.request_source,
+                verified_arn=payload.request.verified_arn,
+                decision_reason="NotPermitted",
+            ),
+        )
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> you can not approve this request",
@@ -1104,6 +1147,29 @@ def process_access_request(  # noqa: PLR0915, PLR0912
                 Please discard the request and check the module configuration.
                 """
                 color_coding_emoji = cfg.bad_result_emoji
+                # #98: decision.reason stays RequiresApproval here (approvers
+                # are configured), so execute_decision's own terminal-reasons
+                # check never sees this -- it's a Slack-side failure to
+                # resolve them, invisible to access_control.py, so this is
+                # the only place that can log it.
+                s3.log_operation(
+                    audit_entry=s3.AuditEntry(
+                        account_id=request.account_id,
+                        role_name=request.permission_set_name,
+                        reason=request.reason,
+                        requester_slack_id=requester.id,
+                        requester_email=requester.email,
+                        approver_slack_id=requester.id,
+                        approver_email=requester.email,
+                        operation_type="declined",
+                        permission_duration=request.permission_duration,
+                        sso_user_principal_id="NA",
+                        audit_entry_type="account",
+                        request_source=request.request_source,
+                        verified_arn=request.verified_arn,
+                        decision_reason="NoApproversFoundInSlack",
+                    ),
+                )
             else:
                 mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
                 text = f"{mention_approvers} there is a request waiting for the approval."

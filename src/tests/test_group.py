@@ -304,6 +304,7 @@ def test_requires_approval_no_approvers_found(group_module, slack_client):
         patch.object(group_module, "sso") as mock_sso,
         patch.object(group_module, "schedule"),
         patch.object(group_module, "cfg") as mock_cfg,
+        patch.object(group_module, "s3") as mock_s3,
     ):
         mock_cfg.slack_channel_id = "C_CHAN"
         mock_cfg.good_result_emoji = ":white_check_mark:"
@@ -345,6 +346,13 @@ def test_requires_approval_no_approvers_found(group_module, slack_client):
         # Uses bad_result_emoji
         color_arg = mock_sh.HeaderSectionBlock.set_color_coding.call_args
         assert color_arg.kwargs["color_coding_emoji"] == ":x:"
+
+        # #98: this sub-case is invisible to access_control (decision.reason
+        # stays RequiresApproval) -- group.py itself must log it as declined.
+        audit_entry_call = mock_s3.AuditEntry.call_args
+        assert audit_entry_call.kwargs["operation_type"] == "declined"
+        assert audit_entry_call.kwargs["decision_reason"] == "NoApproversFoundInSlack"
+        mock_s3.log_operation.assert_called_once()
 
 
 def test_group_approval_lookup_error_is_retryable(group_module, slack_client):
@@ -475,6 +483,87 @@ def test_group_button_click_reflects_a_grant_failure_and_clears_the_dedup_cache(
     # @handle_errors' own generic post is a separate message, not a fix to
     # the header above -- both must reflect the failure.
     assert any("unexpected error" in (c.kwargs.get("text") or "").lower() for c in slack_client.chat_postMessage.call_args_list)
+
+
+def test_group_button_click_discard_logs_a_declined_audit_entry(group_module, slack_client):
+    """#98: Discard is handled before a decision is ever made, so it never
+    reaches execute_decision_on_group_request's own terminal-reasons logging
+    -- this is the only place that can log it."""
+    payload = MagicMock(
+        approver_slack_id=APPROVER_1.id,
+        action=entities.ApproverAction.Discard,
+        channel_id="C_CHAN",
+        thread_ts="1234567890.123456",
+        message={"blocks": list(FAKE_BLOCKS)},
+    )
+    payload.request.requester_slack_id = REQUESTER.id
+    payload.request.group_id = GROUP.id
+    payload.request.reason = "need access"
+    payload.request.permission_duration = timedelta(hours=1)
+
+    with (
+        patch.object(group_module, "slack_helpers") as mock_sh,
+        patch.object(group_module, "s3") as mock_s3,
+    ):
+        mock_sh.ButtonGroupClickedPayload.model_validate.return_value = payload
+        mock_sh.get_user.side_effect = [APPROVER_1, REQUESTER]
+        mock_sh.check_if_user_is_in_channel.return_value = True
+        mock_sh.remove_blocks.side_effect = lambda blocks, block_ids: blocks  # noqa: ARG005
+        mock_sh.HeaderSectionBlock.set_color_coding.return_value = FAKE_BLOCKS
+        group_module.cache_for_dublicate_requests.clear()
+
+        group_module.handle_group_button_click(
+            body={},
+            client=slack_client,
+            context={"user_id": APPROVER_1.id},
+        )
+
+    audit_entry_kwargs = mock_s3.AuditEntry.call_args.kwargs
+    assert audit_entry_kwargs["operation_type"] == "declined"
+    assert audit_entry_kwargs["decision_reason"] == "Discarded"
+    mock_s3.log_operation.assert_called_once()
+
+
+def test_group_button_click_not_permitted_logs_a_declined_audit_entry(group_module, slack_client):
+    """#98: a not-permitted click never reaches execute_decision_on_group_request
+    at all (handle_group_button_click returns before calling it), so this is
+    the only place that can log it."""
+    payload = MagicMock(
+        approver_slack_id=APPROVER_1.id,
+        action=entities.ApproverAction.Approve,
+        channel_id="C_CHAN",
+        thread_ts="1234567890.123456",
+        message={"blocks": list(FAKE_BLOCKS)},
+    )
+    payload.request.requester_slack_id = REQUESTER.id
+    payload.request.group_id = GROUP.id
+    payload.request.reason = "need access"
+    payload.request.permission_duration = timedelta(hours=1)
+
+    fake_decision = access_control.ApproveRequestDecision(grant=False, permit=False, based_on_statements=frozenset())
+
+    with (
+        patch.object(group_module, "slack_helpers") as mock_sh,
+        patch.object(group_module, "access_control") as mock_ac,
+        patch.object(group_module, "s3") as mock_s3,
+    ):
+        mock_sh.ButtonGroupClickedPayload.model_validate.return_value = payload
+        mock_sh.get_user.side_effect = [APPROVER_1, REQUESTER]
+        mock_sh.check_if_user_is_in_channel.return_value = True
+        mock_ac.get_requester_group_ids_if_needed.return_value = frozenset()
+        mock_ac.make_decision_on_approve_request.return_value = fake_decision
+        group_module.cache_for_dublicate_requests.clear()
+
+        group_module.handle_group_button_click(
+            body={},
+            client=slack_client,
+            context={"user_id": APPROVER_1.id},
+        )
+
+    audit_entry_kwargs = mock_s3.AuditEntry.call_args.kwargs
+    assert audit_entry_kwargs["operation_type"] == "declined"
+    assert audit_entry_kwargs["decision_reason"] == "NotPermitted"
+    mock_s3.log_operation.assert_called_once()
 
 
 def test_group_submission_rejects_reason_too_long_once_escaped(group_module, slack_client):

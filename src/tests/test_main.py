@@ -1233,6 +1233,7 @@ def test_process_access_request_reports_not_succeeded_when_requires_approval_fin
         patch.object(main_module.slack_helpers.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
         patch.object(main_module.slack_helpers, "find_approvers_in_slack", return_value=([], ["approver@example.com"])),
         patch.object(main_module.access_control, "execute_decision", return_value=False),
+        patch.object(main_module, "s3") as mock_s3,
     ):
         result, succeeded = main_module.process_access_request(request=request, requester=requester, client=client)
 
@@ -1240,6 +1241,13 @@ def test_process_access_request_reports_not_succeeded_when_requires_approval_fin
     assert result.reason == main_module.access_control.DecisionReason.RequiresApproval
     assert succeeded is False
     assert any("cannot be processed" in (c.kwargs.get("text") or "").lower() for c in client.chat_update.call_args_list)
+
+    # #98: this sub-case is invisible to access_control (decision.reason
+    # stays RequiresApproval) -- process_access_request itself must log it.
+    audit_entry_call = mock_s3.AuditEntry.call_args
+    assert audit_entry_call.kwargs["operation_type"] == "declined"
+    assert audit_entry_call.kwargs["decision_reason"] == "NoApproversFoundInSlack"
+    mock_s3.log_operation.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1469,6 +1477,54 @@ def test_handle_button_click_notification_failure_after_a_successful_grant_is_no
         result = main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
 
     assert result is None
+
+
+def test_handle_button_click_discard_logs_a_declined_audit_entry(main_module):
+    """#98: Discard is handled before a decision is ever made, so it never
+    reaches execute_decision's own terminal-reasons logging -- this is the
+    only place that can log it."""
+    body = _button_click_body()
+    body["actions"][0]["value"] = "discard"
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module, "s3") as mock_s3,
+    ):
+        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    audit_entry_kwargs = mock_s3.AuditEntry.call_args.kwargs
+    assert audit_entry_kwargs["operation_type"] == "declined"
+    assert audit_entry_kwargs["decision_reason"] == "Discarded"
+    mock_s3.log_operation.assert_called_once()
+
+
+def test_handle_button_click_not_permitted_logs_a_declined_audit_entry(main_module):
+    """#98: a not-permitted click never reaches execute_decision at all
+    (handle_button_click returns before calling it), so this is the only
+    place that can log it."""
+    body = _button_click_body()
+    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
+    requester = MagicMock(id="U_REQ", email="req@example.com")
+    client = MagicMock()
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+
+    fake_decision = main_module.access_control.ApproveRequestDecision(grant=False, permit=False, based_on_statements=frozenset())
+
+    with (
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
+        patch.object(main_module, "s3") as mock_s3,
+    ):
+        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    audit_entry_kwargs = mock_s3.AuditEntry.call_args.kwargs
+    assert audit_entry_kwargs["operation_type"] == "declined"
+    assert audit_entry_kwargs["decision_reason"] == "NotPermitted"
+    mock_s3.log_operation.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

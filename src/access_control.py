@@ -366,61 +366,127 @@ def execute_decision(  # noqa: PLR0913
     logger.info("Executing decision")
     if not decision.grant:
         logger.info("Access request denied")
+        # #98: only AccessRequestDecision carries a DecisionReason, and only
+        # these three mean the request is genuinely over -- RequiresApproval
+        # is still pending a human, not declined. An ApproveRequestDecision
+        # (the button-click path) never reaches here with grant=False in
+        # practice: handle_button_click/handle_group_button_click both
+        # return before calling execute_decision whenever permit is False,
+        # and Discard is handled even earlier, before a decision is made at
+        # all -- both of those log their own "declined" entry at the point
+        # they actually happen. This is the one place that covers both the
+        # account and group auto-decision paths, since both funnel through
+        # here.
+        if isinstance(decision, AccessRequestDecision) and decision.reason in (
+            DecisionReason.NoStatements,
+            DecisionReason.NoApprovers,
+            DecisionReason.RequesterNotAllowed,
+        ):
+            s3.log_operation(
+                audit_entry=s3.AuditEntry(
+                    account_id=account_id,
+                    role_name=permission_set_name,
+                    reason=reason,
+                    requester_slack_id=requester.id,
+                    requester_email=requester.email,
+                    approver_slack_id=approver.id,
+                    approver_email=approver.email,
+                    operation_type="declined",
+                    permission_duration=permission_duration,
+                    sso_user_principal_id="NA",
+                    audit_entry_type="account",
+                    request_source=request_source,
+                    verified_arn=verified_arn,
+                    decision_reason=decision.reason.value,
+                ),
+            )
         return False  # Temporary solution for testing
 
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
-    if request_source == "cli":
-        # Grant against the exact UserId the CLI's SigV4-verified session was
-        # actually checked against at submission time (cli_auth.extract_identity,
-        # cross-checked again by handle_cli_access_request's email round-trip),
-        # not a fresh, independent lookup by requester.email -- re-resolving
-        # here is a *second* identity resolution that could disagree with the
-        # one actually verified (a directory change between submit and
-        # approve, or a primary-email lookup that legitimately falls through
-        # to a different person via the secondary-domain fallback), silently
-        # granting to someone other than the verified caller. If
-        # verified_user_id no longer names a real Identity Store user,
-        # create_account_assignment_and_wait_for_result below fails outright
-        # rather than silently substituting a different, currently-resolvable
-        # user -- fail closed instead of granting to the wrong person.
-        #
-        # A "cli" request with verified_user_id still "NA" (#194 B6) is not
-        # treated as "no verification available, fall back to the email
-        # lookup" -- that would silently re-enable, for a message explicitly
-        # labeled "Source: CLI", the exact fuzzy email-based resolution
-        # (secondary-domain fallback included) the CLI path exists to avoid
-        # trusting. The only way this combination occurs is a pending
-        # request message posted before verified_user_id existed on this
-        # field; failing closed here means such a request must be
-        # re-submitted after upgrade rather than silently granted through
-        # the weaker mechanism. This is a deliberate, narrow behavior change
-        # from earlier versions, not an oversight.
-        if verified_user_id == "NA":
-            raise ValueError(
-                "CLI-sourced request has no verified UserId to grant against "
-                "(likely a pending request from before this field existed) -- refusing to fall back to email-based resolution."
+    # #98: sso_user_principal_id is resolved below, before the account
+    # assignment is created -- tracked here so an "incomplete" entry (logged
+    # if anything from this point on raises) can still report it when
+    # identity resolution succeeded but the actual AWS call failed, without
+    # forcing a second resolution just for the audit entry.
+    sso_user_principal_id = "NA"
+    try:
+        sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
+        if request_source == "cli":
+            # Grant against the exact UserId the CLI's SigV4-verified session was
+            # actually checked against at submission time (cli_auth.extract_identity,
+            # cross-checked again by handle_cli_access_request's email round-trip),
+            # not a fresh, independent lookup by requester.email -- re-resolving
+            # here is a *second* identity resolution that could disagree with the
+            # one actually verified (a directory change between submit and
+            # approve, or a primary-email lookup that legitimately falls through
+            # to a different person via the secondary-domain fallback), silently
+            # granting to someone other than the verified caller. If
+            # verified_user_id no longer names a real Identity Store user,
+            # create_account_assignment_and_wait_for_result below fails outright
+            # rather than silently substituting a different, currently-resolvable
+            # user -- fail closed instead of granting to the wrong person.
+            #
+            # A "cli" request with verified_user_id still "NA" (#194 B6) is not
+            # treated as "no verification available, fall back to the email
+            # lookup" -- that would silently re-enable, for a message explicitly
+            # labeled "Source: CLI", the exact fuzzy email-based resolution
+            # (secondary-domain fallback included) the CLI path exists to avoid
+            # trusting. The only way this combination occurs is a pending
+            # request message posted before verified_user_id existed on this
+            # field; failing closed here means such a request must be
+            # re-submitted after upgrade rather than silently granted through
+            # the weaker mechanism. This is a deliberate, narrow behavior change
+            # from earlier versions, not an oversight.
+            if verified_user_id == "NA":
+                raise ValueError(
+                    "CLI-sourced request has no verified UserId to grant against "
+                    "(likely a pending request from before this field existed) -- refusing to fall back to email-based resolution."
+                )
+            sso_user_principal_id = verified_user_id
+            secondary_domain_was_used = False
+        else:
+            sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
+                identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
             )
-        sso_user_principal_id = verified_user_id
-        secondary_domain_was_used = False
-    else:
-        sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-            identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
+
+        account_assignment = sso.UserAccountAssignment(
+            instance_arn=sso_instance.arn,
+            account_id=account_id,
+            permission_set_arn=permission_set.arn,
+            user_principal_id=sso_user_principal_id,
         )
 
-    account_assignment = sso.UserAccountAssignment(
-        instance_arn=sso_instance.arn,
-        account_id=account_id,
-        permission_set_arn=permission_set.arn,
-        user_principal_id=sso_user_principal_id,
-    )
+        logger.info("Creating account assignment", extra={"account_assignment": account_assignment})
 
-    logger.info("Creating account assignment", extra={"account_assignment": account_assignment})
-
-    account_assignment_status = sso.create_account_assignment_and_wait_for_result(
-        sso_client,
-        account_assignment,
-    )
+        account_assignment_status = sso.create_account_assignment_and_wait_for_result(
+            sso_client,
+            account_assignment,
+        )
+    except Exception as e:
+        # #98: a request that was approved (grant=True) but never actually
+        # went through -- the AWS side of it errored out somewhere above.
+        # sso_user_principal_id reflects however far resolution got before
+        # the failure, "NA" if it never got there at all (e.g. the
+        # fail-closed ValueError above).
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                account_id=account_id,
+                role_name=permission_set_name,
+                reason=reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="incomplete",
+                permission_duration=permission_duration,
+                sso_user_principal_id=sso_user_principal_id,
+                audit_entry_type="account",
+                request_source=request_source,
+                verified_arn=verified_arn,
+                error_message=str(e),
+            ),
+        )
+        raise
 
     s3.log_operation(
         audit_entry=s3.AuditEntry(
@@ -469,29 +535,81 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     logger.info("Executing decision")
     if not decision.grant:
         logger.info("Access request denied")
+        # #98: same reasoning as execute_decision's own terminal-reasons
+        # check above -- see that comment for why only these three, and why
+        # this is the one place that needs to cover it for group requests.
+        if isinstance(decision, AccessRequestDecision) and decision.reason in (
+            DecisionReason.NoStatements,
+            DecisionReason.NoApprovers,
+            DecisionReason.RequesterNotAllowed,
+        ):
+            s3.log_operation(
+                audit_entry=s3.AuditEntry(
+                    group_name=group.name,
+                    group_id=group.id,
+                    reason=reason,
+                    requester_slack_id=requester.id,
+                    requester_email=requester.email,
+                    approver_slack_id=approver.id,
+                    approver_email=approver.email,
+                    operation_type="declined",
+                    permission_duration=permission_duration,
+                    sso_user_principal_id="NA",
+                    audit_entry_type="group",
+                    decision_reason=decision.reason.value,
+                ),
+            )
         return False  # Temporary solution for testing
 
-    sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client=identitystore_client,
-        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
-        email=requester.email,
-        cfg=cfg,
-    )
+    # #98: see execute_decision's identical sso_user_principal_id tracking
+    # above for why this is initialized before the try, not just inside it.
+    sso_user_principal_id = "NA"
+    try:
+        sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
+            identity_store_client=identitystore_client,
+            identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+            email=requester.email,
+            cfg=cfg,
+        )
 
-    if membership_id := sso.is_user_in_group(
-        identity_store_id=identity_store_id,
-        group_id=group.id,
-        sso_user_id=sso_user_principal_id,
-        identity_store_client=identitystore_client,
-    ):
-        logger.info(
-            "User is already in the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
+        if membership_id := sso.is_user_in_group(
+            identity_store_id=identity_store_id,
+            group_id=group.id,
+            sso_user_id=sso_user_principal_id,
+            identity_store_client=identitystore_client,
+        ):
+            logger.info(
+                "User is already in the group",
+                extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id},
+            )
+        else:
+            membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, identitystore_client)[
+                "MembershipId"
+            ]
+            logger.info(
+                "User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
+            )
+    except Exception as e:
+        # #98: same reasoning as execute_decision's own "incomplete" entry --
+        # an approved group request whose actual AWS call (identity
+        # resolution or group membership) errored out.
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                group_name=group.name,
+                group_id=group.id,
+                reason=reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="incomplete",
+                permission_duration=permission_duration,
+                sso_user_principal_id=sso_user_principal_id,
+                audit_entry_type="group",
+                error_message=str(e),
+            ),
         )
-    else:
-        membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, identitystore_client)["MembershipId"]
-        logger.info(
-            "User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
-        )
+        raise
 
     s3.log_operation(
         audit_entry=s3.AuditEntry(
