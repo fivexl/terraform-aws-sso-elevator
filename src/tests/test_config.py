@@ -450,3 +450,53 @@ def test_get_config_degrades_to_an_empty_secret_when_ssm_fails(monkeypatch):
         config._config = original_config
 
     assert cfg.slack_bot_token == ""
+
+
+def test_get_config_raises_on_ssm_failure_when_degrade_disabled(monkeypatch):
+    """Regression test (found in review): degrade_slack_secret_failures=False is what the
+    access-requester passes, since unlike the revoker, its entire job is Slack. Silently
+    degrading to an empty secret there doesn't protect anything -- an empty bot token makes
+    slack_bolt.App refuse to start anyway, and an empty signing secret would silently reject
+    every genuine Slack request instead. This must raise instead of returning a Config with an
+    empty secret."""
+    env = valid_config_dict()
+    del env["slack_bot_token"]
+    _set_env_from_dict(monkeypatch, env)
+    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/access-requester/slack-bot-token")
+    original_config = config._config
+    config._config = None
+
+    mock_ssm_client = MagicMock()
+    mock_ssm_client.get_parameter.side_effect = RuntimeError("boom: KMS access denied")
+    try:
+        with patch("boto3.client", return_value=mock_ssm_client), pytest.raises(RuntimeError, match="boom"):
+            config.get_config(degrade_slack_secret_failures=False)
+        assert config._config is None  # a failed construction must not get cached as if it succeeded
+    finally:
+        config._config = original_config
+
+
+def test_get_config_shares_one_ssm_client_across_both_secrets(monkeypatch):
+    """Regression test (found in review): resolving both secrets (the access-requester's own
+    configuration) used to construct two separate SSM clients and make two independent
+    GetParameter calls where one client for both is sufficient."""
+    env = valid_config_dict()
+    del env["slack_bot_token"]
+    _set_env_from_dict(monkeypatch, env)
+    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/access-requester/slack-bot-token")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME", "/sso-elevator/access-requester/slack-signing-secret")
+    original_config = config._config
+    config._config = None
+
+    mock_ssm_client = MagicMock()
+    mock_ssm_client.get_parameter.return_value = {"Parameter": {"Value": "resolved"}}
+    try:
+        with patch("boto3.client", return_value=mock_ssm_client) as mock_boto3_client:
+            cfg = config.get_config()
+    finally:
+        config._config = original_config
+
+    assert cfg.slack_bot_token == "resolved"
+    assert cfg.slack_signing_secret == "resolved"
+    mock_boto3_client.assert_called_once_with("ssm")
+    assert mock_ssm_client.get_parameter.call_count == 2

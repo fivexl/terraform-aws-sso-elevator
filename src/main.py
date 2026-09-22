@@ -32,7 +32,14 @@ sso_client = session.client("sso-admin")
 identity_store_client = session.client("identitystore")
 s3_client = session.client("s3")
 
-cfg = config.get_config()
+# degrade_slack_secret_failures=False (found in review): this Lambda's entire job is Slack,
+# unlike the revoker/attribute-syncer, so there's no safe "keep working without this secret"
+# mode to protect by degrading to an empty one on an SSM failure. An empty bot token would
+# make slack_bolt.App below refuse to start anyway (it still crashes, just less
+# informatively), and an empty signing secret wouldn't crash at all -- it would silently
+# reject every genuine Slack request for the Lambda's whole uptime instead. See
+# resolve_secret_from_ssm_env's docstring in config.py for the full reasoning.
+cfg = config.get_config(degrade_slack_secret_failures=False)
 
 app = App(
     process_before_response=True,
