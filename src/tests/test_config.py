@@ -144,10 +144,23 @@ def valid_config_dict(
 @example(valid_config_dict() | {"send_dm_if_user_not_in_channel": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 def test_config_load_environment_variables(dict_config: dict):
-    os.environ.clear()  # noqa: B003
-    # Convert all values to strings as os.environ expects
-    os.environ.update({k: str(v) for k, v in dict_config.items()})
-    config.Config()  # type: ignore[call-arg]
+    # Snapshot/restore, not a bare os.environ.clear() (found in review, while fixing a related
+    # issue): clearing os.environ directly wipes unrelated real environment variables for the
+    # rest of the test session -- nothing here ever restored them. A pytest fixture like
+    # monkeypatch can't be mixed into this particular signature (Hypothesis's positional
+    # @given(config_dict()) binding of dict_config conflicts with pytest's own fixture
+    # resolution once a second parameter is added), so this restores by hand instead -- once
+    # per Hypothesis example, via try/finally, so every example (and the test as a whole,
+    # how ever it exits) leaves the real environment exactly as it found it.
+    original_environ = dict(os.environ)
+    try:
+        os.environ.clear()  # noqa: B003
+        # Convert all values to strings as os.environ expects
+        os.environ.update({k: str(v) for k, v in dict_config.items()})
+        config.Config()  # type: ignore[call-arg]
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
 
 
 @given(
