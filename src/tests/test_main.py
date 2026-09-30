@@ -135,6 +135,19 @@ def _cli_request_event(body: dict | None = None, user_arn: str | None = None, ap
 
 
 # ---------------------------------------------------------------------------
+# #176: Slack secrets read from SSM Parameter Store
+#
+# main.py itself no longer resolves these secrets -- it previously had its own duplicate
+# SSM lookup, which was a real bug (a second GetParameter call for the exact same value
+# config.get_config() already resolves into cfg.slack_bot_token/cfg.slack_signing_secret,
+# found in review). Now it's a plain `cfg.slack_bot_token or None` / `cfg.slack_signing_secret
+# or None` passed to slack_bolt.App, so the actual resolution (including SSM opt-in and
+# graceful degradation on failure) is fully covered by test_config.py's get_config() tests
+# instead.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
 # lambda_handler dispatch
 # ---------------------------------------------------------------------------
 
