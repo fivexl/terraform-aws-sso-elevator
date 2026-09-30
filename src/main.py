@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import re
 from datetime import timedelta
 from typing import Callable
@@ -12,18 +13,52 @@ from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
 from slack_sdk.web.slack_response import SlackResponse
 
-import access_control
-import cli_auth
 import config
-import entities
-import group
-import organizations
-import schedule
-import slack_helpers
-import sso
-from errors import AmbiguousSSOUser, SSOUserNotFound, handle_errors
+
+# Must run before importing any other project module below (#208 review, "strict mode does
+# not work"): get_config() caches its result the first time it's called, in a module-level
+# singleton, and every later call in this same cold start just returns that same cached
+# object -- the degrade_slack_secret_failures argument only has any effect on whichever call
+# happens first. access_control, errors, group, schedule, and slack_helpers all call
+# get_config() at their own module level with the lenient default
+# (degrade_slack_secret_failures=True), so importing any of them before this line would let
+# one of them win the race and silently make this Lambda degrade to an empty signing secret
+# on an SSM failure instead of failing loudly, exactly the bug this call is meant to prevent.
+#
+# degrade_slack_secret_failures=False: this Lambda's entire job is Slack, unlike the
+# revoker/attribute-syncer, so there's no safe "keep working without this secret" mode to
+# protect by degrading to an empty one on an SSM failure. An empty bot token would make
+# slack_bolt.App below refuse to start anyway (it still crashes, just less informatively),
+# and an empty signing secret wouldn't crash at all -- it would silently reject every genuine
+# Slack request for the Lambda's whole uptime instead. See resolve_secret_from_ssm_env's
+# docstring in config.py for the full reasoning.
+cfg = config.get_config(degrade_slack_secret_failures=False)
+
+import access_control  # noqa: E402
+import cli_auth  # noqa: E402
+import entities  # noqa: E402
+import group  # noqa: E402
+import organizations  # noqa: E402
+import schedule  # noqa: E402
+import slack_helpers  # noqa: E402
+import sso  # noqa: E402
+from errors import AmbiguousSSOUser, SSOUserNotFound, handle_errors  # noqa: E402
 
 logger = config.get_logger(service="main")
+
+# config.get_config() only warns about a plain-environment-variable bot token, not the signing
+# secret (#208 review, "removing deprecation warnings is not right") -- it can't safely warn
+# about the signing secret itself, since revoker/attribute-syncer share that same code path and
+# never use one at all, so this Lambda -- the only one that actually uses cfg.slack_signing_secret
+# -- carries the equivalent nudge for it.
+if not os.environ.get("SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME"):
+    logger.warning(
+        "Slack signing secret is being read from the plain SLACK_SIGNING_SECRET environment "
+        "variable. This still works today, but the plain environment variable path is "
+        "expected to be deprecated in a future release -- consider migrating to SSM Parameter "
+        "Store (read_slack_secrets_from_ssm) to keep the real secret value out of Terraform "
+        "state."
+    )
 
 session = boto3.Session()
 schedule_client = session.client("scheduler")
@@ -31,15 +66,6 @@ org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
 identity_store_client = session.client("identitystore")
 s3_client = session.client("s3")
-
-# degrade_slack_secret_failures=False (found in review): this Lambda's entire job is Slack,
-# unlike the revoker/attribute-syncer, so there's no safe "keep working without this secret"
-# mode to protect by degrading to an empty one on an SSM failure. An empty bot token would
-# make slack_bolt.App below refuse to start anyway (it still crashes, just less
-# informatively), and an empty signing secret wouldn't crash at all -- it would silently
-# reject every genuine Slack request for the Lambda's whole uptime instead. See
-# resolve_secret_from_ssm_env's docstring in config.py for the full reasoning.
-cfg = config.get_config(degrade_slack_secret_failures=False)
 
 app = App(
     process_before_response=True,

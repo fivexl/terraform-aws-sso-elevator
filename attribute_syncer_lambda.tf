@@ -70,7 +70,8 @@ module "attribute_syncer" {
     # Opt-in per deployment (see read_slack_secrets_from_ssm in vars.tf). Off by default:
     # this Lambda reads the plain secret variable exactly as it always has, unchanged. Only
     # when explicitly enabled does it instead read the secret from SSM itself at runtime, by
-    # name -- Terraform never creates, reads, or manages that parameter (see
+    # name -- Terraform pre-creates that parameter with a placeholder (write-only, never
+    # stored in state) but never touches its real value once you've set one (see
     # slack_ssm_secrets.tf for why).
     var.read_slack_secrets_from_ssm ? {
       SLACK_BOT_TOKEN_SSM_PARAMETER_NAME = var.attribute_syncer_slack_bot_token_ssm_parameter_name

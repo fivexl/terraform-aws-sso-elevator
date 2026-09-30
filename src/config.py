@@ -371,5 +371,22 @@ def get_config(*, degrade_slack_secret_failures: bool = True) -> Config:
         )
         if slack_signing_secret is not None:
             overrides["slack_signing_secret"] = slack_signing_secret
+        # Only the bot token is checked here, not the signing secret: every Lambda that calls
+        # get_config() uses a bot token, but only the access-requester ever uses a signing
+        # secret at all (revoker/attribute-syncer never reference cfg.slack_signing_secret --
+        # it's legitimately always empty for them, not "still on the deprecated path"). Warning
+        # here based on slack_signing_secret being None would wrongly nudge the revoker and
+        # attribute-syncer about a secret that was never applicable to them in the first place.
+        # main.py -- the only caller that actually uses the signing secret -- carries the
+        # equivalent warning for it (#208 review, "removing deprecation warnings is not
+        # right").
+        if slack_bot_token is None:
+            logger.warning(
+                "Slack bot token is being read from the plain SLACK_BOT_TOKEN environment "
+                "variable. This still works today, but the plain environment variable path is "
+                "expected to be deprecated in a future release -- consider migrating to SSM "
+                "Parameter Store (read_slack_secrets_from_ssm) to keep the real secret value "
+                "out of Terraform state."
+            )
         _config = Config(**overrides)  # type: ignore # noqa: PGH003
     return _config

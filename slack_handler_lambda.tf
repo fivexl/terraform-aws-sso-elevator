@@ -98,7 +98,8 @@ module "access_requester_slack_handler" {
     # Opt-in per deployment (see read_slack_secrets_from_ssm in vars.tf). Off by default:
     # this Lambda reads the plain secret variables exactly as it always has, unchanged. Only
     # when explicitly enabled does it instead read the secrets from SSM itself at runtime,
-    # by name -- Terraform never creates, reads, or manages those parameters (see
+    # by name -- Terraform pre-creates those parameters with a placeholder (write-only,
+    # never stored in state) but never touches their real value once you've set one (see
     # slack_ssm_secrets.tf for why).
     var.read_slack_secrets_from_ssm ? {
       SLACK_BOT_TOKEN_SSM_PARAMETER_NAME      = var.requester_slack_bot_token_ssm_parameter_name

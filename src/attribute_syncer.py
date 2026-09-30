@@ -443,6 +443,13 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
         return _finalize_result(result)
 
 
+# Module-level, not per-invocation, so the deprecation nudge below logs once per container
+# instead of on every single sync run -- unlike get_config()'s _config, _resolve_slack_bot_token
+# itself is deliberately called fresh on every invocation (see its own docstring), so this flag
+# is the only thing keeping the warning from repeating every time.
+_deprecation_warning_logged = False
+
+
 def _resolve_slack_bot_token() -> str:
     """Read from SSM when SLACK_BOT_TOKEN_SSM_PARAMETER_NAME is set (opt-in per deployment --
     see read_slack_secrets_from_ssm in vars.tf), via the same resolver config.get_config()
@@ -455,7 +462,20 @@ def _resolve_slack_bot_token() -> str:
     only ever a notification concern -- degrading to an empty token instead means the Slack
     notification itself fails, without skipping the actual group membership reconciliation.
     """
+    global _deprecation_warning_logged  # noqa: PLW0603
     token = resolve_secret_from_ssm_env("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=True, ssm_client=_ssm_client)
+    if token is None and not _deprecation_warning_logged:
+        # Same nudge as config.get_config() (#208 review, "removing deprecation warnings is
+        # not right"): SLACK_BOT_TOKEN_SSM_PARAMETER_NAME being unset means this deployment
+        # hasn't opted into read_slack_secrets_from_ssm yet.
+        logger.warning(
+            "Slack bot token is being read from the plain SLACK_BOT_TOKEN environment "
+            "variable. This still works today, but the plain environment variable path is "
+            "expected to be deprecated in a future release -- consider migrating to SSM "
+            "Parameter Store (read_slack_secrets_from_ssm) to keep the real secret value out "
+            "of Terraform state."
+        )
+        _deprecation_warning_logged = True
     return token if token is not None else os.environ.get("SLACK_BOT_TOKEN", "")
 
 
