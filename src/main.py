@@ -43,15 +43,24 @@ app = App(
 )
 
 
-# Route path for the CLI's signed-request intake, on the same API Gateway HTTP
-# API as the Slack route but with an AWS_IAM authorizer instead of Slack's own
-# signature check — see api_resource_path_cli in locals.tf.
+# Resource path for the CLI's signed-request intake, on its own REST API (cli_rest_api.tf,
+# issue #214) -- see api_resource_path_cli in locals.tf, which both that Terraform file and
+# this constant are kept in sync with.
 CLI_ACCESS_REQUEST_PATH = "/access-requester-cli"
-# routeKey (not rawPath/requestContext.http.path) is what actually identifies which
-# route matched: it's always exactly "{METHOD} {path}" as defined in the routes map,
-# regardless of the stage name, whereas rawPath's relationship to a named (non-$default)
-# stage's prefix isn't something to rely on without checking case by case.
-CLI_ACCESS_REQUEST_ROUTE_KEY = f"POST {CLI_ACCESS_REQUEST_PATH}"
+
+
+def _is_cli_event(event: dict) -> bool:
+    """Whether event is a Lambda proxy event for the CLI's REST API route, as opposed to the
+    Slack route on the separate HTTP API (module.http_api).
+
+    The CLI's REST API has exactly one route, so any REST-API-shaped event reaching this
+    Lambda is necessarily a CLI request -- there's no Slack route on it to confuse this with.
+    A REST API proxy event carries httpMethod/resource directly (no routeKey, unlike the
+    Slack route's HTTP API payload format 2.0 events); checking resource's value, not just
+    the presence of httpMethod, keeps this from silently matching some other route if one is
+    ever added to this same REST API later.
+    """
+    return event.get("httpMethod") == "POST" and event.get("resource") == CLI_ACCESS_REQUEST_PATH
 
 
 def _transient_aws_error_response() -> dict:
@@ -69,7 +78,7 @@ def _transient_aws_error_response() -> dict:
 
 
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
-    if event.get("routeKey") == CLI_ACCESS_REQUEST_ROUTE_KEY:
+    if _is_cli_event(event):
         return handle_cli_access_request(event)
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
@@ -107,8 +116,14 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # Gateway's own access log format has no equivalent field
         # ($context.authorizer.iam.userArn isn't one of its available
         # variables) to fall back on either.
-        iam_context = ((event.get("requestContext") or {}).get("authorizer") or {}).get("iam") or {}
-        user_arn = iam_context.get("userArn", "")
+        #
+        # The verified identity lives at requestContext.identity.userArn on this REST API event
+        # (see cli_rest_api.tf, issue #214) -- not requestContext.authorizer.iam.userArn, which
+        # is an HTTP API (payload format 2.0) shape this route no longer uses (that was the now-
+        # removed HTTP API CLI route's shape; the Slack route on module.http_api still uses it,
+        # but never reaches this function -- see _is_cli_event).
+        request_context = event.get("requestContext") or {}
+        user_arn = (request_context.get("identity") or {}).get("userArn", "")
 
         # Defense-in-depth, not a real access control: this only blocks a
         # direct lambda:InvokeFunction call that doesn't bother forging
@@ -121,18 +136,10 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # when the CLI route doesn't exist, and a forged event carrying
         # "apiId": "" satisfies this check too -- so does simply omitting
         # requestContext.apiId (or requestContext itself), since dict.get
-        # returns None by default when a key is missing, not this comment's
-        # own prior claim of "" -- though None != "" is also true, so the
-        # comparison below still rejects it the same way (#194 B1) -- it is
-        # NOT itself a
-        # fail-closed guard against a deliberate forgery in
-        # that configuration. The deployment still fails closed overall in
-        # that case, but via a different check: cli_auth.extract_identity's
-        # cli_expected_account_id comparison, which also defaults to ""
-        # when the CLI route doesn't exist, and _ASSUMED_ROLE_ARN_RE
-        # requires account_id to be exactly 12 digits -- a value "" can
-        # never match.
-        if (event.get("requestContext") or {}).get("apiId") != cfg.cli_expected_api_id:
+        # returns None by default when a key is missing -- though None != ""
+        # is also true, so the comparison below still rejects that case the
+        # same way (#194 B1).
+        if request_context.get("apiId") != cfg.cli_expected_api_id:
             logger.info(
                 "Rejected CLI request: requestContext.apiId did not match this deployment's API Gateway",
                 extra={"user_arn": user_arn},
@@ -144,11 +151,11 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # Cheap request-body validation (JSON syntax, field presence, reason
         # length, duration format -- all local, no AWS calls) happens before
         # cli_auth.extract_identity below, not after (#193 item 1): that
-        # call does an iam:GetRole plus a full paginated
-        # identitystore:ListUsers scan, the single most expensive thing on
-        # this path. A caller sending malformed JSON, a non-object body,
-        # missing fields, or an over-length reason used to still pay for
-        # both AWS calls before getting its 400 -- and since this route's
+        # call does a full paginated identitystore:ListUsers scan, the
+        # single most expensive thing on this path. A caller sending
+        # malformed JSON, a non-object body, missing fields, or an
+        # over-length reason used to still pay for that call before getting
+        # its 400 -- and since this route's
         # AWS_IAM authorizer only proves the caller can *sign* a request,
         # not that they're a legitimate SSO principal, this meant anyone
         # able to sign a request (not just genuine SSO users) could drive
@@ -269,14 +276,14 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 ),
             }
 
-        # Identity verification (iam:GetRole plus a full paginated
-        # identitystore:ListUsers scan) runs only now, after every cheap,
-        # local check on the body above has already passed -- see the
-        # comment where user_arn is extracted for why.
+        # Identity verification (a full paginated identitystore:ListUsers
+        # scan) runs only now, after every cheap, local check on the body
+        # above has already passed -- see the comment where user_arn is
+        # extracted for why.
         try:
             identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if user_arn else None
         except cli_auth.TransientIAMError as e:
-            # IAM couldn't answer iam:GetRole right now (throttled, a 5xx,
+            # Identity Store couldn't answer right now (throttled, a 5xx,
             # briefly unavailable) -- this says nothing about whether the
             # caller's identity is valid, so it shouldn't be reported as
             # GENERIC_REJECTION's "your credentials are invalid", nor paged
@@ -369,18 +376,19 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # own recommended delegated-admin deployment topology, and any
         # per-account variant has the same "rejects legitimate first-time
         # access" problem this one did. The identity is still verified by
-        # SigV4 + AWS_IAM, iam:GetRole's reserved-path check (round-1 #6's
-        # own conclusion: AWS itself blocks non-Identity-Center role
-        # creation there -- confirmed live, not just inferred from docs: a
-        # real `aws iam create-role --path /aws-reserved/sso.amazonaws.com/`
-        # call against this deployment's own account was rejected outright
-        # with "InvalidInput: The path '/aws-reserved/sso.amazonaws.com/' is
-        # reserved for AWS use", regardless of the caller's iam:CreateRole
-        # permissions -- so a forged role at that path to impersonate this
-        # check is not achievable through the IAM API, closing #194's
-        # unresolved disagreement over whether this was a real bypass), the
-        # session name resolving to a real Identity Store user, and the
-        # email round-trip cross-check below.
+        # SigV4 + AWS_IAM, the assumed role's name matching this
+        # deployment's configured prefix, the session name resolving to a
+        # real Identity Store user, and the email round-trip cross-check
+        # below. For a same-account caller, iam:GetRole's reserved-path check
+        # (round-1 #6's own conclusion: AWS itself blocks non-Identity-Center
+        # role creation there -- confirmed live, not just inferred from
+        # docs -- so a forged role at that path to impersonate this check is
+        # not achievable through the IAM API, closing #194's disagreement for
+        # that case) still applies too. It does NOT extend to a
+        # different-account caller (issue #214's REST API migration):
+        # iam:GetRole can't resolve a role's path in a different account, so
+        # that case relies on the name-prefix check alone -- see cli_auth.py's
+        # module docstring for that case's explicitly accepted residual risk.
         try:
             requester = slack_helpers.get_user_by_email(app.client, identity_email)
         except slack_sdk.errors.SlackApiError as e:
