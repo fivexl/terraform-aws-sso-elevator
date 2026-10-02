@@ -181,9 +181,7 @@ def test_extract_identity_rejects_session_name_matching_no_user(mock_iam_client)
     assert extract_identity(UNMATCHED_SESSION_ARN) is None
 
 
-def test_extract_identity_accepts_caller_from_a_different_account_without_checking_role_path(
-    mock_iam_client, mock_find_email_by_username
-):
+def test_extract_identity_accepts_caller_from_a_different_account_without_checking_role_path(mock_iam_client, mock_find_email_by_username):
     """The accepted residual risk documented in the module docstring: for a caller in a
     different account than this deployment's own, the role-path check (iam:GetRole) is skipped
     entirely -- it's not achievable cross-account -- and the name-prefix check plus Identity
@@ -213,9 +211,7 @@ def test_extract_identity_rejects_non_sso_role_even_with_valid_session_name(mock
     mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_rejects_same_account_role_with_matching_prefix_but_wrong_path(
-    mock_iam_client, mock_find_email_by_username
-):
+def test_extract_identity_rejects_same_account_role_with_matching_prefix_but_wrong_path(mock_iam_client, mock_find_email_by_username):
     """The bypass the same-account path check exists to close: role_name.startswith(prefix)
     alone used to be sufficient. A role anyone could create with iam:CreateRole in THIS
     account -- right name, wrong (non-reserved) path -- must be rejected when the caller is in
