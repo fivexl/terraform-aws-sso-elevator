@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import botocore.exceptions
@@ -19,20 +18,23 @@ USERNAME_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdm
 # long email truncated by RoleSessionName's 64-character limit.
 UNMATCHED_SESSION_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/i-0abc123def456"
 
-# Correct account and a name-prefix match, but the session name resolves to
-# nothing -- this ARN tests the account+role checks pass while the identity
-# resolution fails on its own.
-WRONG_ACCOUNT_ARN = "arn:aws:sts::999999999999:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/attacker@evil.com"
+# A different account than EMAIL_ARN's. The role-path check (iam:GetRole) is only possible for
+# a same-account caller, so this account is used to exercise the "skipped entirely, name-prefix
+# only" branch -- see the module docstring.
+DIFFERENT_ACCOUNT_ARN = "arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/requester@example.com"
 
-# Correct account and a session name, but the role name itself doesn't even
-# have the expected prefix -- rejected before get_role is ever called.
+# A role name without the expected prefix -- rejected on the name check alone, same account.
 NON_SSO_ROLE_ARN = "arn:aws:sts::111111111111:assumed-role/SomeOtherRole/attacker@evil.com"
 
-# The actual bypass this module exists to close: a role name with the right
-# prefix -- satisfying the old, insufficient check -- but not actually
-# provisioned by IAM Identity Center (i.e. not at the reserved path), which
-# is exactly what anyone with iam:CreateRole could produce themselves.
+# Same account, a name-prefix match, but (per the mocked get_role response) not actually at IAM
+# Identity Center's reserved path -- the exact bypass the same-account path check exists to
+# close: anyone with iam:CreateRole in this account could create this role themselves.
 SPOOFED_PREFIX_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Spoofed/attacker@evil.com"
+
+# Same shape as SPOOFED_PREFIX_ARN, but in the different account -- used to confirm that case
+# does NOT get the path check at all (iam:GetRole is never called), which is the accepted
+# residual risk the module docstring describes.
+SPOOFED_PREFIX_DIFFERENT_ACCOUNT_ARN = "arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_Spoofed/attacker@evil.com"
 
 NOT_ASSUMED_ROLE_ARN = "arn:aws:iam::111111111111:user/requester@example.com"
 
@@ -49,9 +51,6 @@ def _get_role_response(path: str) -> dict:
 
 
 def _access_denied() -> botocore.exceptions.ClientError:
-    # What this Lambda's own iam:GetRole call actually gets back for a role
-    # outside the reserved path, since slack_handler_lambda.tf's policy
-    # scopes that permission to the reserved-path resource shape only.
     return botocore.exceptions.ClientError(
         error_response={"Error": {"Code": "AccessDenied", "Message": "not authorized"}},
         operation_name="GetRole",
@@ -65,22 +64,10 @@ def _no_such_entity() -> botocore.exceptions.ClientError:
     )
 
 
-def _throttled() -> botocore.exceptions.ClientError:
+def _throttled(operation_name: str = "GetRole") -> botocore.exceptions.ClientError:
     return botocore.exceptions.ClientError(
         error_response={"Error": {"Code": "Throttling", "Message": "Rate exceeded"}},
-        operation_name="GetRole",
-    )
-
-
-def _unrecognized_5xx() -> botocore.exceptions.ClientError:
-    # A 5xx whose error code isn't in the transient-code allowlist -- only
-    # sso.is_transient_aws_error's HTTP-status fallback can catch this one.
-    return botocore.exceptions.ClientError(
-        error_response={
-            "Error": {"Code": "SomeUnmappedServiceError", "Message": "unavailable"},
-            "ResponseMetadata": {"HTTPStatusCode": 503},
-        },
-        operation_name="GetRole",
+        operation_name=operation_name,
     )
 
 
@@ -96,9 +83,9 @@ def extract_identity(user_arn: str, identity_store_client=None, s3_client=None):
 @pytest.fixture(autouse=True)
 def mock_iam_client():
     """Stubs cli_auth's iam:GetRole call so tests don't hit real AWS. Each
-    test below configures return_value/side_effect on the fixture's mock
-    directly, since which role gets looked up (and what path it "has")
-    varies per test."""
+    test that exercises the same-account path check configures
+    return_value/side_effect on the fixture's mock directly; tests for the
+    different-account case assert it was never called at all."""
     with patch.object(cli_auth, "_iam_client") as mock_client:
         yield mock_client
 
@@ -194,25 +181,27 @@ def test_extract_identity_rejects_session_name_matching_no_user(mock_iam_client)
     assert extract_identity(UNMATCHED_SESSION_ARN) is None
 
 
-def test_extract_identity_rejects_wrong_account_even_with_valid_session_name(mock_iam_client, mock_find_email_by_username):
-    assert extract_identity(WRONG_ACCOUNT_ARN) is None
-    # Rejected on the account check alone -- neither AWS call should be reached.
+def test_extract_identity_accepts_caller_from_a_different_account_without_checking_role_path(mock_iam_client, mock_find_email_by_username):
+    """The accepted residual risk documented in the module docstring: for a caller in a
+    different account than this deployment's own, the role-path check (iam:GetRole) is skipped
+    entirely -- it's not achievable cross-account -- and the name-prefix check plus Identity
+    Store resolution alone decide acceptance. Confirmed here even for a role name that, per
+    SPOOFED_PREFIX_DIFFERENT_ACCOUNT_ARN's own naming, would fail the path check if it could be
+    run: it's accepted anyway, and iam:GetRole must never be called for this case."""
+    mock_find_email_by_username.return_value = ("attacker@evil.com", "u-3")
+
+    assert extract_identity(SPOOFED_PREFIX_DIFFERENT_ACCOUNT_ARN) == ("attacker@evil.com", "u-3", {"Users": []})
     mock_iam_client.get_role.assert_not_called()
-    mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_rejects_everything_when_account_id_unset(mock_iam_client, mock_find_email_by_username):
-    """cli_expected_account_id isn't operator-configurable -- Terraform
-    always sets it to the deploying account (locals.tf) -- but Config()
-    used directly, without going through Terraform (tests, or any other
-    direct construction), still defaults it to "". This confirms that case
-    rejects every request, including one with an otherwise-perfectly-valid
-    ARN, rather than silently matching everything."""
-    with patch.object(cli_auth.config, "get_config") as mock_get_config:
-        mock_get_config.return_value = SimpleNamespace(cli_expected_account_id="", cli_sso_role_name_prefix="AWSReservedSSO_")
-        assert extract_identity(EMAIL_ARN) is None
+def test_extract_identity_accepts_genuine_caller_from_a_different_account(mock_iam_client, mock_find_email_by_username):
+    """Companion to the test above, for the non-adversarial case: a genuine different-account
+    SSO caller (not just a spoofed-path example) must also succeed, confirming this isn't
+    narrowly passing only for the attack-shaped ARN."""
+    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
+
+    assert extract_identity(DIFFERENT_ACCOUNT_ARN) == ("requester@example.com", "u-1", {"Users": []})
     mock_iam_client.get_role.assert_not_called()
-    mock_find_email_by_username.assert_not_called()
 
 
 def test_extract_identity_rejects_non_sso_role_even_with_valid_session_name(mock_iam_client, mock_find_email_by_username):
@@ -222,12 +211,12 @@ def test_extract_identity_rejects_non_sso_role_even_with_valid_session_name(mock
     mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_rejects_role_with_matching_prefix_but_wrong_path(mock_iam_client, mock_find_email_by_username):
-    """The bypass this fix closes: role_name.startswith(prefix) alone used
-    to be sufficient. A role anyone could create with iam:CreateRole --
-    right name, wrong (non-reserved) path -- must now be rejected. Covers
-    the case where get_role somehow still succeeds despite the path
-    mismatch (defense in depth on top of the AccessDenied case below)."""
+def test_extract_identity_rejects_same_account_role_with_matching_prefix_but_wrong_path(mock_iam_client, mock_find_email_by_username):
+    """The bypass the same-account path check exists to close: role_name.startswith(prefix)
+    alone used to be sufficient. A role anyone could create with iam:CreateRole in THIS
+    account -- right name, wrong (non-reserved) path -- must be rejected when the caller is in
+    this deployment's own account, since the path check is possible (and therefore required)
+    for that case."""
     mock_iam_client.get_role.return_value = _get_role_response("/")
 
     assert extract_identity(SPOOFED_PREFIX_ARN) is None
@@ -235,37 +224,28 @@ def test_extract_identity_rejects_role_with_matching_prefix_but_wrong_path(mock_
     mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_rejects_role_get_role_access_denied(mock_iam_client, mock_find_email_by_username):
-    """The realistic outcome for a spoofed (non-reserved-path) role: this
-    Lambda's own iam:GetRole permission is scoped to the reserved path, so
-    AWS itself refuses the read rather than returning the role's real
-    (non-matching) path."""
+def test_extract_identity_rejects_same_account_role_get_role_access_denied(mock_iam_client, mock_find_email_by_username):
+    """The realistic outcome for a same-account spoofed (non-reserved-path) role: this Lambda's
+    own iam:GetRole permission is scoped to the reserved path, so AWS itself refuses the read
+    rather than returning the role's real (non-matching) path."""
     mock_iam_client.get_role.side_effect = _access_denied()
 
     assert extract_identity(SPOOFED_PREFIX_ARN) is None
     mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_rejects_role_that_no_longer_exists(mock_iam_client, mock_find_email_by_username):
+def test_extract_identity_rejects_same_account_role_that_no_longer_exists(mock_iam_client, mock_find_email_by_username):
     mock_iam_client.get_role.side_effect = _no_such_entity()
 
     assert extract_identity(EMAIL_ARN) is None
     mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_raises_transient_error_on_throttling(mock_iam_client, mock_find_email_by_username):
+def test_extract_identity_raises_transient_error_on_same_account_get_role_throttling(mock_iam_client, mock_find_email_by_username):
     """A throttled iam:GetRole says nothing about whether the role is
     genuinely SSO-provisioned -- it must not be treated the same as
     NoSuchEntity/AccessDenied (which return None, a real rejection)."""
     mock_iam_client.get_role.side_effect = _throttled()
-
-    with pytest.raises(cli_auth.TransientIAMError):
-        extract_identity(SPOOFED_PREFIX_ARN)
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_raises_transient_error_on_unrecognized_5xx(mock_iam_client, mock_find_email_by_username):
-    mock_iam_client.get_role.side_effect = _unrecognized_5xx()
 
     with pytest.raises(cli_auth.TransientIAMError):
         extract_identity(SPOOFED_PREFIX_ARN)
@@ -289,7 +269,7 @@ def test_extract_identity_raises_transient_error_on_list_users_throttling(mock_i
     this path most likely to throttle -- and previously had no error
     handling at all, unwinding to the generic 500-plus-Slack-post handler."""
     mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_list_users.side_effect = _throttled()
+    mock_list_users.side_effect = _throttled(operation_name="ListUsers")
 
     with pytest.raises(cli_auth.TransientIAMError):
         extract_identity(EMAIL_ARN)

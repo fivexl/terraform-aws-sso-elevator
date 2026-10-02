@@ -20,32 +20,32 @@ locals {
   # In case of non-default value for var.config_bucket_name, we use the value as is and expect the name is unique.
   config_bucket_name = var.config_bucket_name != "sso-elevator-config" ? var.config_bucket_name : "sso-elevator-config-${random_string.random.result}"
 
-  # HTTP API configuration
-  api_resource_path     = "/access-requester"
-  api_resource_path_cli = "/access-requester-cli"
-  api_stage_name        = "default"
-  full_api_url          = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
-  full_api_url_cli      = var.create_api_gateway && var.enable_access_requester_cli ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path_cli}" : ""
+  # HTTP API configuration (Slack route only -- the CLI route is cli_rest_api.tf's REST API now)
+  api_resource_path = "/access-requester"
+  api_stage_name    = "default"
+  full_api_url      = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
 
-  # CLI access-request path: which account a caller's verified IAM ARN must belong to.
-  # Always the account this module is deployed into -- not operator-configurable,
-  # because cli_auth.py's iam:GetRole check (verifying the caller's role is
-  # genuinely SSO-provisioned) can only ever resolve against this same
-  # account regardless of what this value claimed. Letting them diverge
-  # either broke every request (if pointed at some other real account) or,
-  # in the case where that other account happened to be one an attacker
-  # controlled, let a same-named role there impersonate a real user here.
+  # Still named api_resource_path_cli, not cli_rest_api_resource_path: this is the CLI's one
+  # resource path, used by cli_rest_api.tf (the REST API's own resource/stage/output use this
+  # same local, not a separately hardcoded copy of the literal -- see that file's own comments).
+  api_resource_path_cli = "/access-requester-cli"
+
+  # Whether the CLI's REST API (cli_rest_api.tf, issue #214) should be created, centralized into
+  # one local so every resource in that file reads it from one place instead of repeating this
+  # two-flag expression itself.
+  create_cli_rest_api = var.create_api_gateway && var.enable_access_requester_cli
+
+  # CLI access-request path: this deployment's own account. Used only to decide whether a
+  # caller's assumed role can be checked more strongly (see src/cli_auth.py's extract_identity)
+  # -- iam:GetRole can only ever resolve a role's real IAM path within the Lambda's own account,
+  # so that stronger check only runs when the caller's account matches this one; a caller from a
+  # different account in the org is identified by role name alone instead (the REST API's
+  # resource policy, scoped to aws:PrincipalOrgID, is what gates org membership for that case).
   cli_expected_account_id = data.aws_caller_identity.current.account_id
 
-  # Event Bridge rule names with fallback to deprecated variables
-  event_bridge_check_on_inconsistency_rule_name = coalesce(
-    var.event_bridge_check_on_inconsistency_rule_name,
-    var.event_brige_check_on_inconsistency_rule_name
-  )
-  event_bridge_scheduled_revocation_rule_name = coalesce(
-    var.event_bridge_scheduled_revocation_rule_name,
-    var.event_brige_scheduled_revocation_rule_name
-  )
+  # Event Bridge rule names
+  event_bridge_check_on_inconsistency_rule_name = var.event_bridge_check_on_inconsistency_rule_name
+  event_bridge_scheduled_revocation_rule_name   = var.event_bridge_scheduled_revocation_rule_name
 
   # Attribute sync configuration
   attribute_sync_event_rule_name = var.attribute_sync_event_rule_name
