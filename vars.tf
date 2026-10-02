@@ -4,15 +4,6 @@ variable "create_api_gateway" {
   default     = true
 }
 
-variable "create_lambda_url" {
-  description = <<-EOT
-  If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future
-  If false, Lambda url will be deleted.
-  EOT
-  type        = bool
-  default     = true
-}
-
 variable "ecr_repo_name" {
   description = "The name of the ECR repository."
   type        = string
@@ -169,28 +160,16 @@ variable "requester_lambda_name" {
   default     = "access-requester"
 }
 
-variable "event_brige_check_on_inconsistency_rule_name" {
-  description = "DEPRECATED: Use event_bridge_check_on_inconsistency_rule_name instead. This variable contains a typo and will be removed in a future version."
-  type        = string
-  default     = "sso-elevator-check-on-inconsistency"
-}
-
-variable "event_brige_scheduled_revocation_rule_name" {
-  description = "DEPRECATED: Use event_bridge_scheduled_revocation_rule_name instead. This variable contains a typo and will be removed in a future version."
-  type        = string
-  default     = "sso-elevator-scheduled-revocation"
-}
-
 variable "event_bridge_check_on_inconsistency_rule_name" {
   description = "value for the event bridge check on inconsistency rule name"
   type        = string
-  default     = null
+  default     = "sso-elevator-check-on-inconsistency"
 }
 
 variable "event_bridge_scheduled_revocation_rule_name" {
   description = "value for the event bridge scheduled revocation rule name"
   type        = string
-  default     = null
+  default     = "sso-elevator-scheduled-revocation"
 }
 
 variable "schedule_group_name" {

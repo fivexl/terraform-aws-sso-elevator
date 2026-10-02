@@ -117,20 +117,22 @@ def main_module():
 
 
 def _cli_request_event(body: dict | None = None, user_arn: str | None = None, api_id: str | None = "test-api-id") -> dict:
-    """An event shaped like what handle_cli_access_request itself consumes.
-    routeKey/rawPath aren't relevant here, since these tests call
-    handle_cli_access_request directly rather than going through
-    lambda_handler's dispatch (that's covered separately, below).
+    """A Lambda proxy event shaped like what the CLI's REST API route (cli_rest_api.tf, issue
+    #214) actually sends: httpMethod/resource rather than routeKey, and the verified identity
+    at requestContext.identity.userArn. These tests call handle_cli_access_request directly
+    rather than going through lambda_handler's dispatch (that's covered separately, below).
 
-    api_id defaults to conftest.py's mock_env cli_expected_api_id value, so
-    every test below passes the apiId check for free unless it's overridden
-    -- that check is exercised on its own, separately."""
+    api_id defaults to conftest.py's mock_env cli_expected_api_id value, so every test below
+    passes the apiId check for free unless it's overridden -- that check is exercised on its
+    own, separately."""
     event = {
+        "httpMethod": "POST",
+        "resource": "/access-requester-cli",
         "body": json.dumps(body) if body is not None else None,
         "requestContext": {"apiId": api_id} if api_id is not None else {},
     }
     if user_arn is not None:
-        event["requestContext"]["authorizer"] = {"iam": {"userArn": user_arn}}
+        event["requestContext"]["identity"] = {"userArn": user_arn}
     return event
 
 
@@ -152,31 +154,32 @@ def _cli_request_event(body: dict | None = None, user_arn: str | None = None, ap
 # ---------------------------------------------------------------------------
 
 
-def test_lambda_handler_routes_cli_route_key_to_cli_handler(main_module):
-    event = {"routeKey": main_module.CLI_ACCESS_REQUEST_ROUTE_KEY, "rawPath": "/access-requester-cli"}
+def test_lambda_handler_routes_cli_event_to_cli_handler(main_module):
+    """The CLI's REST API proxy event (cli_rest_api.tf, issue #214) has no routeKey at all --
+    it's identified by httpMethod/resource instead."""
+    event = {"httpMethod": "POST", "resource": main_module.CLI_ACCESS_REQUEST_PATH, "path": "/default/access-requester-cli"}
     with patch.object(main_module, "handle_cli_access_request", return_value={"statusCode": 200}) as mock_handle:
         result = main_module.lambda_handler(event, MagicMock())
     mock_handle.assert_called_once_with(event)
     assert result == {"statusCode": 200}
 
 
-def test_lambda_handler_dispatch_is_robust_to_stage_name_prefix_in_rawpath(main_module):
-    """Regression test for the actual bug this dispatch mechanism was chosen to
-    avoid: whether rawPath includes a stage-name prefix depends on whether the
-    stage is $default or a named stage, so dispatch must key off routeKey (which
-    is always exactly "{METHOD} {path}" regardless of stage), not rawPath."""
-    event = {
-        "routeKey": main_module.CLI_ACCESS_REQUEST_ROUTE_KEY,
-        "rawPath": "/some-stage-name/access-requester-cli",
-        "requestContext": {"http": {"path": "/some-stage-name/access-requester-cli"}},
-    }
-    with patch.object(main_module, "handle_cli_access_request", return_value={"statusCode": 200}) as mock_handle:
-        result = main_module.lambda_handler(event, MagicMock())
-    mock_handle.assert_called_once_with(event)
+def test_lambda_handler_does_not_treat_a_get_on_the_cli_resource_as_a_cli_request(main_module):
+    """_is_cli_event checks the method too, not just the resource path -- a GET (which this
+    REST API never actually defines a method for, but which API Gateway itself would reject
+    before this Lambda ever ran) must not be misdispatched as a CLI request."""
+    event = {"httpMethod": "GET", "resource": main_module.CLI_ACCESS_REQUEST_PATH}
+    context = MagicMock()
+    with patch.object(main_module, "SlackRequestHandler") as mock_handler_cls:
+        mock_handler_cls.return_value.handle.return_value = {"statusCode": 200}
+        result = main_module.lambda_handler(event, context)
+    mock_handler_cls.return_value.handle.assert_called_once_with(event, context)
     assert result == {"statusCode": 200}
 
 
-def test_lambda_handler_routes_other_route_keys_to_bolt(main_module):
+def test_lambda_handler_routes_slack_events_to_bolt(main_module):
+    """A Slack route event (module.http_api, payload format 2.0) has a routeKey and no
+    httpMethod/resource at the top level -- _is_cli_event must not misdispatch it."""
     event = {"routeKey": "POST /access-requester", "rawPath": "/access-requester"}
     context = MagicMock()
     with patch.object(main_module, "SlackRequestHandler") as mock_handler_cls:
@@ -224,7 +227,7 @@ def test_handle_cli_access_request_logs_the_caller_arn_on_an_api_id_mismatch(mai
         result = main_module.handle_cli_access_request(event)
 
     assert result == main_module.cli_auth.GENERIC_REJECTION
-    expected_arn = event["requestContext"]["authorizer"]["iam"]["userArn"]
+    expected_arn = event["requestContext"]["identity"]["userArn"]
     info_calls = mock_logger.info.call_args_list
     assert any("apiId" in (c.args[0] if c.args else "") and c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls)
 
@@ -242,24 +245,46 @@ def test_handle_cli_access_request_rejects_missing_api_id(main_module):
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
-def test_handle_cli_access_request_rejects_missing_authorizer_context(main_module):
+def test_handle_cli_access_request_accepts_caller_from_a_different_account(main_module):
+    """The whole point of the CLI's REST API route (issue #214) is a resource policy that lets
+    a request from any account in the AWS Organization reach API Gateway with no per-account
+    IAM setup -- and, since cli_auth.py's account check was retired (trusting that resource
+    policy instead, confirmed intentional), that now actually means a genuine, otherwise
+    well-formed request from a different account succeeds end to end too, not just reaches the
+    Lambda before being rejected."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    fake_requester = MagicMock(id="U_REQ", email="req@example.com")
+    with (
+        patch.object(main_module.slack_helpers, "get_user_by_email", return_value=fake_requester),
+        patch.object(main_module, "process_access_request", return_value=(MagicMock(), True)) as mock_process,
+    ):
+        result = main_module.handle_cli_access_request(event)
+    mock_process.assert_called_once()
+    assert result["statusCode"] == 200  # noqa: PLR2004
+    assert json.loads(result["body"])["ok"] is True
+
+
+def test_handle_cli_access_request_rejects_missing_identity_context(main_module):
     # A complete, otherwise-valid body -- not just {"account": ...} -- since
     # body validation now runs before the identity check (#193 item 1); an
     # incomplete body here would be rejected by that check instead of the
-    # authorizer-missing check this test means to isolate.
+    # identity-missing check this test means to isolate.
     event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
     result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
-def test_handle_cli_access_request_rejects_explicit_null_authorizer(main_module):
+def test_handle_cli_access_request_rejects_explicit_null_identity(main_module):
     """Regression test: a JSON key present with an explicit null value is
-    not the same as a missing key -- `{}.get("authorizer", {})` only
-    applies its default when the key is absent, so "authorizer": null
-    used to reach .get("iam") on None and raise, turning this into a 500
+    not the same as a missing key -- `{}.get("identity", {})` only
+    applies its default when the key is absent, so "identity": null
+    used to reach .get("userArn") on None and raise, turning this into a 500
     with a Slack post instead of the same clean 403 a missing key gets."""
     event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
-    event["requestContext"]["authorizer"] = None
+    event["requestContext"]["identity"] = None
     result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
@@ -429,12 +454,11 @@ def test_handle_cli_access_request_rejects_missing_body_with_an_otherwise_valid_
 
 def test_handle_cli_access_request_rejects_malformed_body_without_resolving_identity(main_module):
     """Regression test (#193 item 1): cheap request-body validation must run
-    before cli_auth.extract_identity, not after -- that call does an
-    iam:GetRole plus a full paginated identitystore:ListUsers scan, and a
-    caller sending a malformed body used to pay for both before getting its
-    400. Verified directly: extract_identity must never even be called for
-    a body this broken, regardless of what a real call to it would have
-    resolved."""
+    before cli_auth.extract_identity, not after -- that call does a full
+    paginated identitystore:ListUsers scan, and a caller sending a malformed
+    body used to pay for it before getting its 400. Verified directly:
+    extract_identity must never even be called for a body this broken,
+    regardless of what a real call to it would have resolved."""
     event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
     event["body"] = "{not json"
     with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
@@ -1014,8 +1038,8 @@ def test_handle_cli_access_request_reports_unexpected_errors(main_module):
 
 
 def test_handle_cli_access_request_returns_503_on_transient_iam_error(main_module):
-    """A throttled/unavailable iam:GetRole says nothing about whether the
-    caller's identity is valid -- it must not be reported as
+    """A throttled/unavailable Identity Store lookup says nothing about
+    whether the caller's identity is valid -- it must not be reported as
     GENERIC_REJECTION's "your credentials are invalid" (403), nor page the
     approvals channel as an unexpected error (500). A distinguishable 503
     lets the CLI tell "retry this" apart from both of those."""
@@ -1051,7 +1075,7 @@ def test_handle_cli_access_request_logs_the_caller_arn_when_identity_cannot_be_v
         result = main_module.handle_cli_access_request(event)
 
     assert result == main_module.cli_auth.GENERIC_REJECTION
-    expected_arn = event["requestContext"]["authorizer"]["iam"]["userArn"]
+    expected_arn = event["requestContext"]["identity"]["userArn"]
     info_calls = mock_logger.info.call_args_list
     assert any(c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls)
 

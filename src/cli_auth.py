@@ -2,20 +2,49 @@
 
 The CLI signs its request directly against API Gateway (SigV4, an AWS_IAM
 authorizer) instead of going through Slack. API Gateway verifies the
-signature itself and populates requestContext.authorizer.iam.userArn with
-the caller's verified identity before the Lambda ever runs — extract_identity
-here doesn't verify a signature, it decides whether that already-verified
-identity is trustworthy enough to act on: a real SSO session, in the expected
-account, under a genuinely SSO-provisioned role, resolved to a real
-registered email via an Identity Store lookup.
+signature itself and populates the caller's verified identity before the
+Lambda ever runs (requestContext.identity.userArn on the REST API this route
+uses -- see cli_rest_api.tf, issue #214) -- extract_identity here doesn't
+verify a signature, it decides whether that already-verified identity is
+trustworthy enough to act on: a real SSO session, under a role whose name
+matches this deployment's configured prefix, resolved to a real registered
+email via an Identity Store lookup.
 
-An assumed-role ARN (arn:aws:sts::<account>:assumed-role/<role-name>/<session>)
-never carries the underlying role's IAM path, only its name — and a role's
-*name* is not an AWS-enforced signal at all; anyone with iam:CreateRole can
-name a role of their own AWSReservedSSO_Anything. What AWS actually protects
-is the *path* IAM Identity Center provisions its roles under
-(/aws-reserved/sso.amazonaws.com/), which is why this looks the role up via
-iam:GetRole rather than trusting the name alone.
+Which AWS account the caller is in is NOT checked here as a reject condition
+-- the real gate for account/org membership is the REST API's own resource
+policy (scoped to aws:PrincipalOrgID): any account outside the AWS
+Organization never reaches this code at all, API Gateway rejects it first.
+Trusting the resource policy for that, rather than duplicating a single-
+hardcoded-account comparison here, is an intentional simplification,
+confirmed explicitly rather than an oversight.
+
+Whether the role's real IAM path is genuinely IAM Identity Center's reserved
+one IS still checked here, but only when the caller's account matches this
+deployment's own (cli_expected_account_id) -- iam:GetRole is account-scoped,
+so this Lambda can never resolve a role's real path in a *different*
+account, meaning that stronger check is only available at all for the
+same-account case. (An earlier version of this file dropped the path check
+for every caller, same-account included, reasoning that it couldn't work
+cross-account anyway -- found in review to be a broader regression than
+necessary: the check remained fully valid, and AWS-enforced, for same-account
+callers, so it's restored for exactly that case.)
+
+The accepted residual risk, narrowed to cross-account callers only: an
+assumed-role ARN never carries the underlying role's IAM path, only its name
+-- a role's *name* is not an AWS-enforced signal at all; anyone with
+iam:CreateRole in an allowed *different* account can name a role of their own
+AWSReservedSSO_Anything, assume it, and set its session name to an arbitrary
+string (RoleSessionName is caller-specified at AssumeRole time). If that
+string happens to match a real Identity Store username, find_email_by_username
+below would resolve it to that real user's email, letting the caller submit a
+request attributed to someone else. This requires iam:CreateRole plus
+sts:AssumeRole in some account already inside the organization -- a more
+common permission combination (routine on developer sandboxes and CI/CD
+roles) than "admin-only", so this residual risk should not be treated as
+rare. Defending against it fully would require a cross-account role-path
+verification mechanism this module does not yet have; until then, this is a
+judged, accepted tradeoff for letting the CLI route work org-wide without a
+per-identity IAM grant.
 
 Separately, the session name (RoleSessionName) is set by IAM Identity Center
 to the caller's Identity Store *username*, not necessarily their email —
@@ -53,43 +82,27 @@ if TYPE_CHECKING:
 # hardcoded "aws" would reject 100% of requests in GovCloud/China with the
 # same generic "not associated with an SSO session" message a genuinely
 # invalid ARN gets, giving an operator there nothing to go on.
-#
-# This alone does NOT make GovCloud/China actually work end-to-end, though:
-# the module's IAM policies (slack_handler_lambda.tf's iam:GetRole
-# resources, locals.tf's Lambda/S3 ARNs) hardcode the "aws" partition
-# throughout, pre-existing and module-wide, not something this file
-# controls. A genuine GovCloud/China SSO session would pass this regex, then
-# fail at the iam:GetRole call below with AccessDenied (the policy's
-# resources never match an arn:aws-us-gov:iam::... role) -- rejected with
-# the same generic message a spoofed ARN gets, which is at least a safe
-# (fail-closed) outcome, just not the informative one the comment above
-# describes. Threading data.aws_partition.current.partition through those
-# other files, to make non-"aws" partitions genuinely work, is a separate,
-# module-wide change this PR does not make.
 _ASSUMED_ROLE_ARN_RE = re.compile(
     r"^arn:(?:aws|aws-cn|aws-us-gov):sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)$"
 )
 
-# The path prefix IAM Identity Center provisions its own roles under — this
-# is the part of a role's identity AWS itself enforces, unlike the role's
-# name, which anyone with iam:CreateRole can imitate. A prefix, not an exact
-# path, because a
-# multi-region (or non-us-east-1 identity source) deployment adds a region
-# segment: .../sso.amazonaws.com/<region>/AWSReservedSSO_... — the same
-# reason slack_handler_lambda.tf's own IAM policy lists both resource shapes.
+# The path prefix IAM Identity Center provisions its own roles under — this is the part of a
+# role's identity AWS itself enforces, unlike the role's name, which anyone with iam:CreateRole
+# can imitate. A prefix, not an exact path, because a multi-region (or non-us-east-1 identity
+# source) deployment adds a region segment: .../sso.amazonaws.com/<region>/AWSReservedSSO_... —
+# the same reason slack_handler_lambda.tf's own IAM policy lists both resource shapes.
 _SSO_RESERVED_ROLE_PATH_PREFIX = "/aws-reserved/sso.amazonaws.com/"
 
 _iam_client = boto3.Session().client("iam")
 
 
 class TransientIAMError(Exception):
-    """Raised when iam:GetRole fails for a reason that says nothing about
-    whether role_name is actually SSO-provisioned (throttling, a 5xx, IAM
-    itself being unavailable). Callers should surface this distinctly from a
-    real rejection -- e.g. as a 503 the CLI can retry -- rather than letting
-    it fall through to GENERIC_REJECTION's "your credentials are invalid"
-    message, or to a generic 500 that pages the approvals channel for what's
-    just AWS being temporarily unavailable."""
+    """Raised when verifying a caller's identity fails for a reason that says nothing about
+    whether that identity is actually valid (throttling, a 5xx, IAM or Identity Store being
+    unavailable). Callers should surface this distinctly from a real rejection -- e.g. as a
+    503 the CLI can retry -- rather than letting it fall through to GENERIC_REJECTION's "your
+    credentials are invalid" message, or to a generic 500 that pages the approvals channel for
+    what's just AWS being temporarily unavailable."""
 
 
 GENERIC_REJECTION = {
@@ -110,9 +123,11 @@ def extract_identity(
 ) -> tuple[str, str, dict] | None:
     """Return the requester's real, registered (email, UserId, the full
     list_users() snapshot they were matched against), but only if user_arn is
-    an assumed-role session in the expected account, under a role that's
-    genuinely IAM Identity Center-provisioned (verified via its real IAM
-    path, not just its name), whose session name resolves to an Identity
+    an assumed-role session under a role whose name matches this deployment's
+    configured SSO role-name prefix (and, for a same-account caller, whose
+    real IAM path also confirms it's genuinely IAM Identity Center-provisioned
+    -- see the module docstring for why that stronger check can't extend to a
+    different-account caller), whose session name resolves to an Identity
     Store user by exact username match. A spoofed ARN, or a role session
     whose name doesn't match any real username, is rejected.
 
@@ -130,17 +145,17 @@ def extract_identity(
     match = _ASSUMED_ROLE_ARN_RE.match(user_arn)
     if not match:
         return None
-    # cli_expected_account_id is always the account this module is deployed
-    # into (see locals.tf) — not operator-configurable, precisely because
-    # this check needs to agree with _is_sso_provisioned_role's iam:GetRole
-    # call below, which can only ever resolve against that same account.
-    if match["account_id"] != cfg.cli_expected_account_id:
-        return None
 
     role_name = match["role_name"]
     if not role_name.startswith(cfg.cli_sso_role_name_prefix):
         return None
-    if not _is_sso_provisioned_role(role_name):
+
+    # Only checkable for a same-account caller -- iam:GetRole is account-scoped, so this Lambda
+    # can never resolve a role's real path in a different account. A different-account caller
+    # skips straight to the Identity Store resolution below, relying on the REST API's resource
+    # policy (org membership) and the name-prefix check above instead; see the module docstring
+    # for the accepted residual risk that leaves for that case specifically.
+    if match["account_id"] == cfg.cli_expected_account_id and not _is_sso_provisioned_role(role_name):
         return None
 
     # session_name is the Identity Store username IAM Identity Center set
@@ -189,11 +204,16 @@ def extract_identity(
 
 def _is_sso_provisioned_role(role_name: str) -> bool:
     """Whether role_name is a real IAM role at IAM Identity Center's own
-    reserved path. This is the part role_name.startswith(prefix) can't
-    check: an assumed-role ARN never carries the role's path, only its
-    name, so a role created (with iam:CreateRole) at any ordinary path but
-    given a matching name would pass a name-only check. iam:GetRole looks
-    the role up directly to get its real path.
+    reserved path, within THIS Lambda's own account -- the caller must
+    already be confirmed to be in this deployment's own account before this
+    is called (see extract_identity), since iam:GetRole cannot resolve a
+    role in a different account.
+
+    This is the part role_name.startswith(prefix) can't check: an
+    assumed-role ARN never carries the role's path, only its name, so a role
+    created (with iam:CreateRole) at any ordinary path but given a matching
+    name would pass a name-only check. iam:GetRole looks the role up
+    directly to get its real path.
 
     This Lambda's own iam:GetRole permission (slack_handler_lambda.tf) is
     itself scoped to only the reserved-path resource shape, so a role at
