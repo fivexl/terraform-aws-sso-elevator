@@ -4,6 +4,7 @@ from typing import Optional
 
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
+from mypy_boto3_ssm import SSMClient
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -68,6 +69,37 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
         raise
 
 
+# Must match value_wo in slack_ssm_secrets.tf.
+SLACK_SECRET_PLACEHOLDER = "REPLACE_ME"
+SLACK_BOT_TOKEN_PARAMETER_ENV = "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME"
+SLACK_SIGNING_SECRET_PARAMETER_ENV = "SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME"
+
+
+def get_slack_secret(ssm_client: SSMClient, env_var_name: str, *, degrade_on_failure: bool) -> str:
+    """Read the SecureString parameter named by env_var_name; the placeholder counts as unset.
+    degrade_on_failure=True (revoker, attribute-syncer) logs and returns "" instead of raising."""
+    try:
+        return _read_slack_secret(ssm_client, env_var_name)
+    except Exception as e:
+        if not degrade_on_failure:
+            raise
+        logger.exception(f"Slack secret unavailable, continuing without Slack: {e}")
+        return ""
+
+
+def _read_slack_secret(ssm_client: SSMClient, env_var_name: str) -> str:
+    parameter_name = os.environ.get(env_var_name)
+    if not parameter_name:
+        raise RuntimeError(f"Environment variable {env_var_name} is not set, so the Slack secret parameter name is unknown")
+    try:
+        value = ssm_client.get_parameter(Name=parameter_name, WithDecryption=True)["Parameter"]["Value"]
+    except Exception as e:
+        raise RuntimeError(f"Failed to read Slack secret parameter {parameter_name} from SSM: {e}") from e
+    if value == SLACK_SECRET_PLACEHOLDER:
+        raise RuntimeError(f"Slack secret parameter {parameter_name} still holds the placeholder; set the real value")
+    return value
+
+
 def parse_statement(_dict: dict) -> Statement:
     def to_set_if_list_or_str(v: list | str) -> frozenset[str]:
         if isinstance(v, list):
@@ -120,7 +152,6 @@ class Config(BaseSettings):
 
     post_update_to_slack: bool = False
     slack_channel_id: str
-    slack_bot_token: str
 
     approver_renotification_initial_wait_time: int
     approver_renotification_backoff_multiplier: int

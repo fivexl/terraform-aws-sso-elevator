@@ -51,8 +51,8 @@ module "attribute_syncer" {
   environment_variables = {
     LOG_LEVEL = var.log_level
 
-    SLACK_BOT_TOKEN  = var.slack_bot_token
-    SLACK_CHANNEL_ID = var.slack_channel_id
+    SLACK_BOT_TOKEN_SSM_PARAMETER_NAME = aws_ssm_parameter.slack_bot_token.name
+    SLACK_CHANNEL_ID                   = var.slack_channel_id
 
     SSO_INSTANCE_ARN  = local.sso_instance_arn
     IDENTITY_STORE_ID = local.identity_store_id
@@ -92,6 +92,8 @@ module "attribute_syncer" {
 # IAM Policy for Attribute Syncer Lambda
 data "aws_iam_policy_document" "attribute_syncer" {
   count = var.attribute_sync_enabled ? 1 : 0
+
+  source_policy_documents = [data.aws_iam_policy_document.read_slack_secrets["bot_token"].json]
 
   statement {
     sid    = "AllowListSSOInstances"

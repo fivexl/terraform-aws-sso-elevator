@@ -11,26 +11,12 @@ provider "aws" {
 
 data "aws_ssoadmin_instances" "this" {}
 
-# You will have to create /sso-elevator/slack-signing-secret AWS SSM Parameter
-# and store Slack app signing secret there, if you have not created app yet then
-# you can leave a dummy value there and update it after Slack app is ready
-data "aws_ssm_parameter" "sso_elevator_slack_signing_secret" {
-  name = "/sso-elevator/slack-signing-secret"
-}
-
-# You will have to create /sso-elevator/slack-bot-token AWS SSM Parameter
-# and store Slack bot token there, if you have not created app yet then
-# you can leave a dummy value there and update it after Slack app is ready
-data "aws_ssm_parameter" "sso_elevator_slack_bot_token" {
-  name = "/sso-elevator/slack-bot-token"
-}
-
 module "aws_sso_elevator" {
   source                           = "../.."
   aws_sns_topic_subscription_email = "email@gmail.com"
 
-  slack_signing_secret                           = data.aws_ssm_parameter.sso_elevator_slack_signing_secret.value
-  slack_bot_token                                = data.aws_ssm_parameter.sso_elevator_slack_bot_token.value
+  # The module creates the Slack secret parameters with a placeholder; set the real
+  # values with `aws ssm put-parameter --overwrite` (see the README).
   slack_channel_id                               = "***********"
   schedule_expression                            = "cron(0 23 * * ? *)" # revoke access schedule expression
   schedule_expression_for_check_on_inconsistency = "rate(1 hour)"

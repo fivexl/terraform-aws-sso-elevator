@@ -19,7 +19,7 @@ from slack_sdk import WebClient
 
 import s3 as s3_module
 from attribute_mapper import AttributeCondition, AttributeMappingRule, AttributeMapper
-from config import get_logger
+from config import SLACK_BOT_TOKEN_PARAMETER_ENV, get_logger, get_slack_secret
 from sync_config import (
     SyncConfiguration,
     SyncConfigurationError,
@@ -44,6 +44,7 @@ from sync_state import (
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
     from mypy_boto3_s3 import S3Client
+    from mypy_boto3_ssm import SSMClient
 
 logger = get_logger(service="attribute_syncer")
 
@@ -51,6 +52,7 @@ logger = get_logger(service="attribute_syncer")
 # These are initialized once per container and reused across invocations
 _identity_store_client: IdentityStoreClient = boto3.client("identitystore")
 _s3_client: S3Client = boto3.client("s3")
+_ssm_client: SSMClient = boto3.client("ssm")
 
 
 @dataclass
@@ -473,9 +475,8 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
             "body": {"message": "Attribute sync is disabled", "success": True},
         }
 
-    # Initialize Slack client (token may change, so not module-level)
-    slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    slack_client = WebClient(token=slack_bot_token)
+    # Read per invocation, so a rotated token is picked up without waiting for a cold start.
+    slack_client = WebClient(token=get_slack_secret(_ssm_client, SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=True))
 
     # Get identity store ID from environment
     identity_store_id = os.environ.get("IDENTITY_STORE_ID", "")

@@ -66,7 +66,6 @@ def config_dict(
             "revoker_function_name": strategies.json_safe_text,
             "schedule_group_name": strategies.json_safe_text,
             "slack_channel_id": strategies.json_safe_text,
-            "slack_bot_token": strategies.json_safe_text,
             "sso_instance_arn": strategies.json_safe_text,
             "s3_bucket_for_audit_entry_name": strategies.json_safe_text,
             "s3_bucket_prefix_for_partitions": strategies.json_safe_text,
@@ -118,7 +117,6 @@ def valid_config_dict(
         "revoker_function_name": "x",
         "schedule_group_name": "x",
         "slack_channel_id": "x",
-        "slack_bot_token": "x",
         "sso_instance_arn": "x",
         "log_level": "INFO",
         "post_update_to_slack": "False",
@@ -144,10 +142,17 @@ def valid_config_dict(
 @example(valid_config_dict() | {"send_dm_if_user_not_in_channel": "x"}).xfail(raises=ValidationError, reason="Invalid bool")
 @settings(max_examples=50, suppress_health_check=(HealthCheck.too_slow,))
 def test_config_load_environment_variables(dict_config: dict):
-    os.environ.clear()  # noqa: B003
-    # Convert all values to strings as os.environ expects
-    os.environ.update({k: str(v) for k, v in dict_config.items()})
-    config.Config()  # type: ignore[call-arg]
+    # Restore by hand: monkeypatch can't be combined with @given here, and a bare clear()
+    # would wipe conftest's environment for every later test.
+    original_environ = dict(os.environ)
+    try:
+        os.environ.clear()  # noqa: B003
+        # Convert all values to strings as os.environ expects
+        os.environ.update({k: str(v) for k, v in dict_config.items()})
+        config.Config()  # type: ignore[call-arg]
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
 
 
 @given(
@@ -327,3 +332,62 @@ def test_config_group_statement_parsing_with_s3(mock_s3_client, monkeypatch):
     group_statement = list(cfg.group_statements)[0]
     assert "11e111e1-e111-11ee-e111-1e11e1ee11e1" in group_statement.resource
     assert group_statement.allow_self_approval is True
+
+
+# ---------------------------------------------------------------------------
+# Slack secrets read from SSM Parameter Store
+# ---------------------------------------------------------------------------
+
+
+def test_get_slack_secret_reads_the_parameter_named_by_the_env_var(monkeypatch):
+    monkeypatch.setenv(config.SLACK_BOT_TOKEN_PARAMETER_ENV, "/sso-elevator/slack-bot-token")
+    ssm_client = MagicMock()
+    ssm_client.get_parameter.return_value = {"Parameter": {"Value": "xoxb-real-token"}}
+
+    result = config.get_slack_secret(ssm_client, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=False)
+
+    assert result == "xoxb-real-token"
+    ssm_client.get_parameter.assert_called_once_with(Name="/sso-elevator/slack-bot-token", WithDecryption=True)
+
+
+def _ssm_failing() -> MagicMock:
+    ssm_client = MagicMock()
+    ssm_client.get_parameter.side_effect = RuntimeError("boom: KMS access denied")
+    return ssm_client
+
+
+def _ssm_returning_placeholder() -> MagicMock:
+    ssm_client = MagicMock()
+    ssm_client.get_parameter.return_value = {"Parameter": {"Value": config.SLACK_SECRET_PLACEHOLDER}}
+    return ssm_client
+
+
+# (env var value, SSM client factory, expected error fragment)
+_FAILURES = [
+    ("/sso-elevator/slack-signing-secret", _ssm_failing, "Failed to read Slack secret parameter /sso-elevator/slack-signing-secret"),
+    ("/sso-elevator/slack-signing-secret", _ssm_returning_placeholder, "/sso-elevator/slack-signing-secret still holds the placeholder"),
+    (None, _ssm_failing, f"Environment variable {config.SLACK_SIGNING_SECRET_PARAMETER_ENV} is not set"),
+]
+
+
+@pytest.mark.parametrize(("parameter_name", "make_ssm_client", "_message"), _FAILURES)
+def test_get_slack_secret_degrades_to_empty_string(monkeypatch, parameter_name, make_ssm_client, _message):
+    """Revoker and attribute-syncer must keep revoking/syncing when Slack secrets are unusable."""
+    if parameter_name:
+        monkeypatch.setenv(config.SLACK_SIGNING_SECRET_PARAMETER_ENV, parameter_name)
+    else:
+        monkeypatch.delenv(config.SLACK_SIGNING_SECRET_PARAMETER_ENV, raising=False)
+
+    assert config.get_slack_secret(make_ssm_client(), config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=True) == ""
+
+
+@pytest.mark.parametrize(("parameter_name", "make_ssm_client", "message"), _FAILURES)
+def test_get_slack_secret_raises_when_not_degrading(monkeypatch, parameter_name, make_ssm_client, message):
+    """The access-requester must fail at cold start rather than run with an empty or placeholder secret."""
+    if parameter_name:
+        monkeypatch.setenv(config.SLACK_SIGNING_SECRET_PARAMETER_ENV, parameter_name)
+    else:
+        monkeypatch.delenv(config.SLACK_SIGNING_SECRET_PARAMETER_ENV, raising=False)
+
+    with pytest.raises(RuntimeError, match=message):
+        config.get_slack_secret(make_ssm_client(), config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=False)

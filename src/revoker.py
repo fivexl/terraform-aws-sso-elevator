@@ -37,7 +37,7 @@ sso_client = boto3.client("sso-admin")  # type: ignore # noqa: PGH003
 identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH003
 scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
-slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
+ssm_client = boto3.client("ssm")  # type: ignore # noqa: PGH003
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
@@ -46,6 +46,10 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
     except ValidationError as e:
         logger.warning("Got unexpected event:", extra={"event": event, "exception": e})
         raise e
+
+    # Read per invocation, so a rotated token is picked up without waiting for a cold start.
+    slack_token = config.get_slack_secret(ssm_client, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=True)
+    slack_client = slack_sdk.WebClient(token=slack_token)
 
     match parsed_event:
         case ScheduledRevokeEvent():
@@ -162,16 +166,25 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
     )
 
     if cfg.post_update_to_slack:
-        account = organizations.describe_account(org_client, account_assignment.account_id)
-        return slack_notify_user_on_revoke(
-            cfg=cfg,
-            account_assignment=account_assignment,
-            permission_set=permission_set,
-            account=account,
-            sso_client=sso_client,
-            identitystore_client=identitystore_client,
-            slack_client=slack_client,
-        )
+        # The revocation already succeeded. handle_sso_elevator_scheduled_revocation calls this
+        # in a loop, so a Slack failure must not abort the remaining revocations.
+        try:
+            account = organizations.describe_account(org_client, account_assignment.account_id)
+            return slack_notify_user_on_revoke(
+                cfg=cfg,
+                account_assignment=account_assignment,
+                permission_set=permission_set,
+                account=account,
+                sso_client=sso_client,
+                identitystore_client=identitystore_client,
+                slack_client=slack_client,
+            )
+        except Exception as e:
+            logger.exception(
+                f"Failed to notify Slack about a completed revocation, the revocation itself succeeded: {e}",
+                extra={"account_assignment": account_assignment},
+            )
+    return None
 
 
 def slack_notify_user_on_revoke(  # noqa: PLR0913
@@ -261,6 +274,8 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
 
     if cfg.post_update_to_slack:
+        # Not wrapped in try/except: unlike the loop paths, this invocation handles one revocation,
+        # and a propagated Slack failure is what raises the DLQ/SNS alert about a broken Slack setup.
         account = organizations.describe_account(org_client, user_account_assignment.account_id)
         slack_notify_user_on_revoke(
             cfg=cfg,
@@ -468,13 +483,21 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
                 ),
             )
             if cfg.post_update_to_slack:
-                slack_notify_user_on_group_access_revoke(
-                    cfg=cfg,
-                    group_assignment=group_assignment,
-                    sso_client=sso_client,
-                    identitystore_client=identitystore_client,
-                    slack_client=slack_client,
-                )
+                # The removal already succeeded; a Slack failure must not abort the loop and
+                # leave the remaining group assignments un-revoked.
+                try:
+                    slack_notify_user_on_group_access_revoke(
+                        cfg=cfg,
+                        group_assignment=group_assignment,
+                        sso_client=sso_client,
+                        identitystore_client=identitystore_client,
+                        slack_client=slack_client,
+                    )
+                except Exception as e:
+                    logger.exception(
+                        f"Failed to notify Slack about a completed group revocation, the revocation itself succeeded: {e}",
+                        extra={"group_assignment": group_assignment},
+                    )
 
 
 def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913

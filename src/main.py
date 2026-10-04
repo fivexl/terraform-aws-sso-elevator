@@ -31,10 +31,13 @@ org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
 identity_store_client = session.client("identitystore")
 s3_client = session.client("s3")
+ssm_client = session.client("ssm")
 
 cfg = config.get_config()
 app = App(
     process_before_response=True,
+    token=config.get_slack_secret(ssm_client, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=False),
+    signing_secret=config.get_slack_secret(ssm_client, config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=False),
     # Logger removed to avoid pickle errors with lazy listeners in Lambda
     # Slack Bolt will use its own default logger instead
 )

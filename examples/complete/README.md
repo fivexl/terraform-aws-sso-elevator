@@ -5,8 +5,8 @@
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.0 |
-| <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 4.64 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.11.0 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 6.0 |
 | <a name="requirement_external"></a> [external](#requirement\_external) | >= 1.0 |
 | <a name="requirement_local"></a> [local](#requirement\_local) | >= 1.0 |
 | <a name="requirement_null"></a> [null](#requirement\_null) | >= 2.0 |
@@ -15,7 +15,7 @@
 
 | Name | Version |
 | ---- | ------- |
-| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 4.64 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 6.0 |
 
 ## Modules
 
@@ -27,8 +27,6 @@
 
 | Name | Type |
 | ---- | ---- |
-| [aws_ssm_parameter.sso_elevator_slack_bot_token](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssm_parameter) | data source |
-| [aws_ssm_parameter.sso_elevator_slack_signing_secret](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssm_parameter) | data source |
 | [aws_ssoadmin_instances.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssoadmin_instances) | data source |
 
 ## Inputs

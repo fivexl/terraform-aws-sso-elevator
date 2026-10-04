@@ -51,14 +51,16 @@ variable "aws_sns_topic_subscription_email" {
   default     = ""
 }
 
-variable "slack_signing_secret" {
-  description = "value for the Slack signing secret"
+variable "slack_bot_token_ssm_parameter_name" {
+  description = "Name of the SSM SecureString parameter holding the Slack bot token, read by every Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see README)."
   type        = string
+  default     = "/sso-elevator/slack-bot-token"
 }
 
-variable "slack_bot_token" {
-  description = "value for the Slack bot token"
+variable "slack_signing_secret_ssm_parameter_name" {
+  description = "Name of the SSM SecureString parameter holding the Slack signing secret, read by the access-requester Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see README)."
   type        = string
+  default     = "/sso-elevator/slack-signing-secret"
 }
 
 variable "log_level" {

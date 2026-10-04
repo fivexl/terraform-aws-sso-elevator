@@ -47,11 +47,10 @@ module "access_requester_slack_handler" {
     {
       LOG_LEVEL = var.log_level
 
-      SLACK_SIGNING_SECRET = var.slack_signing_secret
-      SLACK_BOT_TOKEN      = var.slack_bot_token
-      SLACK_CHANNEL_ID     = var.slack_channel_id
-      SCHEDULE_GROUP_NAME  = var.schedule_group_name
-
+      SLACK_BOT_TOKEN_SSM_PARAMETER_NAME      = aws_ssm_parameter.slack_bot_token.name
+      SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME = aws_ssm_parameter.slack_signing_secret.name
+      SLACK_CHANNEL_ID                        = var.slack_channel_id
+      SCHEDULE_GROUP_NAME                     = var.schedule_group_name
 
       SSO_INSTANCE_ARN                            = local.sso_instance_arn
       SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
@@ -156,6 +155,8 @@ resource "aws_lambda_permission" "url" {
 }
 
 data "aws_iam_policy_document" "slack_handler" {
+  source_policy_documents = [data.aws_iam_policy_document.read_slack_secrets["all"].json]
+
   statement {
     sid    = "GetSAMLProvider"
     effect = "Allow"

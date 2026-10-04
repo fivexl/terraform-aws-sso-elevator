@@ -46,10 +46,9 @@ module "access_revoker" {
   environment_variables = {
     LOG_LEVEL = var.log_level
 
-    SLACK_SIGNING_SECRET = var.slack_signing_secret
-    SLACK_BOT_TOKEN      = var.slack_bot_token
-    SLACK_CHANNEL_ID     = var.slack_channel_id
-    SCHEDULE_GROUP_NAME  = var.schedule_group_name
+    SLACK_BOT_TOKEN_SSM_PARAMETER_NAME = aws_ssm_parameter.slack_bot_token.name
+    SLACK_CHANNEL_ID                   = var.slack_channel_id
+    SCHEDULE_GROUP_NAME                = var.schedule_group_name
 
     SSO_INSTANCE_ARN = local.sso_instance_arn
 
@@ -98,6 +97,8 @@ module "access_revoker" {
 }
 
 data "aws_iam_policy_document" "revoker" {
+  source_policy_documents = [data.aws_iam_policy_document.read_slack_secrets["bot_token"].json]
+
   statement {
     sid    = "AllowDescribeRule"
     effect = "Allow"
@@ -182,7 +183,6 @@ data "aws_iam_policy_document" "revoker" {
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
   }
-
 }
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_scheduled_revocation" {

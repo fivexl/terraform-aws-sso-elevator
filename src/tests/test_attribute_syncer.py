@@ -557,3 +557,21 @@ class TestBuildMappingRules:
             assert len(rule.conditions) == 1
             assert rule.conditions[0].attribute_name == attr_name
             assert rule.conditions[0].expected_value == attr_value
+
+
+def test_lambda_handler_reads_slack_bot_token_from_ssm_in_degrade_mode(monkeypatch):
+    """Degrade mode means an SSM failure costs a Slack message, never the sync itself."""
+    import attribute_syncer
+
+    monkeypatch.delenv("IDENTITY_STORE_ID", raising=False)  # return right after the Slack client is built
+    with (
+        patch("attribute_syncer.load_sync_config", return_value=MagicMock(enabled=True)),
+        patch("attribute_syncer.get_slack_secret", return_value="xoxb-from-ssm") as mock_get_secret,
+        patch("attribute_syncer.WebClient") as mock_web_client,
+    ):
+        attribute_syncer.lambda_handler({}, None)
+
+    mock_get_secret.assert_called_once_with(
+        attribute_syncer._ssm_client, attribute_syncer.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=True
+    )
+    mock_web_client.assert_called_once_with(token="xoxb-from-ssm")

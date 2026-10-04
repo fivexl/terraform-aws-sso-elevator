@@ -9,7 +9,7 @@ behavior needed covering here).
 import json
 import sys
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import botocore.exceptions
 import pytest
@@ -132,6 +132,43 @@ def _cli_request_event(body: dict | None = None, user_arn: str | None = None, ap
     if user_arn is not None:
         event["requestContext"]["authorizer"] = {"iam": {"userArn": user_arn}}
     return event
+
+
+def test_slack_app_gets_its_secrets_from_ssm(main_module):
+    get_parameter_calls = main_module.ssm_client.get_parameter.call_args_list
+    assert call(Name="/test/slack-bot-token", WithDecryption=True) in get_parameter_calls
+    assert call(Name="/test/slack-signing-secret", WithDecryption=True) in get_parameter_calls
+
+
+@pytest.mark.parametrize(
+    ("get_parameter_kwargs", "message"),
+    [
+        ({"side_effect": RuntimeError("AccessDeniedException")}, "Failed to read Slack secret parameter /test/slack-bot-token"),
+        ({"return_value": {"Parameter": {"Value": "REPLACE_ME"}}}, "/test/slack-bot-token still holds the placeholder"),
+    ],
+)
+def test_main_refuses_to_start_without_usable_slack_secrets(get_parameter_kwargs, message):
+    sys.modules.pop("main", None)
+    sys.modules.pop("group", None)
+    sys.modules.pop("cli_auth", None)
+    shared_client = MagicMock()
+    shared_client.get_parameter = MagicMock(**get_parameter_kwargs)
+    with (
+        patch.dict("sys.modules", {}),
+        patch("boto3.Session") as mock_boto3_session,
+        patch("boto3._get_default_session") as mock_default_session,
+        patch("sso.describe_sso_instance", return_value=MagicMock(identity_store_id="d-1234")),
+        patch("slack_bolt.App") as mock_app_cls,
+    ):
+        mock_boto3_session.return_value.client.return_value = shared_client
+        mock_default_session.return_value.client.return_value = shared_client
+        with pytest.raises(RuntimeError, match=message):
+            import main  # noqa: F401
+
+    mock_app_cls.assert_not_called()
+    sys.modules.pop("main", None)
+    sys.modules.pop("group", None)
+    sys.modules.pop("cli_auth", None)
 
 
 # ---------------------------------------------------------------------------
