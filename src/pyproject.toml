@@ -126,3 +126,8 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 xfail_strict = true
 filterwarnings = []
+
+[tool.uv]
+# Soak window: see AGENTS.md "Dependency updates". Older uv ignores it silently.
+exclude-newer = "14 days"
+required-version = ">=0.12.17"

@@ -38,3 +38,4 @@ cmd/elevator/elevator.exe
 
 # goreleaser's local output directory (e.g. from `goreleaser release --snapshot`)
 /dist/
+__pycache__/

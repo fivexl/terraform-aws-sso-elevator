@@ -24,11 +24,15 @@ jobs:
         with:
           python-version: "3.13"
 
+      # Same uv as src/docker/Dockerfile* and pyproject `required-version`;
+      # older uv silently ignores `[tool.uv] exclude-newer`.
       - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.17"
 
       - name: Install pre-commit
-        run: pip3 install pre-commit
+        run: pip3 install pre-commit==4.6.2
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
@@ -46,11 +50,9 @@ jobs:
         # something any change in this PR caused, and broke identically on
         # a clean re-run.
         #
-        # Pinned to an exact version with a checksum check, not just a
-        # direct download, matching this workflow's checksum-free
-        # terraform-docs install below only in spirit -- consistent with
-        # this repo's C2 SHA/version-pinning convention elsewhere (see
-        # cli-release.yml's syft-version and GoReleaser version pins).
+        # Pinned to an exact version with a checksum check, like the
+        # terraform-docs install below and cli-release.yml's syft and
+        # GoReleaser version pins.
         env:
           TFLINT_VERSION: v0.64.0
           TFLINT_ZIP_SHA256: cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
@@ -63,13 +65,19 @@ jobs:
           rm -f tflint_linux_amd64.zip tflint
 
       - name: Install terraform-docs
+        env:
+          TFDOCS_SHA256: 8ec66616777c66f3e622af4f2853e8ae399f38908ad4b262c9c526dd42501369
         run: |
-          curl -Lo /tmp/terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.22.0/terraform-docs-v0.22.0-linux-amd64.tar.gz
+          set -euo pipefail
+          curl -sSLo /tmp/terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.22.0/terraform-docs-v0.22.0-linux-amd64.tar.gz
+          echo "${TFDOCS_SHA256}  /tmp/terraform-docs.tar.gz" | sha256sum -c -
           tar -xzf /tmp/terraform-docs.tar.gz -C /tmp
           sudo mv /tmp/terraform-docs /usr/local/bin/
 
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.74.0
 
       - name: Run tests
         run: bash run-tests.sh

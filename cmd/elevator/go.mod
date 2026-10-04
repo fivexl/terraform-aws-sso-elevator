@@ -20,10 +20,8 @@ go 1.24
 // NOT keep this current: Dependabot's gomod ecosystem only bumps `require`
 // directives, and there is no Go-toolchain ecosystem for it to use instead
 // (unlike e.g. rust-toolchain/dotnet-sdk, which Dependabot does support).
-// This pin will silently rot -- there is currently no automated mechanism
-// that re-checks it -- so bumping it periodically (or whenever govulncheck
-// flags something only fixed in a newer line) needs to be a manual,
-// deliberate step, not something to assume Dependabot is already doing.
+// scripts/deps_ready.py reports the newest soaked patch release for this
+// line; bumping it is a manual release-time step.
 toolchain go1.27.0
 
 require (

@@ -1,9 +1,13 @@
 version: 2
 updates:
+  # Python and Go: security PRs only (limit 0 stops routine version PRs).
+  # Security PRs ignore cooldown, so they are signals: fixes are applied at
+  # release time after the soak in AGENTS.md "Dependency updates".
   - package-ecosystem: "uv"
     directory: "/src"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "src"
     labels:
@@ -15,6 +19,7 @@ updates:
     directory: "/layer"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "layer"
     labels:
@@ -22,20 +27,11 @@ updates:
       - "python"
       - "layer"
 
-  - package-ecosystem: "terraform"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    commit-message:
-      prefix: "terraform"
-    labels:
-      - "dependencies"
-      - "terraform"
-
   - package-ecosystem: "gomod"
     directory: "/cmd/elevator"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "cmd/elevator"
     labels:
@@ -43,17 +39,70 @@ updates:
       - "go"
       - "cli"
 
-  # Every action in .github/workflows is now SHA-pinned (#194 C2) --
-  # without this, nothing ever bumps those pinned SHAs forward, silently
-  # freezing every workflow on whatever commit happened to be current when
-  # each was pinned instead of picking up upstream fixes (including
-  # security fixes to the actions themselves).
+  # Pins with little advisory coverage: one grouped monthly PR per ecosystem.
+  # The 14-day cooldown lets a hijacked release be caught upstream before we
+  # take it; majors still open as individual PRs.
+  - package-ecosystem: "terraform"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+    groups:
+      terraform:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "terraform"
+    labels:
+      - "dependencies"
+      - "terraform"
+
+  # Every action is SHA-pinned; without this nothing moves those pins forward.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "github-actions"
     labels:
       - "dependencies"
       - "github-actions"
+
+  - package-ecosystem: "docker"
+    directory: "/src/docker"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+    groups:
+      docker:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "docker"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+    groups:
+      pre-commit:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "pre-commit"
+    labels:
+      - "dependencies"
+      - "pre-commit"
