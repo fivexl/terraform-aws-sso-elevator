@@ -163,11 +163,9 @@ type requestPayload struct {
 }
 
 // runRequest implements the default `elevator --account ... --permission-set
-// ... --duration ... --reason ...` submission flow. The request to the API
-// Gateway endpoint is signed directly with the caller's own credentials —
-// API Gateway's AWS_IAM authorizer verifies that signature itself and
-// forwards the caller's identity to the Lambda, so there's no separate
-// STS call to make or forward here.
+// ... --duration ... --reason ...` submission flow. The same credentials
+// sign the API Gateway request (for its AWS_IAM authorizer) and the STS
+// identity proof inside the body (for the Lambda; see proof.go).
 func runRequest(args []string) {
 	fs := flag.NewFlagSet("elevator", flag.ExitOnError)
 	fs.Usage = func() { usage(fs.Output()) }
@@ -176,6 +174,7 @@ func runRequest(args []string) {
 	duration := fs.String("duration", "", "How long access is needed, in minutes (required)")
 	reason := fs.String("reason", "", "Reason for the access request (required)")
 	endpointFlag := fs.String("endpoint", "", "SSO Elevator API invoke URL (overrides ELEVATOR_ENDPOINT and the saved config file if set)")
+	apiIDFlag := fs.String("api-id", "", "REST API id the request is addressed to; needed only for a custom-domain endpoint (overrides ELEVATOR_API_ID and the saved config file)")
 	region := fs.String("region", "", "AWS region for SigV4 signing (defaults to the region parsed from --endpoint's own hostname if it's an API Gateway default invoke URL, else the resolved AWS config region, falling back to us-east-1)")
 	exitIfHelpRequested(fs, args)
 	fs.Parse(args)
@@ -204,19 +203,23 @@ func runRequest(args []string) {
 	// flag > env > saved config, so a corrupt or unreadable
 	// ~/.elevator/config.json must not fatal a request that never needed it.
 	envEndpoint := os.Getenv("ELEVATOR_ENDPOINT")
-	var configEndpoint string
-	if *endpointFlag == "" && envEndpoint == "" {
-		cfg, err := loadConfig()
-		if err != nil {
+	envAPIID := os.Getenv("ELEVATOR_API_ID")
+	var saved cliConfig
+	if (*endpointFlag == "" && envEndpoint == "") || (*apiIDFlag == "" && envAPIID == "") {
+		var err error
+		if saved, err = loadConfig(); err != nil {
 			log.Fatalf("load config: %v", err)
 		}
-		configEndpoint = cfg.Endpoint
 	}
-	endpoint := resolveEndpoint(*endpointFlag, envEndpoint, configEndpoint)
+	endpoint := resolveEndpoint(*endpointFlag, envEndpoint, saved.Endpoint)
 	if endpoint == "" {
 		log.Fatal("no --endpoint given, ELEVATOR_ENDPOINT not set, and none saved — run `elevator configure --endpoint URL` once, pass --endpoint, or set ELEVATOR_ENDPOINT")
 	}
 	if err := validateEndpointScheme(endpoint); err != nil {
+		log.Fatal(err)
+	}
+	apiID, err := resolveAPIID(endpoint, *apiIDFlag, envAPIID, saved.APIID)
+	if err != nil {
 		log.Fatal(err)
 	}
 
@@ -234,14 +237,23 @@ func runRequest(args []string) {
 		log.Fatalf("retrieve credentials: %v", err)
 	}
 
-	body, err := json.Marshal(requestPayload{
+	payload, err := json.Marshal(requestPayload{
 		Account:       *account,
 		PermissionSet: *permissionSet,
 		Duration:      *duration,
 		Reason:        *reason,
 	})
 	if err != nil {
-		log.Fatalf("encode request body: %v", err)
+		log.Fatalf("encode request payload: %v", err)
+	}
+	nonce, err := newNonce()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// The Lambda accepts only a proof for STS in its own region, which is the API's region.
+	body, err := buildEnvelope(ctx, creds, payload, apiID, resolvedRegion, nonce, time.Now())
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))

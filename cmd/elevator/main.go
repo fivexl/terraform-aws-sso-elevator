@@ -1,9 +1,8 @@
 // elevator is a CLI that submits a temporary AWS access request without Slack.
 //
-// It signs the request directly with the caller's own local AWS credentials
-// and sends it to the SSO Elevator API. API Gateway's AWS_IAM authorizer
-// verifies that signature itself, so there's nothing left for this CLI to
-// do beyond signing and sending — no separate STS call, no header forwarding.
+// It signs the request with the caller's own local AWS credentials and sends
+// it to the SSO Elevator API, together with a presigned
+// sts:GetCallerIdentity request the Lambda uses to verify who the caller is.
 package main
 
 import (
@@ -136,12 +135,12 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `elevator — submit a temporary AWS access request without Slack.
 
 It signs the request with your local AWS credentials and posts it to the
-SSO Elevator API; API Gateway's AWS_IAM authorizer verifies the signature
-and the Lambda extracts your identity from it — no separate login step.
+SSO Elevator API with a signed proof of your identity, which the API checks
+with AWS STS — no separate login step.
 
 Usage:
   elevator --account ID --permission-set NAME --duration MINUTES --reason TEXT [flags]
-  elevator configure --endpoint URL
+  elevator configure [--endpoint URL] [--api-id ID]
   elevator version
   elevator help | -h | --help
 
@@ -154,6 +153,9 @@ Flags (for the default request-submission command):
   --reason            Reason for the access request (required, at most 1000 characters)
   --endpoint          SSO Elevator API invoke URL — overrides the saved
                       config file and ELEVATOR_ENDPOINT for this call only
+  --api-id            REST API id (Terraform output requester_api_id) — needed
+                      only when --endpoint is a custom domain; overrides the
+                      saved config file and ELEVATOR_API_ID for this call only
   --region            AWS region for SigV4 signing — if omitted, parsed from
                       --endpoint's own hostname when it's a standard
                       execute-api.<region>.amazonaws.com URL, else the
@@ -163,6 +165,9 @@ Configuration, in precedence order (highest first):
   1. --endpoint flag
   2. ELEVATOR_ENDPOINT environment variable
   3. ~/.elevator/config.json, written by `+"`elevator configure --endpoint URL`"+`
+The API id resolves the same way (--api-id, ELEVATOR_API_ID, then
+`+"`elevator configure --api-id ID`"+`), and only for a custom-domain endpoint:
+a default execute-api URL already names its API.
 
 Credentials and region come from the standard AWS SDK chain — AWS_PROFILE,
 AWS_REGION, an active SSO session, etc. Nothing AWS-specific is configured

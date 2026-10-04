@@ -162,8 +162,8 @@ class Config(BaseSettings):
 
     sso_instance_arn: str
 
-    # Id of the CLI REST API. "" means the CLI route is disabled and main.py rejects every
-    # CLI event. Not a secret: it only stops a direct invoke that doesn't forge requestContext.apiId.
+    # Id of the REST API: the audience a CLI identity proof must name (cli_proof). "" means the CLI
+    # route is disabled and main.py rejects every CLI event. Public, not a secret.
     cli_expected_api_id: str = ""
 
     log_level: str = "INFO"
