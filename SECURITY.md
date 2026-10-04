@@ -2,13 +2,17 @@
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+Security fixes go into the latest major version.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.x.x   | :white_check_mark: |
-| 3.x.x   | :white_check_mark: |
+| 5.x.x   | :white_check_mark: |
+| < 5.0   | :x:                |
+
+## Accepted Risks
+
+Known weaknesses we chose not to fix, with the reasoning, are listed in
+[docs/accepted-risks.md](docs/accepted-risks.md).
 
 ## Reporting a Vulnerability
 

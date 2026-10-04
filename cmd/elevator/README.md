@@ -4,7 +4,7 @@ Submit a temporary AWS access request without Slack.
 
 ## Why this exists
 
-The normal SSO Elevator flow happens entirely in Slack: you post a request, an approver clicks Approve, and the module grants a temporary permission set. That works well for a person, but it's awkward for a script, a CI job, or an AI coding agent that can't click a button — they need a command that submits the same request and reports a clear result via its exit code (0 on success, non-zero otherwise) and human-readable output on stdout/stderr. There's no `--json` / structured-output mode yet, so a caller that needs to parse the result programmatically (rather than just check the exit code) has to parse this prose output itself. `elevator` signs the request with your own local AWS credentials and posts it directly to the module's `POST /access-requester-cli` route; API Gateway's `AWS_IAM` authorizer verifies that signature itself, and the Lambda extracts your identity from the verified request context (`src/cli_auth.py`) before running it through the exact same approval pipeline a Slack-submitted request goes through — same approvers, same self-approval rules, same audit log.
+The normal SSO Elevator flow happens entirely in Slack: you post a request, an approver clicks Approve, and the module grants a temporary permission set. That works well for a person, but it's awkward for a script, a CI job, or an AI coding agent that can't click a button — they need a command that submits the same request and reports a clear result via its exit code (0 on success, non-zero otherwise) and human-readable output on stdout/stderr. There's no `--json` / structured-output mode yet, so a caller that needs to parse the result programmatically (rather than just check the exit code) has to parse this prose output itself. `elevator` signs the request with your own local AWS credentials and posts it directly to the module's `POST /access-requester-cli` route, with a proof of your identity (see [How your identity is proved](#how-your-identity-is-proved)). The request then goes through the same approval pipeline as a Slack request: same approvers, same self-approval rules, same audit log.
 
 You must call from an account in the module's AWS Organization. Outside the module's own account, your permission set also needs `execute-api:Invoke` on the module's `requester_api_execution_arn_cli` output.
 
@@ -29,7 +29,7 @@ brew install elevator
 curl -fsSL https://raw.githubusercontent.com/fivexl/terraform-aws-sso-elevator/main/install.sh | sh
 ```
 
-Downloads the right binary for your OS/arch from GitHub Releases, verifies its checksum, and installs it to `~/.local/bin` (override with `ELEVATOR_INSTALL_DIR`). Pin a specific version with `ELEVATOR_VERSION=4.4.3`. Repository releases use stable bare `X.Y.Z` tags; the module and CLI always share the same version.
+Downloads the right binary for your OS/arch from GitHub Releases, verifies its checksum, and installs it to `~/.local/bin` (override with `ELEVATOR_INSTALL_DIR`). Pin a specific version with `ELEVATOR_VERSION=5.0.0`. Repository releases use stable bare `X.Y.Z` tags; the module and CLI always share the same version.
 
 ### Build from source
 
@@ -77,9 +77,19 @@ codesign --verify -R '=anchor apple generic and certificate leaf[subject.OU] = T
    ```
    (writes `~/.elevator/config.json`)
 
-Use the module's `requester_api_endpoint_url_cli` output as the endpoint. After a module upgrade that moved the CLI route to its own REST API, re-run `elevator configure --endpoint` with the new value.
+Use the module's `requester_api_endpoint_url_cli` output as the endpoint.
+
+**Custom domain.** The identity proof names the module's REST API id, and a default `execute-api` URL already contains it. If you reach the API through a custom domain, also set the id from the module's `requester_api_id` output. It resolves the same way: `--api-id` flag, then `ELEVATOR_API_ID`, then the saved config:
+
+```bash
+elevator configure --endpoint https://elevator.example.com/access-requester-cli --api-id abcde12345
+```
+
+`configure --endpoint` clears a saved API id, because that id belonged to the old endpoint; `configure --api-id` alone keeps the saved endpoint. The region is not saved: with a custom domain, set `--region` or `AWS_REGION` to the deployment's region, or the proof is signed for the wrong region and rejected with `403`.
 
 Credentials and region come from the standard AWS SDK chain — `AWS_PROFILE`, `AWS_REGION`, an active SSO session, etc. — the same way any AWS CLI command resolves them. `elevator` doesn't have its own profile setting; there's nothing extra to configure for auth beyond a normal AWS environment.
+
+**Upgrading to 5.0.0.** 5.0.0 moved the module to a new API, so the old endpoint is gone. Upgrade `elevator` to 5.0.0, then re-run `elevator configure --endpoint` with the new `requester_api_endpoint_url_cli` value, and update `ELEVATOR_ENDPOINT` wherever you set it. A 5.0.0 deployment answers older CLIs with `400` and "requires elevator CLI 5.0.0 or newer".
 
 ## Use
 
@@ -92,6 +102,7 @@ elevator --account 123456789012 --permission-set ReadOnly --duration 120 --reaso
 - `--duration` — How long access is needed, as a positive integer number of minutes (required). Any whole number of minutes is valid, up to whatever maximum this deployment allows — not limited to the specific options the Slack request modal's dropdown shows.
 - `--reason` — Reason for the access request (required, at most 1000 characters)
 - `--endpoint` — SSO Elevator API invoke URL for this call only, overriding `ELEVATOR_ENDPOINT` and the saved config file (see [Configure](#configure))
+- `--api-id` — REST API id for this call only, needed only with a custom-domain endpoint; overrides `ELEVATOR_API_ID` and the saved config file
 - `--region` — AWS region for SigV4 signing; if omitted, it's parsed from `--endpoint`'s own hostname when that's a standard `execute-api.<region>.amazonaws.com` URL, else the resolved AWS config region, falling back to `us-east-1`
 
 Run `elevator --help` for the full flag reference.
@@ -101,3 +112,18 @@ Run `elevator --help` for the full flag reference.
 **Timeouts and retries.** Each attempt is bounded to 35 seconds. A connection that fails before reaching the server (DNS, refused connection) is retried automatically up to 3 times; a timeout waiting for a response is not retried automatically, since the request may already have reached the Lambda by then — retrying blindly could submit (and possibly auto-grant) the same request twice. If you hit that, check Slack or IAM Identity Center before running the command again.
 
 Check the installed version and build info with `elevator version`.
+
+## How your identity is proved
+
+API Gateway checks your request signature, but the Lambda behind it cannot trust what API Gateway tells it about you: anyone allowed to invoke the Lambda directly could make up that information. So `elevator` also sends a presigned `sts:GetCallerIdentity` request inside the request body. It contains:
+
+- a URL for your region's STS endpoint, signed with your credentials, including your session token for temporary credentials. Your secret access key is never sent.
+- signed headers binding it to this request: the SHA-256 of the request body, the module's REST API id, and a random nonce.
+
+The Lambda checks the binding, sends the presigned request to STS once, and uses the ARN and account STS returns as your identity. A proof is accepted for 60 seconds and only for this exact request on this deployment.
+
+What this means for you:
+
+- Your credentials must be able to call `sts:GetCallerIdentity`. Any valid AWS credentials can: it needs no IAM permission, and an explicit deny does not block it.
+- Your clock must be accurate. A clock more than 30 seconds fast or about 60 seconds slow gets `403`.
+- `503` means STS or AWS Organizations did not answer in time. Run the command again.

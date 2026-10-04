@@ -181,7 +181,7 @@ def test_main_refuses_to_start_without_usable_slack_secrets(get_parameter_kwargs
 
 
 def test_lambda_handler_routes_cli_event_to_cli_handler(main_module):
-    """The CLI's REST API proxy event (cli_rest_api.tf) has no routeKey at all --
+    """The CLI's REST API proxy event (rest_api.tf) has no routeKey at all --
     it's identified by httpMethod/resource instead."""
     event = {"httpMethod": "POST", "resource": main_module.CLI_ACCESS_REQUEST_PATH, "path": "/default/access-requester-cli"}
     with patch.object(main_module, "handle_cli_access_request", return_value={"statusCode": 200}) as mock_handle:
