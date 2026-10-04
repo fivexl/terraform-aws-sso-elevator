@@ -16,6 +16,8 @@ repos:
         entry: python
         args: [-m, py_compile]
         language: python
+        # ruff format targets py314 and writes PEP 758 `except A, B:`, which older Pythons reject.
+        language_version: python3.14
         types: [python]
         require_serial: false
     -   id: uv-export-src

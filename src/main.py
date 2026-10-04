@@ -328,7 +328,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # cost and lose extract_identity's transient-error handling.
         try:
             requester_user_id = sso.find_user_principal_id_by_email_strict(requester.email, list_of_users)
-        except (SSOUserNotFound, AmbiguousSSOUser):
+        except SSOUserNotFound, AmbiguousSSOUser:
             # Neither "nobody has this email" nor "more than one user has
             # this email" can confirm the requester's identity -- both are
             # treated the same as an outright mismatch below, not as an

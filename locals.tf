@@ -1,8 +1,7 @@
 locals {
-  # Full python version is used for checking the python version before deployment in check_python_version.tf
-  full_python_version = "3.13.0"
-  # Python version is used for building the docker image in slack_handler_lambda.tf/perm_revoker_lambda.tf/layers.tf
-  python_version = join(".", slice(split(".", local.full_python_version), 0, 2))
+  # Lambda runtime (python<version>) for the zip-deployed functions and the dependency layer.
+  # Keep in step with the src/docker base images and requires-python in src/ and layer/.
+  python_version = "3.14"
 
   revoker_lambda_arn   = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.revoker_lambda_name}"
   requester_lambda_arn = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"

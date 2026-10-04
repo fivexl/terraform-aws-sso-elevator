@@ -22,7 +22,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       # Same uv as src/docker/Dockerfile* and pyproject `required-version`;
       # older uv silently ignores `[tool.uv] exclude-newer`.
@@ -129,7 +129,7 @@ jobs:
 
   #     - uses: actions/setup-python@v4
   #       with:
-  #         python-version: '3.13'
+  #         python-version: '3.14'
 
   #     - name: Terraform-local installation
   #       run: pip3 install terraform-local==0.16.1

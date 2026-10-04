@@ -7,7 +7,7 @@ module "sso_elevator_dependencies" {
   layer_name      = "sso_elevator_dependencies"
   description     = "powertools-pydantic/boto3/slack_bolt"
 
-  compatible_runtimes      = ["python3.13"]
+  compatible_runtimes      = ["python${local.python_version}"]
   compatible_architectures = [var.lambda_architecture]
   build_in_docker          = true
   runtime                  = "python${local.python_version}"

@@ -5,7 +5,7 @@ description = ""
 authors = [
     {name = "FivexL Consuling Services", email = "open.source@fivexl.io"}
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dynamic = []
 dependencies = [
     "slack-bolt>=1.26.0",
