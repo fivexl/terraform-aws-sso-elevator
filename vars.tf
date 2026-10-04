@@ -1,9 +1,3 @@
-variable "create_api_gateway" {
-  description = "If true, module will create & configure API Gateway for the Lambda function"
-  type        = bool
-  default     = true
-}
-
 variable "ecr_repo_name" {
   description = "The name of the ECR repository."
   type        = string
@@ -469,12 +463,40 @@ variable "identity_store_id" {
 # ==========================================
 
 variable "enable_access_requester_cli" {
-  description = "If true, creates a separate REST API with a POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Requires create_api_gateway = true. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Off by default so upgrading an existing deployment doesn't silently add a new AWS_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it."
+  description = "If true, adds a POST /access-requester-cli route to the requester REST API so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Only principals in this AWS Organization can call it. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization for the principal running Terraform, plus more Organizations read permissions in the management account or a delegated administrator (see the README CLI tool section). Set to false if you only use Slack."
+  type        = bool
+  default     = true
+}
+
+# ==========================================
+# API Gateway protection
+# ==========================================
+
+variable "waf_enabled" {
+  description = "If true, the module creates a REGIONAL AWS WAF web ACL (per-IP rate limit plus the AWS managed Common, Known Bad Inputs and Amazon IP Reputation rule sets), associates it with the requester API stage, and logs to the CloudWatch log group aws-waf-logs-<api_gateway_name>. Cannot be combined with waf_web_acl_arn. Leave both unset when AWS Firewall Manager associates a web ACL for you."
   type        = bool
   default     = false
+}
+
+variable "waf_web_acl_arn" {
+  description = "ARN of an existing REGIONAL AWS WAF web ACL to associate with the requester API stage, for organizations that manage a central web ACL. Cannot be combined with waf_enabled."
+  type        = string
+  default     = null
+}
+
+variable "waf_rate_limit" {
+  description = "Requests per 5 minutes a single IP may send before the module-created web ACL blocks it. All Slack traffic comes from Slack's shared IPs and one access request is about 5 calls, so keep it well above your peak request rate. Used only when waf_enabled is true."
+  type        = number
+  default     = 1000
 
   validation {
-    condition     = !var.enable_access_requester_cli || var.create_api_gateway
-    error_message = "enable_access_requester_cli = true requires create_api_gateway = true."
+    condition     = var.waf_rate_limit >= 10 && floor(var.waf_rate_limit) == var.waf_rate_limit
+    error_message = "waf_rate_limit must be a whole number of at least 10 (the AWS WAF minimum)."
   }
+}
+
+variable "api_gateway_access_logs_enabled" {
+  description = "If true, the module creates a CloudWatch log group and enables access logging on the requester API stage. Requires the account's API Gateway CloudWatch Logs role (aws_api_gateway_account) to be set already; the module does not manage it."
+  type        = bool
+  default     = false
 }

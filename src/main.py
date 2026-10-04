@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import timedelta
 from typing import Callable
@@ -14,6 +15,7 @@ from slack_sdk.web.slack_response import SlackResponse
 
 import access_control
 import cli_auth
+import cli_proof
 import config
 import entities
 import group
@@ -44,29 +46,29 @@ app = App(
 )
 
 
-# Must match api_resource_path_cli in locals.tf (the CLI REST API's resource path).
+# Must match api_resource_path_cli in locals.tf.
 CLI_ACCESS_REQUEST_PATH = "/access-requester-cli"
 
 
+UPGRADE_ELEVATOR_MESSAGE = (
+    "This SSO Elevator deployment requires elevator CLI 5.0.0 or newer, which proves your identity to it. Upgrade elevator and try again."
+)
+
+
 def _is_cli_event(event: dict) -> bool:
-    """Whether event is a REST API proxy event for the CLI route. Slack events come from an
-    HTTP API (payload format 2.0, routeKey instead of httpMethod/resource), so they never match.
-    """
+    """Whether event is a REST API proxy event for the CLI route. Slack's route on the same REST API
+    has a different resource, so its events go to Bolt."""
     return event.get("httpMethod") == "POST" and event.get("resource") == CLI_ACCESS_REQUEST_PATH
 
 
+def _cli_response(status: int, message: str) -> dict:
+    return {"statusCode": status, "headers": {"content-type": "application/json"}, "body": json.dumps({"message": message})}
+
+
 def _transient_aws_error_response() -> dict:
-    # Shared by every AWS call handle_cli_access_request makes that can fail
-    # for a reason saying nothing about whether the request itself is valid
-    # (throttling, a 5xx, a connectivity blip) -- a 503 tells the caller
-    # this is worth retrying, instead of either GENERIC_REJECTION's "your
-    # credentials are invalid" or the blanket handler's 500-plus-Slack-post
-    # for what's just AWS being temporarily unavailable.
-    return {
-        "statusCode": 503,
-        "headers": {"content-type": "application/json"},
-        "body": json.dumps({"message": "Could not verify your request right now due to a transient AWS error. Please try again."}),
-    }
+    # For AWS failures that say nothing about the request (throttling, a 5xx, a blip):
+    # a 503 tells the caller to retry, unlike GENERIC_REJECTION or the blanket 500.
+    return _cli_response(503, "Could not verify your request right now due to a transient AWS error. Please try again.")
 
 
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
@@ -77,54 +79,32 @@ def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
 
 
 def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, PLR0915
-    """Handle a CLI access request on CLI_ACCESS_REQUEST_PATH. API Gateway has verified the
-    signature; cli_auth decides whether the identity may act. Then it joins the Slack path at
-    process_access_request."""
+    """Handle a CLI access request on CLI_ACCESS_REQUEST_PATH. The caller's identity comes from the
+    STS proof in the body (cli_proof), never from requestContext, which a direct Lambda invoke can
+    forge. cli_auth then decides whether that identity may act, and the request joins the Slack path
+    at process_access_request. The event body carries the proof, so it is never logged."""
     logger.info("Handling CLI access request")
     try:
-        # `or {}` because a key may hold an explicit JSON null. user_arn is read early so every
-        # rejection can log it; it is authorizer-verified, and the stage has no access logging.
-        request_context = event.get("requestContext") or {}
-        user_arn = (request_context.get("identity") or {}).get("userArn", "")
-
-        # When the CLI route is disabled the expected API id is "", so a forged direct invoke
-        # carrying "apiId": "" would pass the comparison. Rejecting outright keeps a deployment
-        # that never enabled the CLI from accepting CLI-shaped events.
+        # Without an expected API id every proof would be checked against "", so refuse outright.
         if not cfg.cli_expected_api_id:
-            logger.info("Rejected CLI request: the CLI route is not enabled", extra={"user_arn": user_arn})
+            logger.info("Rejected CLI request: the CLI route is not enabled")
             return cli_auth.GENERIC_REJECTION
-
-        # Defense-in-depth only; see config.cli_expected_api_id.
-        if request_context.get("apiId") != cfg.cli_expected_api_id:
-            logger.info(
-                "Rejected CLI request: requestContext.apiId did not match this deployment's API Gateway",
-                extra={"user_arn": user_arn},
-            )
-            return cli_auth.GENERIC_REJECTION
-
-        logger.info("CLI caller userArn", extra={"user_arn": user_arn})
-
-        # Validate the body before extract_identity: its Identity Store scan is the most expensive
-        # call here, and any signer could otherwise drive it with garbage payloads.
+        if event.get("isBase64Encoded"):
+            logger.info("Rejected CLI request: the body is not a version 1 proof envelope")
+            return _cli_response(400, UPGRADE_ELEVATOR_MESSAGE)
         try:
-            body = json.loads(event.get("body") or "{}")
-        except json.JSONDecodeError:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "Request body must be valid JSON."}),
-            }
-        # A syntactically valid JSON document isn't necessarily an object --
-        # e.g. "[]" or "42" both pass json.loads above, and body.get below
-        # would then raise AttributeError, unwinding to the blanket
-        # exception handler as a 500 plus a Slack post for what's just bad
-        # caller input.
-        if not isinstance(body, dict):
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "Request body must be a JSON object."}),
-            }
+            envelope = cli_proof.parse_envelope(
+                event.get("body"), expected_api_id=cfg.cli_expected_api_id, region=os.environ.get("AWS_REGION", "")
+            )
+        except cli_proof.UpgradeRequired:
+            logger.info("Rejected CLI request: the body is not a version 1 proof envelope")
+            return _cli_response(400, UPGRADE_ELEVATOR_MESSAGE)
+        except cli_proof.BadRequest as e:
+            return _cli_response(400, str(e))
+        except cli_proof.ProofRejected as e:
+            logger.info(f"Rejected CLI request: {e}")
+            return cli_auth.GENERIC_REJECTION
+        body = envelope.payload
 
         # Coerced to "" rather than left as whatever JSON type the caller
         # sent -- account_id in particular gets passed straight into
@@ -137,18 +117,10 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         reason = body.get("reason", "")
         reason = reason if isinstance(reason, str) else ""
         if not account_id or not permission_set_name or not reason:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "account, permission_set, and reason are all required and must be non-empty."}),
-            }
+            return _cli_response(400, "account, permission_set, and reason are all required and must be non-empty.")
         # Cheap first cut; the full size check needs the account name, so it runs once that is known.
         if len(reason) > slack_helpers.REASON_MAX_LENGTH:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": f"{slack_helpers.REASON_TOO_LONG}."}),
-            }
+            return _cli_response(400, f"{slack_helpers.REASON_TOO_LONG}.")
 
         # A strict, length-bounded digit-string match rather than a bare
         # int(...) call -- Python's int() silently truncates a JSON *number*
@@ -182,28 +154,40 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         minutes = int(duration_value) if isinstance(duration_value, str) and re.fullmatch(r"[0-9]{1,7}", duration_value) else 0
         max_allowed_minutes = _max_allowed_minutes(cfg)
         if minutes <= 0 or minutes > max_allowed_minutes:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps(
-                    {
-                        "message": (
-                            f"duration must be a positive integer number of minutes, no greater than "
-                            f"{max_allowed_minutes} (this deployment's configured maximum)."
-                        )
-                    }
-                ),
-            }
+            return _cli_response(
+                400,
+                f"duration must be a positive integer number of minutes, no greater than "
+                f"{max_allowed_minutes} (this deployment's configured maximum).",
+            )
+
+        # The STS call and the Identity Store scan are the costliest steps, so every check on the
+        # payload itself runs first.
+        try:
+            caller = cli_proof.fetch_caller_identity(envelope)
+        except cli_proof.ProofRejected as e:
+            logger.info(f"Rejected CLI request: {e}")
+            return cli_auth.GENERIC_REJECTION
+        except cli_proof.ProofUnavailable as e:
+            logger.warning(f"STS could not verify the CLI proof; asking the caller to retry: {e}")
+            return _transient_aws_error_response()
+        user_arn = caller.arn
+        logger.info("CLI caller verified by STS", extra={"user_arn": user_arn})
 
         try:
-            identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if user_arn else None
-        except cli_auth.TransientIdentityStoreError as e:
-            # The Identity Store couldn't answer right now; that says nothing about the caller,
-            # so ask them to retry. The exception is raised bare, so the detail is on __cause__.
-            logger.warning(f"Transient Identity Store error while verifying CLI identity; asking the caller to retry: {e.__cause__}")
+            in_organization = cli_auth.caller_account_in_organization(org_client, caller.account)
+            identity = (
+                cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if in_organization else None
+            )
+        except cli_auth.TransientAWSError as e:
+            # Organizations or the Identity Store couldn't answer right now; that says nothing about
+            # the caller, so ask them to retry. The exception is raised bare, so the detail is on __cause__.
+            logger.warning(f"Transient AWS error while verifying CLI identity; asking the caller to retry: {e.__cause__}")
             return _transient_aws_error_response()
         if not identity:
-            logger.info("Rejected CLI request: could not verify a signed identity with an email", extra={"user_arn": user_arn})
+            logger.info(
+                "Rejected CLI request: the verified identity is outside this organization or has no SSO user",
+                extra={"user_arn": user_arn},
+            )
             return cli_auth.GENERIC_REJECTION
         identity_email, identity_user_id, list_of_users = identity
 
@@ -251,19 +235,14 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             return _transient_aws_error_response()
         # One shared message for both checks, not a distinct one naming
         # which field was wrong (#194 B8): any authenticated SSO caller can
-        # already reach this point (this route's AWS_IAM authorizer proves
-        # signing capability, not that the signer is one this deployment's
-        # policy actually intends to allow), so telling "account" and
+        # already reach this point (any SSO user in the organization who
+        # passes the STS proof reaches this point), so telling "account" and
         # "permission_set" apart here would let one walk the account ID and
         # permission-set name spaces separately, confirming each real value
         # one field at a time instead of needing a whole matching pair
         # before learning anything.
         if account_id not in real_account_ids or permission_set_name not in real_permission_sets:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "account and permission_set must both be ones this deployment is configured for."}),
-            }
+            return _cli_response(400, "account and permission_set must both be ones this deployment is configured for.")
         # No check that the caller already holds this assignment: elevation grants access the
         # caller lacks, so such a check would reject every genuine request.
         try:
@@ -345,11 +324,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             )
         )
         if rejection := slack_helpers.request_rejection(request):
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": f"{rejection}."}),
-            }
+            return _cli_response(400, f"{rejection}.")
 
         decision, succeeded = process_access_request(request=request, requester=requester, client=app.client)
 
@@ -369,11 +344,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
     except ShownOnRequest as e:
         # The request's own Slack message and thread already show this failure.
         logger.exception(f"CLI access request failed after it was posted: {e}")
-        return {
-            "statusCode": 500,
-            "headers": {"content-type": "application/json"},
-            "body": json.dumps({"message": "Access could not be granted. Details are in the request's Slack thread."}),
-        }
+        return _cli_response(500, "Access could not be granted. Details are in the request's Slack thread.")
     except Exception as e:
         logger.exception(f"Error handling CLI access request: {e}")
         # Guarded separately from the logger.exception above (found live by
@@ -391,11 +362,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             )
         except Exception:
             logger.exception("Failed to post the CLI access request error notification to Slack")
-        return {
-            "statusCode": 500,
-            "headers": {"content-type": "application/json"},
-            "body": json.dumps({"message": "An unexpected error occurred while processing the request."}),
-        }
+        return _cli_response(500, "An unexpected error occurred while processing the request.")
 
 
 def _max_allowed_minutes(cfg: config.Config) -> int:

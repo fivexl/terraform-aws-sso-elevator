@@ -5,7 +5,7 @@
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.0 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.11 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 6.28 |
 | <a name="requirement_external"></a> [external](#requirement\_external) | >= 1.0 |
 | <a name="requirement_local"></a> [local](#requirement\_local) | >= 1.0 |
@@ -37,7 +37,8 @@ No inputs.
 
 | Name | Description |
 | ---- | ----------- |
-| <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The URL to invoke the Lambda function |
+| <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | Paste into the Slack app manifest as the Request URL. |
 | <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | Pass this to `elevator configure --endpoint` (or set as ELEVATOR\_ENDPOINT). |
 | <a name="output_requester_api_execution_arn_cli"></a> [requester\_api\_execution\_arn\_cli](#output\_requester\_api\_execution\_arn\_cli) | Grant execute-api:Invoke on this ARN in the permission sets of CLI callers in other accounts. |
+| <a name="output_requester_api_id"></a> [requester\_api\_id](#output\_requester\_api\_id) | Pass this to `elevator configure --api-id` when the CLI reaches the API through a custom domain. |
 <!-- END_TF_DOCS -->

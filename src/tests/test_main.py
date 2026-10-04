@@ -7,12 +7,23 @@ behavior needed covering here).
 """
 
 import json
+import secrets
 import sys
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import botocore.exceptions
 import pytest
+
+from .proof_helpers import SESSION_TOKEN, SIGNATURE, make_body, proof_query
+
+# STS identity per proof nonce: _cli_request_event registers it, the fixture's fake STS returns it.
+_ARN_BY_NONCE: dict[str, str] = {}
+# The unpatched cli_proof.fetch_caller_identity, saved by main_module for tests that run the real one.
+_REAL_FETCH_CALLER_IDENTITY: list = []
+CLI_API_ID = "test-api-id"  # conftest's cli_expected_api_id
+CLI_REGION = "eu-central-1"
 
 # Stand-ins for the deployment's real (Organizations/Identity Center) account
 # and permission-set catalog, used to fake organizations.get_accounts_from_config_with_cache
@@ -81,7 +92,10 @@ def main_module():
         mock_app_cls.return_value = MagicMock()
         import main
 
+        _REAL_FETCH_CALLER_IDENTITY[:] = [main.cli_proof.fetch_caller_identity]
         with (
+            patch.dict("os.environ", {"AWS_REGION": CLI_REGION}),
+            patch.object(main.cli_proof, "fetch_caller_identity", side_effect=_fake_fetch_caller_identity),
             patch.object(main.organizations, "get_accounts_from_config_with_cache", side_effect=_fake_accounts_from_config),
             patch.object(main.sso, "get_permission_sets_from_config_with_cache", side_effect=_fake_permission_sets_from_config),
             patch.object(main.organizations, "describe_account", side_effect=lambda _client, account_id: _account(main, account_id)),
@@ -96,17 +110,32 @@ def _account(main, account_id: str):  # noqa: ANN001, ANN202
     return main.entities.aws.Account(id=account_id, name="aft")
 
 
-def _cli_request_event(body: dict | None = None, user_arn: str | None = None, api_id: str | None = "test-api-id") -> dict:
-    """A REST API proxy event for the CLI route; api_id defaults to conftest's cli_expected_api_id."""
-    event = {
-        "httpMethod": "POST",
-        "resource": sys.modules["main"].CLI_ACCESS_REQUEST_PATH,
-        "body": json.dumps(body) if body is not None else None,
-        "requestContext": {"apiId": api_id} if api_id is not None else {},
-    }
+def _fake_fetch_caller_identity(envelope):  # noqa: ANN001, ANN202
+    """Stands in for STS: the identity registered for this proof's nonce, else STS refuses it."""
+    arn = _ARN_BY_NONCE.get(envelope.headers["x-elevator-nonce"])
+    if arn is None:
+        raise sys.modules["main"].cli_proof.ProofRejected("STS refused the proof: 403 SignatureDoesNotMatch")
+    return sys.modules["main"].cli_proof.CallerIdentity(arn=arn, account=arn.split(":")[4])
+
+
+def _cli_request_event(body: dict | None = None, user_arn: str | None = None, api_id: str = CLI_API_ID) -> dict:
+    """A REST API proxy event for the CLI route carrying a fresh v1 proof envelope for body, addressed
+    to api_id. user_arn is the identity the fake STS returns for the proof; None means STS refuses it.
+    body=None sends no body at all, as an old CLI with nothing to send would."""
+    nonce = secrets.token_hex(16)
     if user_arn is not None:
-        event["requestContext"]["identity"] = {"userArn": user_arn}
-    return event
+        _ARN_BY_NONCE[nonce] = user_arn
+    return {
+        "resource": sys.modules["main"].CLI_ACCESS_REQUEST_PATH,
+        "path": sys.modules["main"].CLI_ACCESS_REQUEST_PATH,
+        "httpMethod": "POST",
+        "headers": {"content-type": "application/json"},
+        "requestContext": {"apiId": "forgeable", "httpMethod": "POST", "stage": "default", "identity": {"userArn": "forgeable"}},
+        "body": None
+        if body is None
+        else make_body(body, api_id=api_id, nonce=nonce, query=proof_query(region=CLI_REGION, signed_at=datetime.now(UTC))),
+        "isBase64Encoded": False,
+    }
 
 
 def test_slack_app_gets_its_secrets_from_ssm(main_module):
@@ -152,7 +181,7 @@ def test_main_refuses_to_start_without_usable_slack_secrets(get_parameter_kwargs
 
 
 def test_lambda_handler_routes_cli_event_to_cli_handler(main_module):
-    """The CLI's REST API proxy event (cli_rest_api.tf) has no routeKey at all --
+    """The CLI's REST API proxy event (rest_api.tf) has no routeKey at all --
     it's identified by httpMethod/resource instead."""
     event = {"httpMethod": "POST", "resource": main_module.CLI_ACCESS_REQUEST_PATH, "path": "/default/access-requester-cli"}
     with patch.object(main_module, "handle_cli_access_request", return_value={"statusCode": 200}) as mock_handle:
@@ -173,8 +202,15 @@ def test_lambda_handler_does_not_treat_a_get_on_the_cli_resource_as_a_cli_reques
 
 
 def test_lambda_handler_routes_slack_events_to_bolt(main_module):
-    """A Slack HTTP API event (routeKey, no httpMethod/resource) goes to Bolt."""
-    event = {"routeKey": "POST /access-requester", "rawPath": "/access-requester"}
+    """A Slack event from the same REST API (its own resource) goes to Bolt."""
+    event = {
+        "resource": "/access-requester",
+        "path": "/access-requester",
+        "httpMethod": "POST",
+        "requestContext": {"httpMethod": "POST", "resourcePath": "/access-requester", "stage": "default"},
+        "body": "payload=x",
+        "isBase64Encoded": False,
+    }
     context = MagicMock()
     with patch.object(main_module, "SlackRequestHandler") as mock_handler_cls:
         mock_handler_cls.return_value.handle.return_value = {"statusCode": 200}
@@ -188,12 +224,8 @@ def test_lambda_handler_routes_slack_events_to_bolt(main_module):
 # ---------------------------------------------------------------------------
 
 
-def test_handle_cli_access_request_rejects_mismatched_api_id(main_module):
-    """Defense-in-depth check: an event whose requestContext.apiId doesn't
-    match this deployment's own API Gateway (conftest.py's mock_env sets
-    cli_expected_api_id to "test-api-id") must be rejected before identity
-    verification even runs -- this is what catches a direct
-    lambda:InvokeFunction call that didn't bother forging this field."""
+def test_handle_cli_access_request_rejects_a_proof_for_another_api(main_module):
+    """The proof's audience must be this deployment's API id (conftest's cli_expected_api_id)."""
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
@@ -201,39 +233,16 @@ def test_handle_cli_access_request_rejects_mismatched_api_id(main_module):
     )
     result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
+    main_module.cli_proof.fetch_caller_identity.assert_not_called()
 
 
-def test_handle_cli_access_request_logs_the_caller_arn_on_an_api_id_mismatch(main_module):
-    """Regression test (#194 B10): the apiId-mismatch rejection is one of
-    the earliest, most security-relevant rejections on this path, but used
-    to log no identity information at all -- the caller ARN was only
-    captured later, and only at DEBUG (which the default LOG_LEVEL=INFO
-    deployment never emits). An operator investigating a wave of these
-    rejections had no identity to go on. The caller's asserted ARN (API
-    Gateway's own AWS_IAM-authorizer-verified value, not attacker-controlled
-    body content) must now be logged at INFO alongside this rejection."""
+def test_handle_cli_access_request_rejects_every_event_when_cli_is_disabled(main_module):
+    """With the CLI route disabled, cli_expected_api_id is "". A proof addressed to "" must still be
+    rejected, before any STS or identity lookup."""
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
-        api_id="some-other-api-id",
-    )
-    with patch.object(main_module, "logger") as mock_logger:
-        result = main_module.handle_cli_access_request(event)
-
-    assert result == main_module.cli_auth.GENERIC_REJECTION
-    expected_arn = event["requestContext"]["identity"]["userArn"]
-    info_calls = mock_logger.info.call_args_list
-    assert any("apiId" in (c.args[0] if c.args else "") and c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls)
-
-
-@pytest.mark.parametrize("api_id", ["", None])
-def test_handle_cli_access_request_rejects_every_event_when_cli_is_disabled(main_module, api_id):
-    """With the CLI route disabled, cli_expected_api_id is "". A forged direct invoke carrying
-    "apiId": "" must still be rejected, before any identity lookup."""
-    event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
-        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
-        api_id=api_id,
+        api_id="",
     )
     disabled_cfg = main_module.cfg.model_copy(update={"cli_expected_api_id": ""})
     with (
@@ -243,25 +252,101 @@ def test_handle_cli_access_request_rejects_every_event_when_cli_is_disabled(main
         result = main_module.handle_cli_access_request(event)
 
     assert result == main_module.cli_auth.GENERIC_REJECTION
+    main_module.cli_proof.fetch_caller_identity.assert_not_called()
     mock_extract_identity.assert_not_called()
 
 
-def test_handle_cli_access_request_rejects_missing_api_id(main_module):
-    """A direct lambda:InvokeFunction call that omits requestContext.apiId
-    entirely (rather than forging a wrong one) must also be rejected --
-    None must never accidentally equal cli_expected_api_id."""
+def test_handle_cli_access_request_ignores_the_forgeable_request_context(main_module):
+    """A direct invoke can forge requestContext.identity.userArn. Only the STS identity counts:
+    here STS returns a non-SSO principal, so the forged SSO ARN in requestContext must not help."""
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
-        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
-        api_id=None,
+        user_arn="arn:aws:sts::111111111111:assumed-role/SomeOtherRole/req@example.com",
     )
+    event["requestContext"]["identity"]["userArn"] = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com"
+    event["requestContext"]["apiId"] = CLI_API_ID
     result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        json.dumps({"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"}),
+        "{not json",
+        "[]",
+        json.dumps({"version": 2, "payload": "{}", "proof": {}}),
+    ],
+)
+def test_handle_cli_access_request_tells_an_old_cli_to_upgrade(main_module, body):
+    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
+    event["body"] = body
+    with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+    assert "Upgrade elevator" in json.loads(result["body"])["message"]
+    mock_extract_identity.assert_not_called()
+
+
+def test_handle_cli_access_request_rejects_a_base64_encoded_body(main_module):
+    event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
+    event["isBase64Encoded"] = True
+    result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400
+
+
+def test_handle_cli_access_request_rejects_a_caller_outside_the_organization(main_module):
+    """STS vouches for any AWS account; DescribeAccount decides whether it is this organization's."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::999999999999:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    not_found = botocore.exceptions.ClientError({"Error": {"Code": "AccountNotFoundException", "Message": "x"}}, "DescribeAccount")
+    with (
+        patch.object(main_module.org_client, "describe_account", side_effect=not_found) as mock_describe,
+        patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity,
+    ):
+        result = main_module.handle_cli_access_request(event)
+    assert result == main_module.cli_auth.GENERIC_REJECTION
+    mock_describe.assert_called_once_with(AccountId="999999999999")
+    mock_extract_identity.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        botocore.exceptions.ClientError(
+            {"Error": {"Code": "TooManyRequestsException", "Message": "x"}, "ResponseMetadata": {"HTTPStatusCode": 500}}, "DescribeAccount"
+        ),
+        botocore.exceptions.EndpointConnectionError(endpoint_url="https://organizations.us-east-1.amazonaws.com"),
+    ],
+)
+def test_handle_cli_access_request_returns_503_when_organizations_is_unavailable(main_module, error):
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    with patch.object(main_module.org_client, "describe_account", side_effect=error):
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 503
+
+
+def test_handle_cli_access_request_returns_503_when_sts_is_unavailable(main_module):
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+    )
+    main_module.cli_proof.fetch_caller_identity.side_effect = main_module.cli_proof.ProofUnavailable("STS answered 503 unknown")
+    with patch.object(main_module.app.client, "chat_postMessage") as mock_post_message:
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 503
+    mock_post_message.assert_not_called()
+
+
 def test_handle_cli_access_request_accepts_caller_from_a_different_account(main_module):
-    """cli_auth.py does not check the caller's account (the REST API's org resource policy
-    does), so a well-formed request from a different account in the org succeeds end to end."""
+    """Any account in the organization may request access to another, so a well-formed request
+    from a different member account succeeds end to end."""
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
         user_arn="arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_Foo/req@example.com",
@@ -277,17 +362,9 @@ def test_handle_cli_access_request_accepts_caller_from_a_different_account(main_
     assert json.loads(result["body"])["ok"] is True
 
 
-def test_handle_cli_access_request_rejects_missing_identity_context(main_module):
+def test_handle_cli_access_request_rejects_a_proof_sts_refuses(main_module):
     # A valid body, so the identity check is what rejects it.
     event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
-    result = main_module.handle_cli_access_request(event)
-    assert result == main_module.cli_auth.GENERIC_REJECTION
-
-
-def test_handle_cli_access_request_rejects_explicit_null_identity(main_module):
-    """An explicit "identity": null gets the same 403 as a missing key, not a 500."""
-    event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
-    event["requestContext"]["identity"] = None
     result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
@@ -421,48 +498,23 @@ def test_handle_cli_access_request_rejects_when_requesters_email_collides_in_the
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
-def test_handle_cli_access_request_rejects_invalid_json_body(main_module):
+@pytest.mark.parametrize("payload", ["{not json", "[]", '{"account": "1", "account": "2"}'])
+def test_handle_cli_access_request_rejects_a_malformed_payload_without_resolving_identity(main_module, payload):
+    """A malformed payload is a 400, rejected before the STS call and the Identity Store scan."""
     event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
-    event["body"] = "{not json"
-    result = main_module.handle_cli_access_request(event)
-    assert result["statusCode"] == 400
-
-
-def test_handle_cli_access_request_rejects_non_object_json_body(main_module):
-    """Regression test: a syntactically valid JSON document that isn't an
-    object (e.g. a bare array) used to pass json.loads, then raise
-    AttributeError at body.get(...) -- unwinding to the generic 500 handler
-    and posting to the approvals channel for what's just bad input."""
-    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
-    event["body"] = "[]"
-    result = main_module.handle_cli_access_request(event)
-    assert result["statusCode"] == 400
-
-
-def test_handle_cli_access_request_rejects_missing_body_with_an_otherwise_valid_identity(main_module):
-    """Regression test (#194 test gap): a request with no body at all
-    (event["body"] is None -- _cli_request_event's own default when no body
-    dict is given) from an otherwise-genuinely-verifiable identity must be
-    rejected as a clean 400 (missing required fields), the same as an empty
-    "{}" body, not crash or fall through to the 500 handler. `event.get("body")
-    or "{}"` is what makes a missing body behave like an empty JSON object in
-    the first place; this pins that specific behavior down explicitly."""
-    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
-    assert event["body"] is None
+    event["body"] = make_body(payload, api_id=CLI_API_ID, query=proof_query(region=CLI_REGION, signed_at=datetime.now(UTC)))
     with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
         result = main_module.handle_cli_access_request(event)
-    mock_extract_identity.assert_not_called()
     assert result["statusCode"] == 400
+    main_module.cli_proof.fetch_caller_identity.assert_not_called()
+    mock_extract_identity.assert_not_called()
 
 
-def test_handle_cli_access_request_rejects_malformed_body_without_resolving_identity(main_module):
-    """A malformed body is rejected before extract_identity runs its Identity Store scan."""
-    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
-    event["body"] = "{not json"
-    with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
-        result = main_module.handle_cli_access_request(event)
-    mock_extract_identity.assert_not_called()
+def test_handle_cli_access_request_rejects_an_empty_payload(main_module):
+    event = _cli_request_event(body={}, user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
+    result = main_module.handle_cli_access_request(event)
     assert result["statusCode"] == 400
+    main_module.cli_proof.fetch_caller_identity.assert_not_called()
 
 
 def test_handle_cli_access_request_rejects_a_reason_over_the_limit(main_module):
@@ -1005,7 +1057,7 @@ def test_handle_cli_access_request_returns_503_on_transient_identity_store_error
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     with (
-        patch.object(main_module.cli_auth, "extract_identity", side_effect=main_module.cli_auth.TransientIdentityStoreError),
+        patch.object(main_module.cli_auth, "extract_identity", side_effect=main_module.cli_auth.TransientAWSError),
         patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
     ):
         result = main_module.handle_cli_access_request(event)
@@ -1014,16 +1066,13 @@ def test_handle_cli_access_request_returns_503_on_transient_identity_store_error
     mock_post_message.assert_not_called()
 
 
-def test_handle_cli_access_request_logs_the_caller_arn_when_identity_cannot_be_verified(main_module):
-    """Regression test (#194 B10): an unresolvable identity (a signed
-    request whose session name doesn't match any real Identity Store user)
-    is the other of the two earliest, most security-relevant rejections
-    that used to carry no identity fields at all. The caller's asserted ARN
-    must now be logged at INFO alongside this rejection too, same as the
-    apiId-mismatch case."""
+def test_handle_cli_access_request_logs_the_sts_verified_arn_when_identity_cannot_be_resolved(main_module):
+    """Regression test (#194 B10): an unresolvable identity must be logged with the caller's ARN --
+    the one STS returned, not the forgeable requestContext value."""
+    sts_arn = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com"
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
-        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+        user_arn=sts_arn,
     )
     with (
         patch.object(main_module.cli_auth, "extract_identity", return_value=None),
@@ -1032,9 +1081,78 @@ def test_handle_cli_access_request_logs_the_caller_arn_when_identity_cannot_be_v
         result = main_module.handle_cli_access_request(event)
 
     assert result == main_module.cli_auth.GENERIC_REJECTION
-    expected_arn = event["requestContext"]["identity"]["userArn"]
     info_calls = mock_logger.info.call_args_list
-    assert any(c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls)
+    assert any(c.kwargs.get("extra", {}).get("user_arn") == sts_arn for c in info_calls)
+
+
+def _sts_connection(status: int = 200, body: bytes = b"", failure: Exception | None = None) -> MagicMock:
+    connection = MagicMock()
+    connection.sock = MagicMock()
+    response = connection.getresponse.return_value
+    response.status = status
+    response.read.side_effect = lambda amt: body[:amt]
+    if failure:
+        connection.getresponse.side_effect = failure
+    return connection
+
+
+@pytest.mark.parametrize(
+    ("case", "status_code"),
+    [
+        ("wrong_audience", 403),
+        ("tampered_payload", 403),
+        ("stale", 403),
+        ("sts_refuses", 403),
+        ("sts_throttles", 503),
+        ("sts_times_out", 503),
+        ("outsider_account", 403),
+        ("handler_crash", 500),
+    ],
+)
+def test_proof_never_reaches_the_logs(main_module, caplog, case, status_code):
+    """Runs the real verifier through each failure path at DEBUG and checks that no proof material
+    (signature, session token, the presigned URL) appears in any captured log record."""
+    from . import proof_helpers
+
+    caplog.set_level("DEBUG")
+    payload = {"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"}
+    now = datetime.now(UTC)
+    if case == "stale":
+        now = now.replace(year=now.year - 1)
+    body = make_body(
+        payload, api_id="wrong" if case == "wrong_audience" else CLI_API_ID, query=proof_query(region=CLI_REGION, signed_at=now)
+    )
+    if case == "tampered_payload":
+        doc = json.loads(body)
+        doc["payload"] = json.dumps(payload | {"account": "222222222222"})
+        body = json.dumps(doc)
+    event = _cli_request_event()
+    event["body"] = body
+
+    arn = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com"
+    connection = {
+        "sts_refuses": _sts_connection(403, proof_helpers.sts_error_xml("SignatureDoesNotMatch")),
+        "sts_throttles": _sts_connection(400, proof_helpers.sts_error_xml("Throttling")),
+        "sts_times_out": _sts_connection(failure=TimeoutError(f"timed out {SIGNATURE} {SESSION_TOKEN}")),
+    }.get(case, _sts_connection(200, proof_helpers.sts_identity_xml(arn)))
+    not_found = botocore.exceptions.ClientError({"Error": {"Code": "AccountNotFoundException", "Message": "x"}}, "DescribeAccount")
+    org_side_effect = not_found if case == "outsider_account" else None
+    crash = RuntimeError("boom") if case == "handler_crash" else None
+
+    with (
+        patch.object(main_module.cli_proof, "fetch_caller_identity", _REAL_FETCH_CALLER_IDENTITY[0]),
+        patch.object(main_module.cli_proof.http.client, "HTTPSConnection", return_value=connection),
+        patch.object(main_module.org_client, "describe_account", side_effect=org_side_effect),
+        patch.object(main_module.cli_auth, "extract_identity", side_effect=crash),
+        patch.object(main_module.app.client, "chat_postMessage"),
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result["statusCode"] == status_code
+    assert caplog.records, "expected the CLI path to log something"
+    logged = caplog.text + "".join(str(r.__dict__) for r in caplog.records)
+    for marker in ("X-Amz-Signature", "X-Amz-Credential", SIGNATURE, SESSION_TOKEN, "sts.eu-central-1.amazonaws.com/?"):
+        assert marker not in logged
 
 
 # ---------------------------------------------------------------------------

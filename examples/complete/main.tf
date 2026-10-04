@@ -28,10 +28,12 @@ module "aws_sso_elevator" {
   approver_renotification_initial_wait_time  = 15
   approver_renotification_backoff_multiplier = 2
 
-  # Off by default (see vars.tf) so upgrading an existing deployment doesn't
-  # silently add this route; this example turns it on to actually demonstrate
-  # the CLI feature end to end.
-  enable_access_requester_cli = true
+  # The CLI route is on by default; set false if you only use Slack.
+  # enable_access_requester_cli = false
+
+  # Optional AWS WAF on the requester API: a module-created web ACL, or your own.
+  waf_enabled = true
+  # waf_web_acl_arn = "arn:aws:wafv2:..."  # Instead of waf_enabled: associate an existing web ACL
 
   # S3 config bucket configuration (caching is enabled by default)
   # config_bucket_name     = "sso-elevator-config"  # Optional: custom S3 bucket name for config and cache
@@ -119,10 +121,4 @@ module "aws_sso_elevator" {
       "AllowSelfApproval" : true,
     },
   ]
-}
-
-
-output "requester_api_endpoint_url" {
-  description = "The URL to invoke the Lambda function"
-  value       = module.aws_sso_elevator.requester_api_endpoint_url
 }

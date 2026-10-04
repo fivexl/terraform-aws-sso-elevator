@@ -19,6 +19,7 @@
   - [Group Assignments Mode](#group-assignments-mode)
   - [Attribute-Based Group Sync](#attribute-based-group-sync)
 - [Important Considerations and Assumptions](#important-considerations-and-assumptions)
+- [Upgrade to 5.0.0](#upgrade-to-500)
 - [Module configuration, and features](#module-configuration-and-features)
   - [Configuration structure](#configuration-structure)
     - [Explicit Deny](#explicit-deny)
@@ -28,7 +29,10 @@
     - [Diagram of processing a request:](#diagram-of-processing-a-request)
   - [Secondary Subdomain Fallback Feature:](#secondary-subdomain-fallback-feature)
   - [Sending direct messages to users feature](#sending-direct-messages-to-users-feature)
-  - [API gateway feature](#api-gateway-feature)
+  - [API Gateway](#api-gateway)
+  - [AWS WAF](#aws-waf)
+  - [CLI tool](#cli-tool)
+  - [Slack secrets in SSM Parameter Store](#slack-secrets-in-ssm-parameter-store)
 - [Deployment and Usage](#deployment-and-usage)
   - [SSO Delegation](#sso-delegation)
   - [Build Process](#build-process)
@@ -340,7 +344,44 @@ When onboarding your organization, be aware that the access-revoker will revoke 
 
 The same behavior applies to group-level assignments: if you specify a group in the `group_configuration`, SSO Elevator will remove any users from that group if they were not added by SSO Elevator.
 
+# Upgrade to 5.0.0
 
+5.0.0 replaces the HTTP API with one REST API that serves both Slack and the CLI (see [API Gateway](#api-gateway)). The apply that creates the new API destroys the old ones, so the Slack and CLI URLs both change. Slack and the CLI are down from that apply until you finish the steps after it. There is no zero-downtime path, so pick a quiet window.
+
+Before the apply:
+
+1. Follow steps 1–4 of [Upgrade from v4](#upgrade-from-v4): Terraform and provider versions, and moving the Slack secrets to SSM. Slack keeps working through these steps.
+2. Remove the other inputs 5.0.0 no longer has. Terraform fails with "Unsupported argument" on each:
+   - `create_api_gateway`: the API is always created. If you set it to `false` and fronted the Lambda with your own API, that setup is no longer supported.
+   - `create_lambda_url`: the Lambda Function URL and the `lambda_function_url` output are gone. `create_lambda_url` defaulted to `true`, so a deployment that never set it still had a Function URL; anything pointing at it stops working.
+   - `cli_sso_role_name_prefix`.
+   - `event_brige_check_on_inconsistency_rule_name` and `event_brige_scheduled_revocation_rule_name`: renamed to `event_bridge_*`.
+3. The CLI route is now on by default. Its resource policy is built from the organization id, so the principal running Terraform needs Organizations read permissions (see [CLI tool](#cli-tool)), and the account must belong to an AWS Organization. If you only use Slack, set `enable_access_requester_cli = false` instead.
+4. The HTTP API had stage access logs on, in a log group the module created. The apply deletes that log group with the HTTP API; export it first if you need the history. The REST API logs nothing by default: set `api_gateway_access_logs_enabled = true` to log again, which needs the account's API Gateway CloudWatch Logs role (see [API Gateway](#api-gateway)).
+5. To use WAF, set `waf_enabled = true` or `waf_web_acl_arn` now (see [AWS WAF](#aws-waf)). If AWS Firewall Manager attaches a web ACL to your APIs, leave both unset.
+
+The apply:
+
+6. Run the full `terraform apply` (step 5 of [Upgrade from v4](#upgrade-from-v4)). Downtime starts here.
+
+Right after the apply:
+
+7. Slack: in the Slack app settings, set the Interactivity Request URL (`request_url` in the manifest) to the `requester_api_endpoint_url` output.
+8. CLI users: upgrade the `elevator` CLI to 5.0.0. The Lambda answers older CLIs with `400` and "This SSO Elevator deployment requires elevator CLI 5.0.0 or newer". Then re-run `elevator configure --endpoint` with the `requester_api_endpoint_url_cli` output. If the CLI reaches the API through a custom domain, also run `elevator configure --api-id` with the `requester_api_id` output. Update `ELEVATOR_ENDPOINT` (and set `ELEVATOR_API_ID` for a custom domain) wherever scripts or CI set it, since the environment overrides the saved config.
+9. Cross-account CLI callers: their permission sets need `execute-api:Invoke` on the new `requester_api_execution_arn_cli` output. The old ARN names a deleted API.
+10. Delete the requester Lambda's published versions from 4.x. Each one keeps its own code and settings and stays invocable as `function:<name>:<N>` by anyone allowed `lambda:InvokeFunction` on it. If the CLI route was on in 4.x, those versions trust the caller identity in the event, which a direct invoke can forge. Delete every version older than the one the `live` alias points to:
+
+   ```sh
+   FN=access-requester   # your requester_lambda_name
+   LIVE=$(aws lambda get-alias --function-name "$FN" --name live --query FunctionVersion --output text)
+   for v in $(aws lambda list-versions-by-function --function-name "$FN" --query 'Versions[].Version' --output text); do
+     if [ "$v" != '$LATEST' ] && [ "$v" -lt "$LIVE" ]; then
+       aws lambda delete-function --function-name "$FN" --qualifier "$v"
+     fi
+   done
+   ```
+
+11. Monitoring: a POST to the Slack URL without the `X-Slack-Signature` and `X-Slack-Request-Timestamp` headers now gets `400` from API Gateway, without invoking the Lambda. Before, the Lambda answered `401`. Update uptime checks and alerts that expect the old code.
 
 # Module configuration, and features
 
@@ -465,34 +506,62 @@ Notes:
 ## Sending direct messages to users feature
 SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one except them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
 
-## API gateway feature
-The requester Lambda is invoked via API Gateway (`create_api_gateway`, defaults to `true`). The Lambda Function URL path (`create_lambda_url`) has been removed. `create_lambda_url` defaulted to `true`, so a deployment that never set it loses its Function URL on the next apply, with no plan error. Before applying, point the Slack App manifest's Request URL at the `requester_api_endpoint_url` output, and remove `create_lambda_url` from your configuration if you set it.
+## API Gateway
+The requester Lambda sits behind one REST API (`api_gateway_name`, stage `default`) with two routes, both invoking the Lambda's `live` alias:
 
-The misspelled `event_brige_*` variables are removed; use `event_bridge_*`.
+- `POST /access-requester` for Slack (`requester_api_endpoint_url` output). Open to the internet; the Lambda verifies Slack's request signature. A request validator answers `400` without invoking the Lambda when the `X-Slack-Signature` or `X-Slack-Request-Timestamp` header is missing, so unsigned POSTs cannot cold-start it. The validator checks that the headers are present, not that they are valid ([accepted risks](docs/accepted-risks.md)).
+- `POST /access-requester-cli` for the [CLI](#cli-tool), unless `enable_access_requester_cli = false`.
+
+It is a REST API rather than an HTTP API because only REST APIs support WAF, resource policies and request validation.
+
+Each route is throttled separately with `api_gateway_throttling_burst_limit` and `api_gateway_throttling_rate_limit`.
+
+Each apply that changes the Lambda publishes a new version and moves `live` to it. Async invokes of `live` (Slack lazy listeners, such as approve and deny) are not retried after a function error, though Lambda still redelivers them after throttling or a Lambda system error ([accepted risks](docs/accepted-risks.md)).
+
+Stage access logs are off by default. `api_gateway_access_logs_enabled = true` creates a log group and turns them on. REST API logging needs the account-wide API Gateway CloudWatch Logs role (`aws_api_gateway_account`) to be set already, or the apply fails. The module does not set it, because other APIs in the account may depend on its current value.
+
+## AWS WAF
+Optional, off by default. Two modes, which cannot be combined (plan fails if both are set):
+
+- `waf_enabled = true`: the module creates a REGIONAL web ACL, associates it with the API stage and logs to the CloudWatch log group `aws-waf-logs-<api_gateway_name>`, with the `authorization`, `x-amz-security-token` and `x-slack-signature` headers redacted. CloudWatch metrics are on; request sampling is off, because redaction does not apply to sampled requests. Rules, in order:
+  1. A per-IP rate limit, `waf_rate_limit` requests per 5 minutes (default 1000, minimum 10). It stops one noisy IP from using up the API Gateway throttle that all callers share. All Slack traffic arrives from Slack's shared IPs and one access request takes about 5 calls, so a low limit blocks Slack bursts; the API Gateway throttle stays the tighter overall cap.
+  2. `AWSManagedRulesCommonRuleSet`, with `SizeRestrictions_BODY` set to Count because Slack modal submissions can exceed its 8 KB limit.
+  3. `AWSManagedRulesKnownBadInputsRuleSet`.
+  4. `AWSManagedRulesAmazonIpReputationList`.
+
+  Cost is about $9 a month plus $0.60 per million requests.
+- `waf_web_acl_arn = "<arn>"`: associates a REGIONAL web ACL you manage. Setting it together with `waf_enabled` fails at plan only when the ARN is known then; an ARN of a web ACL created in the same apply defers that check to apply time.
+
+If AWS Firewall Manager associates a web ACL with your API Gateway stages, leave both unset: an association from the module would conflict with it.
+
+The Common rule set can block a legitimate request whose reason contains markup such as `<script>`. WAF inspects only the first 16 KB of a body. See [accepted risks](docs/accepted-risks.md).
+
+The `waf_web_acl_arn` output is the associated web ACL in either mode.
 
 ## CLI tool
-Access requests can also be submitted from the command line, without Slack, via `POST /access-requester-cli` on a separate REST API, signed with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. The route is off by default; set `enable_access_requester_cli = true` to create it. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
+Access requests can also be submitted from the command line, without Slack, via `POST /access-requester-cli`, signed with the caller's own AWS credentials. The route is on by default; set `enable_access_requester_cli = false` if you only use Slack. The route, its Lambda permission and the Organizations lookup are then not created, and the Lambda rejects CLI requests. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for install and usage.
 
 Requirements:
-- The deployment account must belong to an AWS Organization: the REST API's resource policy is built from the organization id. The principal running Terraform needs `organizations:DescribeOrganization`, `organizations:ListAccounts`, `organizations:ListRoots` and `organizations:ListAWSServiceAccessForOrganization`, which the `aws_organizations_organization` data source calls.
+- The deployment account must belong to an AWS Organization: the API's resource policy is built from the organization id. The principal running Terraform needs `organizations:DescribeOrganization` for the `aws_organizations_organization` data source. The data source also calls `organizations:ListAccounts`, and outside the management account it ignores an access denied there. Where `ListAccounts` succeeds (the management account or a delegated administrator), it also needs `organizations:ListRoots` and `organizations:ListAWSServiceAccessForOrganization`.
 - The resource policy (`aws:PrincipalOrgID`) admits callers from any account in the organization, and API Gateway rejects everyone else. Callers in the deployment account need nothing more. Callers in any other account also need `execute-api:Invoke` on the `requester_api_execution_arn_cli` output in their own identity policy (their permission set), as IAM requires for cross-account `AWS_IAM` calls.
 - Callers must sign with an IAM Identity Center (SSO) session. IAM users, other roles, and CI/OIDC roles are rejected.
 - The session name must be the caller's Identity Store username. IAM Identity Center sets it that way, so a normal `aws sso login` session qualifies. The Lambda matches it exactly (case-sensitive) against `UserName`, takes that user's primary email (or the first listed one), and looks up the Slack user with that email. If any step finds no match, the request is rejected with the same generic message as an invalid session. A username longer than 64 characters is truncated in the session name and therefore never matches.
+- The requester Lambda needs outbound HTTPS to the regional STS endpoint, `sts.<region>.amazonaws.com`. It runs outside a VPC, so it has that by default. In an opt-in region the regional STS endpoint must be active; this has not been tested.
+- If the module runs in an opt-in region, every caller's account must enable that region: the CLI's proof is signed for, and checked by, that region's STS endpoint.
+- Only the standard `aws` partition is supported.
 
-**Trust model:** the requester Lambda does not re-verify the caller's signature; API Gateway's `AWS_IAM` authorizer does that before the Lambda runs. `src/cli_auth.py` then checks that the assumed role's name starts with `AWSReservedSSO_` and that the session name matches a real Identity Store user. IAM reserves role names starting with `AWSReservedSSO_` in every account. This was tested: `aws iam create-role --role-name AWSReservedSSO_ForgeTest_0000000000000000 ...` with administrator permissions fails with `InvalidInput: The role name 'AWSReservedSSO_ForgeTest_0000000000000000' is reserved for AWS use`. So the name alone proves the session comes from IAM Identity Center, in any account of the organization, with no IAM call. The caller's account is not checked in the Lambda; the resource policy covers that.
+**Trust model.** API Gateway's `AWS_IAM` authorizer checks the request signature, and the resource policy limits callers to the organization. The Lambda cannot rely on that for identity: anyone allowed `lambda:InvokeFunction` on it can invoke it directly with an event naming any caller. So the CLI also sends a presigned `sts:GetCallerIdentity` request, signed with the same credentials and bound to the request body, the REST API id and a random nonce. The Lambda checks the binding and that the proof is at most 60 seconds old, sends the request to STS itself, and takes the caller's ARN and account from STS's answer. The wire contract is in `src/cli_proof.py`.
 
-The residual risk is a direct invoke: anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway with a forged event, including a forged identity. API Gateway needs no IAM permission: the function's resource policy admits `apigateway.amazonaws.com`, scoped by source ARN. So grant `lambda:InvokeFunction` on the requester Lambda to no other principal. When `enable_access_requester_cli` is false, the Lambda rejects every CLI-shaped event.
+The Lambda then checks, in `src/cli_auth.py`:
+- the caller's account is in this organization (`organizations:DescribeAccount`; any error other than a clear "not found" fails the request);
+- the assumed role's name starts with `AWSReservedSSO_`. IAM reserves this prefix in every account: `aws iam create-role --role-name AWSReservedSSO_ForgeTest_0000000000000000 ...` with administrator permissions fails with `InvalidInput: The role name 'AWSReservedSSO_ForgeTest_0000000000000000' is reserved for AWS use`. So the name proves the session comes from IAM Identity Center;
+- the session name matches a real Identity Store user, as above.
 
-The CLI supports only the standard `aws` partition.
-
-**Upgrading a deployment that already had `enable_access_requester_cli = true`:**
-- The CLI route moves to a new REST API on a new host. Re-run `elevator configure --endpoint` with the `requester_api_endpoint_url_cli` output.
-- Callers in other accounts need `execute-api:Invoke` in their permission sets on the new `requester_api_execution_arn_cli` value.
-- Remove `cli_sso_role_name_prefix` from your configuration.
+An old CLI without a proof gets `400` asking to upgrade, an invalid proof gets the generic `403`, and an STS or Organizations outage gets `503`. A proof can be replayed for about 90 seconds, re-submitting the identical request; see [accepted risks](docs/accepted-risks.md).
 
 ## Slack secrets in SSM Parameter Store
 
-The Lambdas read the Slack bot token and signing secret from two SSM SecureString parameters at runtime; no secret passes through Terraform. The module creates both parameters with the placeholder `REPLACE_ME` through the write-only `value_wo` argument, so neither the placeholder nor the real value is stored in Terraform state. The Lambdas treat the placeholder as an unset secret. Write-only arguments need Terraform >= 1.11 and the module needs hashicorp/aws >= 6.0.
+The Lambdas read the Slack bot token and signing secret from two SSM SecureString parameters at runtime; no secret passes through Terraform. The module creates both parameters with the placeholder `REPLACE_ME` through the write-only `value_wo` argument, so neither the placeholder nor the real value is stored in Terraform state. The Lambdas treat the placeholder as an unset secret. Write-only arguments need Terraform >= 1.11 and the module needs hashicorp/aws >= 6.28.
 
 **Why you set the secrets by hand.** Terraform writes every value it manages into its state file in plain text, and that includes a SecureString parameter's `value`. Anyone who can read the state, or an old version of it in a versioned S3 backend, can read the secret. A write-only argument is the one kind of value Terraform never stores. So the module writes only a placeholder through `value_wo`, and you put the real secrets in with the AWS CLI. They never pass through Terraform. The procedures below are ordered to keep it that way.
 
@@ -527,9 +596,9 @@ No redeploy is needed. A failed access-requester start is not cached, so the nex
 
 ### Upgrade from v4
 
-The v4 Lambdas keep their secrets in environment variables until step 5, so Slack keeps working throughout.
+These are the secrets steps of [Upgrade to 5.0.0](#upgrade-to-500); follow that section, which tells you when to come here. The v4 Lambdas keep their secrets in environment variables until step 5, so Slack keeps working through step 4. Step 5 also replaces the API, which starts the downtime.
 
-1. In the root module, require Terraform >= 1.11 and hashicorp/aws >= 6.0 (see the provider's [version 6 upgrade guide](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/guides/version-6-upgrade) for your other resources). Remove `slack_bot_token` and `slack_signing_secret` from the module block, along with any `aws_ssm_parameter` data sources that fed them, tfvars entries, `-var` flags and `TF_VAR_*` variables in CI. Bump the module version and run `terraform init -upgrade`.
+1. In the root module, require Terraform >= 1.11 and hashicorp/aws >= 6.28 (see the provider's [version 6 upgrade guide](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/guides/version-6-upgrade) for your other resources). Remove `slack_bot_token` and `slack_signing_secret` from the module block, along with any `aws_ssm_parameter` data sources that fed them, tfvars entries, `-var` flags and `TF_VAR_*` variables in CI. Bump the module version and run `terraform init -upgrade`.
 2. If parameters already exist at the default names (the v4 example had you create both by hand), save their values, then delete them so the module can create its own:
 
    ```sh
@@ -551,19 +620,23 @@ The v4 Lambdas keep their secrets in environment variables until step 5, so Slac
    ```
 
 4. Write both secrets with the `put-parameter` commands above.
-5. Run a full `terraform apply`. This switches the Lambdas to the v5 image and to SSM in one step. If you pin `ecr_repo_tag` or host images yourself (`ecr_repo_name`/`ecr_owner_account_id`), point it at a 5.x image first: a v4 image cannot read the secrets from SSM and fails at cold start.
+5. Run a full `terraform apply`. This switches the Lambdas to the v5 image and to SSM in one step. If you pin `ecr_repo_tag` or host images yourself (`ecr_repo_name`/`ecr_owner_account_id`), point it at a 5.x image first: a v4 image cannot read the secrets from SSM and fails at cold start. Then continue with step 7 of [Upgrade to 5.0.0](#upgrade-to-500).
 
 Terraform state from v4 still holds both secrets, in the Lambda environment variables and in any `aws_ssm_parameter` data source values. After upgrading, rotate both secrets in Slack, and purge old state versions from your backend if that matters to you.
 
 ### Rotating a secret
 
-Write the new value with `put-parameter` as above. The revoker and attribute-syncer read the bot token on every invocation. The access-requester reads both secrets at cold start, so warm containers keep the old values until they are recycled. A new bot token can wait for that, but a new signing secret takes effect in Slack immediately, and warm access-requester containers reject every Slack request until they restart. Force new containers right after writing it, for example with any configuration change:
+Write the new value with `put-parameter` as above. The revoker and attribute-syncer read the bot token on every invocation. The access-requester reads both secrets at cold start, so warm containers keep the old values until they are recycled. A new bot token can wait for that, but a new signing secret takes effect in Slack immediately, and warm access-requester containers reject every Slack request until they restart. Force new containers right after writing it. API Gateway invokes the `live` alias, which points at a published version, so changing `$LATEST` alone is not enough: change the configuration, publish a version and move `live` to it.
 
 ```sh
-aws lambda update-function-configuration --function-name <requester_lambda_name> --description "Slack secret rotated $(date +%s)"
+FN=access-requester   # your requester_lambda_name
+aws lambda update-function-configuration --function-name "$FN" --description "Slack secret rotated $(date +%s)"
+aws lambda wait function-updated --function-name "$FN"
+VERSION=$(aws lambda publish-version --function-name "$FN" --query Version --output text)
+aws lambda update-alias --function-name "$FN" --name live --function-version "$VERSION"
 ```
 
-The next `terraform apply` sets the description back.
+Without the configuration change, `publish-version` returns the existing latest version instead of a new one. The next `terraform apply` sets the description back, which publishes another version and moves `live` to it.
 
 If a secret cannot be read or still holds the placeholder, the access-requester fails at start and every Slack request errors. The revoker and attribute-syncer log the error and still revoke and sync, without Slack messages. Some revoker invocations then fail after their work is done: a scheduled revocation of a single assignment fails after revoking it, and the Slack-only events (inconsistency reports, removing buttons from expired requests, approver reminders) fail outright. These show up as Lambda errors and, if `aws_sns_topic_subscription_email` is set, as DLQ alerts.
 
@@ -819,7 +892,7 @@ oauth_config:
 settings:
   interactivity:
     is_enabled: true
-    request_url: <LAMBDA URL GOES HERE - CHECK LAMBDA CONFIGURATION IN AWS CONSOLE OR GET IT FORM TERRAFORM OUTPUT> 
+    request_url: <requester_api_endpoint_url Terraform output>
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
@@ -836,7 +909,7 @@ settings:
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.0 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.11 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 6.28 |
 | <a name="requirement_external"></a> [external](#requirement\_external) | >= 1.0 |
 | <a name="requirement_local"></a> [local](#requirement\_local) | >= 1.0 |
@@ -855,47 +928,59 @@ settings:
 
 | Name | Source | Version |
 | ---- | ------ | ------- |
+| <a name="module_access_requester_alias"></a> [access\_requester\_alias](#module\_access\_requester\_alias) | terraform-aws-modules/lambda/aws//modules/alias | 8.8.2 |
 | <a name="module_access_requester_slack_handler"></a> [access\_requester\_slack\_handler](#module\_access\_requester\_slack\_handler) | terraform-aws-modules/lambda/aws | 8.8.2 |
 | <a name="module_access_revoker"></a> [access\_revoker](#module\_access\_revoker) | terraform-aws-modules/lambda/aws | 8.8.2 |
 | <a name="module_attribute_syncer"></a> [attribute\_syncer](#module\_attribute\_syncer) | terraform-aws-modules/lambda/aws | 8.8.2 |
 | <a name="module_audit_bucket"></a> [audit\_bucket](#module\_audit\_bucket) | fivexl/account-baseline/aws//modules/s3_baseline | 2.1.6 |
 | <a name="module_config_bucket"></a> [config\_bucket](#module\_config\_bucket) | fivexl/account-baseline/aws//modules/s3_baseline | 2.1.6 |
-| <a name="module_http_api"></a> [http\_api](#module\_http\_api) | terraform-aws-modules/apigateway-v2/aws | 6.1.1 |
 | <a name="module_sso_elevator_dependencies"></a> [sso\_elevator\_dependencies](#module\_sso\_elevator\_dependencies) | terraform-aws-modules/lambda/aws | 8.8.2 |
 
 ## Resources
 
 | Name | Type |
 | ---- | ---- |
-| [aws_api_gateway_deployment.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_deployment) | resource |
+| [aws_api_gateway_deployment.requester](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_deployment) | resource |
 | [aws_api_gateway_integration.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_integration) | resource |
+| [aws_api_gateway_integration.slack](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_integration) | resource |
 | [aws_api_gateway_method.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method) | resource |
+| [aws_api_gateway_method.slack](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method) | resource |
 | [aws_api_gateway_method_settings.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method_settings) | resource |
+| [aws_api_gateway_method_settings.slack](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method_settings) | resource |
+| [aws_api_gateway_request_validator.slack](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_request_validator) | resource |
 | [aws_api_gateway_resource.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_resource) | resource |
-| [aws_api_gateway_rest_api.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_rest_api) | resource |
-| [aws_api_gateway_rest_api_policy.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_rest_api_policy) | resource |
-| [aws_api_gateway_stage.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage) | resource |
+| [aws_api_gateway_resource.slack](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_resource) | resource |
+| [aws_api_gateway_rest_api.requester](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_rest_api) | resource |
+| [aws_api_gateway_rest_api_policy.requester](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_rest_api_policy) | resource |
+| [aws_api_gateway_stage.requester](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage) | resource |
 | [aws_cloudwatch_event_rule.attribute_sync_schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_rule.sso_elevator_check_on_inconsistency](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_target.attribute_sync_schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_cloudwatch_event_target.check_inconsistency](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
 | [aws_cloudwatch_event_target.sso_elevator_scheduled_revocation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_target) | resource |
+| [aws_cloudwatch_log_group.api_access_logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
+| [aws_cloudwatch_log_group.waf](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_iam_role.eventbridge_role](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy.eventbridge_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
-| [aws_lambda_permission.eventbridge](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
+| [aws_lambda_function_event_invoke_config.access_requester_live](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_function_event_invoke_config) | resource |
+| [aws_lambda_permission.api_gateway](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
 | [aws_s3_object.approval_config](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_object) | resource |
 | [aws_scheduler_schedule_group.one_time_schedule_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule_group) | resource |
 | [aws_sns_topic.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
 | [aws_sns_topic_subscription.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
 | [aws_ssm_parameter.slack_bot_token](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
 | [aws_ssm_parameter.slack_signing_secret](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
+| [aws_wafv2_web_acl.requester](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl) | resource |
+| [aws_wafv2_web_acl_association.requester](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl_association) | resource |
+| [aws_wafv2_web_acl_logging_configuration.requester](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl_logging_configuration) | resource |
 | [null_resource.attribute_sync_validation](https://registry.terraform.io/providers/hashicorp/null/latest/docs/resources/resource) | resource |
 | [random_string.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 | [aws_iam_policy_document.attribute_syncer](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.read_slack_secrets](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.revoker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.schedule_access](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.slack_handler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_organizations_organization.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/organizations_organization) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
@@ -906,6 +991,7 @@ settings:
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| <a name="input_api_gateway_access_logs_enabled"></a> [api\_gateway\_access\_logs\_enabled](#input\_api\_gateway\_access\_logs\_enabled) | If true, the module creates a CloudWatch log group and enables access logging on the requester API stage. Requires the account's API Gateway CloudWatch Logs role (aws\_api\_gateway\_account) to be set already; the module does not manage it. | `bool` | `false` | no |
 | <a name="input_api_gateway_name"></a> [api\_gateway\_name](#input\_api\_gateway\_name) | The name of the API Gateway for SSO Elevator's access-requester Lambda | `string` | `"sso-elevator-access-requster"` | no |
 | <a name="input_api_gateway_throttling_burst_limit"></a> [api\_gateway\_throttling\_burst\_limit](#input\_api\_gateway\_throttling\_burst\_limit) | The maximum number of requests that API Gateway allows in a burst. | `number` | `5` | no |
 | <a name="input_api_gateway_throttling_rate_limit"></a> [api\_gateway\_throttling\_rate\_limit](#input\_api\_gateway\_throttling\_rate\_limit) | The maximum number of requests that API Gateway allows per second. | `number` | `1` | no |
@@ -925,11 +1011,10 @@ settings:
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | `[]` | no |
 | <a name="input_config_bucket_kms_key_arn"></a> [config\_bucket\_kms\_key\_arn](#input\_config\_bucket\_kms\_key\_arn) | ARN of the KMS key to use for config S3 bucket encryption. If not provided, uses AES256 encryption. | `string` | `null` | no |
 | <a name="input_config_bucket_name"></a> [config\_bucket\_name](#input\_config\_bucket\_name) | Name of the S3 bucket for storing configuration and cache data (accounts, permission sets, and future config files) | `string` | `"sso-elevator-config"` | no |
-| <a name="input_create_api_gateway"></a> [create\_api\_gateway](#input\_create\_api\_gateway) | If true, module will create & configure API Gateway for the Lambda function | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
 | <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.4.3"` | no |
-| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true, creates a separate REST API with a POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Requires create\_api\_gateway = true. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
+| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true, adds a POST /access-requester-cli route to the requester REST API so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Only principals in this AWS Organization can call it. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization for the principal running Terraform, plus more Organizations read permissions in the management account or a delegated administrator (see the README CLI tool section). Set to false if you only use Slack. | `bool` | `true` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `"sso-elevator-check-on-inconsistency"` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `"sso-elevator-scheduled-revocation"` | no |
 | <a name="input_group_config"></a> [group\_config](#input\_group\_config) | value for the SSO Elevator group config | `any` | `[]` | no |
@@ -964,6 +1049,9 @@ settings:
 | <a name="input_sso_instance_arn"></a> [sso\_instance\_arn](#input\_sso\_instance\_arn) | value for the SSO instance ARN | `string` | `""` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | A map of tags to assign to resources. | `map(string)` | `{}` | no |
 | <a name="input_use_pre_created_image"></a> [use\_pre\_created\_image](#input\_use\_pre\_created\_image) | If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code. | `bool` | `true` | no |
+| <a name="input_waf_enabled"></a> [waf\_enabled](#input\_waf\_enabled) | If true, the module creates a REGIONAL AWS WAF web ACL (per-IP rate limit plus the AWS managed Common, Known Bad Inputs and Amazon IP Reputation rule sets), associates it with the requester API stage, and logs to the CloudWatch log group aws-waf-logs-<api\_gateway\_name>. Cannot be combined with waf\_web\_acl\_arn. Leave both unset when AWS Firewall Manager associates a web ACL for you. | `bool` | `false` | no |
+| <a name="input_waf_rate_limit"></a> [waf\_rate\_limit](#input\_waf\_rate\_limit) | Requests per 5 minutes a single IP may send before the module-created web ACL blocks it. All Slack traffic comes from Slack's shared IPs and one access request is about 5 calls, so keep it well above your peak request rate. Used only when waf\_enabled is true. | `number` | `1000` | no |
+| <a name="input_waf_web_acl_arn"></a> [waf\_web\_acl\_arn](#input\_waf\_web\_acl\_arn) | ARN of an existing REGIONAL AWS WAF web ACL to associate with the requester API stage, for organizations that manage a central web ACL. Cannot be combined with waf\_enabled. | `string` | `null` | no |
 
 ## Outputs
 
@@ -975,9 +1063,11 @@ settings:
 | <a name="output_config_s3_bucket_arn"></a> [config\_s3\_bucket\_arn](#output\_config\_s3\_bucket\_arn) | The ARN of the S3 bucket for storing configuration and cache data. |
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
-| <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR\_ENDPOINT). null unless enable\_access\_requester\_cli is also true. |
-| <a name="output_requester_api_execution_arn_cli"></a> [requester\_api\_execution\_arn\_cli](#output\_requester\_api\_execution\_arn\_cli) | The execute-api ARN of the CLI's access-request route. Callers in other accounts need execute-api:Invoke on this ARN in their permission set. null unless enable\_access\_requester\_cli is also true. |
+| <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR\_ENDPOINT). null when enable\_access\_requester\_cli is false. |
+| <a name="output_requester_api_execution_arn_cli"></a> [requester\_api\_execution\_arn\_cli](#output\_requester\_api\_execution\_arn\_cli) | The execute-api ARN of the CLI's access-request route. Callers in other accounts need execute-api:Invoke on this ARN in their permission set. null when enable\_access\_requester\_cli is false. |
+| <a name="output_requester_api_id"></a> [requester\_api\_id](#output\_requester\_api\_id) | The id of the requester REST API. CLI users behind a custom domain pass it to `elevator configure --api-id`. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
+| <a name="output_waf_web_acl_arn"></a> [waf\_web\_acl\_arn](#output\_waf\_web\_acl\_arn) | ARN of the web ACL associated with the requester API: the module-created one (waf\_enabled) or waf\_web\_acl\_arn. null when neither is set. |
 <!-- END_TF_DOCS -->
 
 ## More info

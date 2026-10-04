@@ -16,6 +16,7 @@ func newRequestFlagSet() *flag.FlagSet {
 	fs.String("duration", "", "")
 	fs.String("reason", "", "")
 	fs.String("endpoint", "", "")
+	fs.String("api-id", "", "")
 	fs.String("region", "", "")
 	return fs
 }
