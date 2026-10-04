@@ -7,16 +7,29 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
+# A new push to a PR supersedes the previous build; main and release runs each
+# get a unique group so they are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Fork PRs get no secrets, so they could not push anyway.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # Build the PR head, not the merge commit, so the image matches its tag.
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
@@ -38,13 +51,18 @@ jobs:
 
       - name: Get tag name or SHA
         id: get_tag
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            # The ECR repo has immutable tags; each PR push has a new head sha.
+            echo "GIT_TAG=pr-${PR_NUMBER}-${SHORT_SHA}" >> "$GITHUB_ENV"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "GIT_TAG=${GITHUB_REF##*/}" >> "$GITHUB_ENV"
           else
             echo "GIT_TAG=${{ env.SHORT_SHA }}" >> "$GITHUB_ENV"
           fi
-    
+
       - name: Build and push requester image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
@@ -71,3 +89,18 @@ jobs:
           push: true
           tags: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/aws-sso-elevator:attribute-syncer-${{ env.GIT_TAG }}
           provenance: false
+
+      - name: Summarize PR image tag
+        if: github.event_name == 'pull_request'
+        run: |
+          {
+            echo "### Lambda images for this PR"
+            echo
+            echo "To test this PR, set in the module:"
+            echo
+            echo '```hcl'
+            echo "ecr_repo_tag = \"${GIT_TAG}\""
+            echo '```'
+            echo
+            echo "PR images expire automatically after a retention period."
+          } >> "$GITHUB_STEP_SUMMARY"
