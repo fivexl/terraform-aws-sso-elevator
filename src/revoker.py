@@ -548,7 +548,14 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
             )
             continue
         else:
-            sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
+            try:
+                sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
+            except botocore.exceptions.ClientError as e:
+                if e.response.get("Error", {}).get("Code") != "ResourceNotFoundException":
+                    raise
+                # Removed since it was listed (by hand or a racing timer-fired revoke); failing here would skip the account pass.
+                logger.warning(f"Group membership already gone, nothing to revoke: {e}")
+                continue
             sweep_audit.log(
                 s3.AuditEntry(
                     group_name=group_assignment.group_name,
