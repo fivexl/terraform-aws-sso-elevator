@@ -1,4 +1,4 @@
-"""Cache module for caching AWS accounts and permission sets in S3."""
+"""Cache module for caching AWS accounts, permission sets and Identity Store users in S3."""
 
 from __future__ import annotations
 
@@ -30,16 +30,9 @@ MAX_ARN_LENGTH = 1024
 # accounts or permission sets.
 MAX_DATA_SIZE = 5 * 1024 * 1024  # 5MB limit for S3 objects
 
-# The users cache needs a much higher ceiling than MAX_DATA_SIZE (#194 High
-# #4, found by Andrey Devyatkin): a representative ListUsers record is ~445
-# bytes, so MAX_DATA_SIZE's 5MB is crossed at just 11,616 users -- above
-# that, set_cached_users silently failed to write anything at all (caught,
-# logged as a warning, cache left empty), so the fallback this cache exists
-# to provide didn't exist on exactly the large directories most likely to
-# hit a throttle in the first place. 50MB comfortably covers a directory of
-# roughly 100k+ users; S3 itself supports objects up to 5TB, so there's no
-# real ceiling being worked around here, just headroom against a runaway
-# payload.
+# Above this size set_cached_users skips the write, leaving large directories
+# with no throttle fallback (#194 High #4). A projected user is ~166 bytes, so
+# 50MB covers roughly 300k users; the cap only guards against a runaway payload.
 MAX_USERS_DATA_SIZE = 50 * 1024 * 1024  # 50MB limit for the users cache specifically
 
 # Pattern for validating S3 bucket names
@@ -376,8 +369,8 @@ def get_cached_users(
     cache_config: CacheConfig,
     identity_store_id: str,
 ) -> Optional[list[dict[str, Any]]]:
-    """Get cached Identity Store users (raw dicts, the same shape sso.list_users
-    returns under its "Users" key) from S3.
+    """Get cached Identity Store users (the projected dicts
+    sso.list_users_with_cache produces) from S3.
 
     Args:
         s3_client: S3 client
@@ -415,8 +408,8 @@ def get_cached_users(
         # BotoCoreError below, surfacing as a 500 plus a Slack post on
         # every single request until the bad object was fixed or deleted
         # by hand. Not a full pydantic model like the other two caches
-        # (users aren't cached through one at all, by design -- the raw
-        # Identity Store dict shape is passed through as-is), just enough
+        # (users aren't cached through one at all, by design -- plain
+        # dicts projected by sso.list_users_with_cache), just enough
         # structural validation to guarantee what find_email_by_username
         # and its callers actually dereference unconditionally exists.
         if not isinstance(users, list) or not all(isinstance(u, dict) and "UserId" in u for u in users):
@@ -440,7 +433,7 @@ def set_cached_users(
     identity_store_id: str,
     users: list[dict[str, Any]],
 ) -> None:
-    """Store Identity Store users (raw dicts) in S3 cache.
+    """Store Identity Store users (projected by sso.list_users_with_cache) in S3 cache.
 
     Args:
         s3_client: S3 client

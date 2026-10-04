@@ -388,17 +388,9 @@ def list_users_with_cache(
     s3_client: S3Client,
     cfg: config.Config,
 ) -> dict:
-    """List all Identity Store users with cache resilience, same shape and
-    resilience contract as list_permission_sets_with_cache above (#193 item
-    2): list_users is a full paginated scan, documented elsewhere
-    in this module as the call on the CLI path most likely to throttle, and
-    unlike the account and permission-set catalogs it used to have no
-    caching at all -- every single CLI request paid for a fresh scan, with
-    no fallback if that scan happened to throttle.
-
-    This function calls both the Identity Store API and S3 cache in parallel.
-    If the API call succeeds, it compares with cached data and updates if different.
-    If the API call fails, it falls back to cached data.
+    """List all Identity Store users with cache resilience, same contract as
+    list_permission_sets_with_cache above. Cached because list_users is a full
+    paginated scan, the call on the CLI path most likely to throttle (#193 item 2).
 
     Args:
         client: Identity Store client
@@ -407,14 +399,19 @@ def list_users_with_cache(
         cfg: Application configuration
 
     Returns:
-        dict shaped like list_users' own return value (a "Users" key holding
-        the full list), not the raw cached list directly.
+        {"Users": [...]} like list_users, but each user holds only UserId,
+        UserName and Emails, sorted by UserId: the projection keeps the cache
+        JSON-serializable and stable. A caller needing another field adds it here.
     """
     cache_config = cache_module.CacheConfig.from_config(cfg)
 
+    def api_getter() -> list[dict]:
+        users = [{k: u[k] for k in ("UserId", "UserName", "Emails") if k in u} for u in list_users(client, identity_store_id)["Users"]]
+        return sorted(users, key=lambda u: u.get("UserId", ""))
+
     users = cache_module.with_cache_resilience(
         cache_getter=lambda: cache_module.get_cached_users(s3_client, cache_config, identity_store_id),
-        api_getter=lambda: list_users(client, identity_store_id)["Users"],
+        api_getter=api_getter,
         cache_setter=lambda users: cache_module.set_cached_users(s3_client, cache_config, identity_store_id, users),
         resource_name="users",
     )

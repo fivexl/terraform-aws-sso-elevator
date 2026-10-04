@@ -344,9 +344,8 @@ class TestSetCachedPermissionSets:
 
 @pytest.fixture
 def sample_users():
-    """Sample Identity Store user dicts, the same raw shape sso.list_users
-    returns under its "Users" key -- unlike accounts/permission sets, users
-    aren't cached through a pydantic model."""
+    """Sample projected user dicts, the shape sso.list_users_with_cache caches --
+    unlike accounts/permission sets, users aren't cached through a pydantic model."""
     return [
         {"UserId": "u-1", "UserName": "alice@example.com", "Emails": [{"Value": "alice@example.com", "Primary": True}]},
         {"UserId": "u-2", "UserName": "bob@example.com", "Emails": [{"Value": "bob@example.com", "Primary": True}]},
@@ -373,7 +372,7 @@ class TestGetCachedUsers:
         mock_s3_client.get_object.assert_called_once()
 
     def test_cache_hit_valid_data(self, mock_s3_client, cache_config_enabled, sample_users):
-        """When cache has valid data, should return the raw user dicts."""
+        """When cache has valid data, should return the cached user dicts."""
         body_mock = Mock()
         body_mock.read.return_value = json.dumps(sample_users).encode("utf-8")
         mock_s3_client.get_object.return_value = {"Body": body_mock}
@@ -454,9 +453,9 @@ class TestSetCachedUsers:
 
     def test_a_payload_over_the_generic_cache_limit_still_writes(self, mock_s3_client, cache_config_enabled):
         """Regression test (#194 High #4, found live by Andrey Devyatkin):
-        a representative user record is ~445 bytes, so the generic
-        MAX_DATA_SIZE (5MB, sized for the small accounts/permission-sets
-        caches) is crossed at just 11,616 users -- above that, this used to
+        a raw ListUsers record was ~445 bytes (~166 once projected), so the
+        generic MAX_DATA_SIZE (5MB, sized for the small accounts/permission-sets
+        caches) was crossed at just 11,616 users -- above that, this used to
         silently fail to write anything at all, so the fallback this cache
         exists to provide didn't exist on exactly the directories large
         enough to need it. set_cached_users must use the much higher
