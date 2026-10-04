@@ -355,6 +355,12 @@ variable "lambda_memory_size" {
   default     = 256
 }
 
+variable "snap_start" {
+  description = "Enable Lambda SnapStart on the requester Lambda, so the first Slack click after idle answers within Slack's 3-second deadline. Applies to both the container image and the zip deployment. Lambda bills snapshot cache per published version; the revoker's nightly run deletes all but the live version and one rollback version. Set false where Lambda doesn't offer SnapStart for this runtime or package type: at the time of writing, container images in Asia Pacific (New Zealand) and Asia Pacific (Taipei). Apply fails rather than degrades there."
+  type        = bool
+  default     = true
+}
+
 variable "config_bucket_name" {
   description = "Name of the S3 bucket for storing configuration and cache data (accounts, permission sets, and future config files)"
   type        = string

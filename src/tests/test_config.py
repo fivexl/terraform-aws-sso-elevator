@@ -246,7 +246,7 @@ def test_config_with_s3_loaded_configuration(mock_s3_client, monkeypatch):
     """Test Config class initialization with S3-loaded configuration."""
     import boto3
 
-    monkeypatch.setattr(boto3, "client", lambda service: mock_s3_client if service == "s3" else MagicMock())
+    monkeypatch.setattr(boto3, "client", lambda service, **_: mock_s3_client if service == "s3" else MagicMock())
 
     config_dict = valid_config_dict(
         secondary_fallback_email_domains_as_json=False,
@@ -276,7 +276,7 @@ def test_config_statement_parsing_with_s3(mock_s3_client, monkeypatch):
     mock_response = {"Body": MagicMock(read=lambda: json.dumps(s3_config).encode("utf-8"))}
     mock_s3_client.get_object.return_value = mock_response
 
-    monkeypatch.setattr(boto3, "client", lambda service: mock_s3_client if service == "s3" else MagicMock())
+    monkeypatch.setattr(boto3, "client", lambda service, **_: mock_s3_client if service == "s3" else MagicMock())
 
     config_dict = valid_config_dict(
         secondary_fallback_email_domains_as_json=False,
@@ -306,7 +306,7 @@ def test_config_group_statement_parsing_with_s3(mock_s3_client, monkeypatch):
     mock_response = {"Body": MagicMock(read=lambda: json.dumps(s3_config).encode("utf-8"))}
     mock_s3_client.get_object.return_value = mock_response
 
-    monkeypatch.setattr(boto3, "client", lambda service: mock_s3_client if service == "s3" else MagicMock())
+    monkeypatch.setattr(boto3, "client", lambda service, **_: mock_s3_client if service == "s3" else MagicMock())
 
     config_dict = valid_config_dict(
         secondary_fallback_email_domains_as_json=False,

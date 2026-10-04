@@ -56,6 +56,8 @@ module "access_revoker" {
     SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
     REVOKER_FUNCTION_ARN                        = local.revoker_lambda_arn
     REVOKER_FUNCTION_NAME                       = var.revoker_lambda_name
+    REQUESTER_FUNCTION_NAME                     = var.requester_lambda_name
+    REQUESTER_ALIAS_NAME                        = local.requester_alias_name
     S3_BUCKET_FOR_AUDIT_ENTRY_NAME              = local.s3_bucket_name
     S3_BUCKET_PREFIX_FOR_PARTITIONS             = var.s3_bucket_partition_prefix
     SSO_ELEVATOR_SCHEDULED_REVOCATION_RULE_NAME = aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation.name
@@ -111,6 +113,22 @@ data "aws_iam_policy_document" "revoker" {
     resources = [
       "arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${var.event_bridge_scheduled_revocation_rule_name}"
     ]
+  }
+  # The nightly run prunes old requester versions (src/revoker.py prune_requester_versions).
+  # Built from the local ARN string: referencing the requester module would add a dependency.
+  statement {
+    sid       = "ReadRequesterVersions"
+    effect    = "Allow"
+    actions   = ["lambda:ListVersionsByFunction", "lambda:GetAlias"]
+    resources = [local.requester_lambda_arn]
+  }
+  # Qualified ARNs only, so the function itself can't be deleted; Lambda refuses to delete a
+  # version an alias points to.
+  statement {
+    sid       = "DeleteRequesterVersions"
+    effect    = "Allow"
+    actions   = ["lambda:GetFunctionConfiguration", "lambda:DeleteFunction"]
+    resources = ["${local.requester_lambda_arn}:*"]
   }
   statement {
     sid    = "AllowListSSOInstances"

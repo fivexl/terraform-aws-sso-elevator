@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Callable
 
@@ -8,9 +9,11 @@ import boto3
 import botocore.exceptions
 import slack_sdk.errors
 from pydantic import ValidationError
-from slack_bolt import Ack, App, BoltContext
+from slack_bolt import Ack, App, BoltContext, BoltRequest, BoltResponse
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
+from slack_bolt.authorization import AuthorizeResult
 from slack_sdk import WebClient
+from slack_sdk.signature import SignatureVerifier
 from slack_sdk.web.slack_response import SlackResponse
 
 import access_control
@@ -34,16 +37,78 @@ org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
 identity_store_client = session.client("identitystore")
 s3_client = session.client("s3")
-ssm_client = session.client("ssm")
+ssm_client = session.client("ssm", config=config.FAST_FAIL_BOTO_CONFIG)
 
 cfg = config.get_config()
+
+SLACK_AUTH_TEST_TIMEOUT_SECONDS = 3
+
+
+@dataclass
+class SlackAuth:
+    """The Slack secrets and bot identity every request is checked against. Empty until
+    load_slack_auth runs, which is after restore under SnapStart, so a snapshot never holds them."""
+
+    bot_token: str = ""
+    signing_secret: str = ""
+    auth_test: dict | None = None
+
+
+slack_auth = SlackAuth()
+
+
+def verify_slack_signature(req: BoltRequest, resp: BoltResponse, next: Callable) -> BoltResponse:  # noqa: A002, ARG001
+    """Bolt's own request verification with the signing secret read at load_slack_auth, not at App()."""
+    timestamp = req.headers.get("x-slack-request-timestamp", [""])[0]
+    signature = req.headers.get("x-slack-signature", [""])[0]
+    if slack_auth.signing_secret and SignatureVerifier(slack_auth.signing_secret).is_valid(req.raw_body, timestamp, signature):
+        return next()
+    return BoltResponse(status=401, body={"error": "invalid request"})
+
+
+def authorize_with_current_token(enterprise_id: str | None, team_id: str | None, logger: object) -> AuthorizeResult | None:  # noqa: ARG001
+    """Each request's client and context get the token read at load_slack_auth. None (Bolt refuses
+    the request) until it has run."""
+    if slack_auth.auth_test is None:
+        return None
+    return AuthorizeResult.from_auth_test_response(auth_test_response=slack_auth.auth_test, bot_token=slack_auth.bot_token)
+
+
+# No static token: Bolt would build every request's client from it, so a token read after a SnapStart
+# restore would never reach the handlers. authorize= and the signature middleware read slack_auth instead.
 app = App(
     process_before_response=True,
-    token=config.get_slack_secret(ssm_client, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=False),
-    signing_secret=config.get_slack_secret(ssm_client, config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=False),
+    authorize=authorize_with_current_token,
+    request_verification_enabled=False,
+    before_authorize=verify_slack_signature,
     # Logger removed to avoid pickle errors with lazy listeners in Lambda
     # Slack Bolt will use its own default logger instead
 )
+
+
+def load_slack_auth() -> None:
+    """Read both Slack secrets and the bot identity. Raises rather than serving stale or missing ones."""
+    bot_token = config.get_slack_secret(ssm_client, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=False)
+    signing_secret = config.get_slack_secret(ssm_client, config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=False)
+    auth_test = WebClient(token=bot_token, timeout=SLACK_AUTH_TEST_TIMEOUT_SECONDS).auth_test().data
+    slack_auth.bot_token, slack_auth.signing_secret, slack_auth.auth_test = bot_token, signing_secret, auth_test
+    # The CLI path calls app.client directly, outside Bolt's authorize.
+    app.client.token = bot_token
+
+
+def restore_after_snapshot() -> None:
+    """SnapStart after-restore hook: an exception makes Lambda fail the restore, so a request is
+    never served with the snapshot's empty config or secrets."""
+    config.refresh_config()
+    load_slack_auth()
+
+
+if config.is_snap_start_init():
+    from snapshot_restore_py import register_after_restore  # Ships with the Lambda Python runtime.
+
+    register_after_restore(restore_after_snapshot)
+else:
+    load_slack_auth()
 
 
 # Must match api_resource_path_cli in locals.tf.

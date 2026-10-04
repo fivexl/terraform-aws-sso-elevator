@@ -29,7 +29,7 @@ output, scenario, result.
 
 1. **Fresh install.** Apply into an account without the module.
    - Expect: both SSM parameters hold `REPLACE_ME`, and an access-requester invoke fails at
-     init with an error naming the parameter.
+     init (with SnapStart, at restore) with an error naming the parameter.
    - Write the real secrets (README "Fresh install"). Without a redeploy, the next request
      succeeds.
 2. **Upgrade from the previous major.** Follow the README upgrade section step by step on a
@@ -67,7 +67,7 @@ output, scenario, result.
     - Expect: `success: true`, `error_count: 0`, no warnings.
 12. **Placeholder secret on a running deployment**: save both values, write `REPLACE_ME`
     to both, force new containers on the `live` alias (README "Rotating a secret"), then:
-    - invoke the access-requester: expect init failure;
+    - invoke the access-requester: expect init (or SnapStart restore) failure;
     - invoke the attribute syncer: expect success with an error logged for the Slack token.
 
     Restore the values, check their hashes, force new containers again, and repeat a
@@ -124,3 +124,21 @@ Revoker and retries:
       schedules also fire.
 - [ ] A forced lazy-listener failure (for example, a permission removed for the test) runs
       once, with no retry.
+
+## SnapStart
+
+Run with `snap_start = true` (the default), on the zip and on the container image deployment.
+
+- [ ] Five cold clicks of the access shortcut (each after the requester has been idle long
+      enough for its environments to be reclaimed), at `lambda_memory_size = 256` and at
+      `1769`: zero "Sorry, that hasn't worked" toasts. The log shows the restore hook's S3,
+      SSM and `auth.test` reads before each first request.
+- [ ] `apply` waits for the new version to finish its snapshot before `live` moves to it: the
+      alias never points at a `Pending` version.
+- [ ] A forced init failure (for example, a broken import pushed for the test) fails `apply`,
+      and `live` stays on the previous version.
+- [ ] Change the approval config and rotate the signing secret without a redeploy, then force new
+      environments: the next restored environment uses the new rules and secret.
+- [ ] With 3 or more requester versions, the nightly revoker run deletes all but `live` and
+      the newest Active version below it; versions above `live` stay.
+- [ ] `snap_start = false`: apply succeeds and requests work as before.

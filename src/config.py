@@ -2,6 +2,7 @@ import json
 import os
 from typing import Optional
 
+import botocore.config
 from aws_lambda_powertools import Logger
 from mypy_boto3_s3 import S3Client
 from mypy_boto3_ssm import SSMClient
@@ -23,6 +24,14 @@ def get_logger(service: Optional[str] = None, level: Optional[str] = None) -> Lo
 
 
 logger = get_logger(service="config")
+
+# SnapStart restore hooks share a 10 s restore timeout, so their reads fail fast instead of hanging.
+FAST_FAIL_BOTO_CONFIG = botocore.config.Config(connect_timeout=1, read_timeout=2, retries={"total_max_attempts": 2})
+
+
+def is_snap_start_init() -> bool:
+    """Whether this execution environment is (or was restored from) a SnapStart snapshot."""
+    return os.environ.get("AWS_LAMBDA_INITIALIZATION_TYPE") == "snap-start"
 
 
 def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: str) -> dict:
@@ -166,6 +175,10 @@ class Config(BaseSettings):
     # route is disabled and main.py rejects every CLI event. Public, not a secret.
     cli_expected_api_id: str = ""
 
+    # The requester whose old versions the revoker's nightly run deletes. "" disables pruning.
+    requester_function_name: str = ""
+    requester_alias_name: str = ""
+
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"
     statements: frozenset[Statement]
@@ -228,7 +241,7 @@ class Config(BaseSettings):
 
         # Load from S3 if config_s3_key is provided
         if config_s3_key:
-            s3_client = boto3.client("s3")
+            s3_client = boto3.client("s3", config=FAST_FAIL_BOTO_CONFIG)
             config_bucket_name = values.get("config_bucket_name", "sso-elevator-config")
             config_data = load_approval_config_from_s3(s3_client, config_bucket_name, config_s3_key)
             statements_raw = config_data.get("statements")
@@ -280,5 +293,14 @@ _config: Optional[Config] = None
 def get_config() -> Config:
     global _config  # noqa: PLW0603
     if _config is None:
-        _config = Config()  # type: ignore # noqa: PGH003
+        # A snapshot must not capture approval rules: start with none, refresh_config loads them after restore.
+        _config = Config(config_s3_key="") if is_snap_start_init() else Config()  # type: ignore # noqa: PGH003
     return _config
+
+
+def refresh_config() -> Config:
+    """Reload config into the shared object in place, since modules bind `cfg = get_config()` at import."""
+    fresh = Config()  # type: ignore # noqa: PGH003
+    shared = get_config()
+    shared.__dict__.update(fresh.__dict__)  # Config is frozen; in-place update is the point here.
+    return shared

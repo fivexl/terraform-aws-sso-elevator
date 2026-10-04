@@ -21,6 +21,7 @@ dev = [
     "slack-bolt>=1.26.0",
     "hypothesis[ghostwriter]>=6.71.0",
     "ruff>=0.0.267",
+    "snapshot-restore-py>=1.0.0",
 ]
 
 [build-system]

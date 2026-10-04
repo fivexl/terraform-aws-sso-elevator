@@ -69,6 +69,7 @@ def main_module():
         patch("boto3._get_default_session") as mock_default_session,
         patch("sso.describe_sso_instance", return_value=MagicMock(identity_store_id="d-1234")),
         patch("slack_bolt.App") as mock_app_cls,
+        patch("slack_sdk.WebClient.auth_test", return_value=MagicMock(data={"ok": True, "bot_id": "B1", "user_id": "UBOT"})),
     ):
         shared_client = MagicMock()
 
@@ -142,6 +143,9 @@ def test_slack_app_gets_its_secrets_from_ssm(main_module):
     get_parameter_calls = main_module.ssm_client.get_parameter.call_args_list
     assert call(Name="/test/slack-bot-token", WithDecryption=True) in get_parameter_calls
     assert call(Name="/test/slack-signing-secret", WithDecryption=True) in get_parameter_calls
+    # Without SnapStart the secrets load at import, as before; the CLI path's client gets the token too.
+    assert main_module.slack_auth.auth_test is not None
+    assert main_module.app.client.token == main_module.slack_auth.bot_token
 
 
 @pytest.mark.parametrize(
@@ -162,14 +166,15 @@ def test_main_refuses_to_start_without_usable_slack_secrets(get_parameter_kwargs
         patch("boto3.Session") as mock_boto3_session,
         patch("boto3._get_default_session") as mock_default_session,
         patch("sso.describe_sso_instance", return_value=MagicMock(identity_store_id="d-1234")),
-        patch("slack_bolt.App") as mock_app_cls,
+        patch("slack_bolt.App"),
+        patch("slack_sdk.WebClient.auth_test") as mock_auth_test,
     ):
         mock_boto3_session.return_value.client.return_value = shared_client
         mock_default_session.return_value.client.return_value = shared_client
         with pytest.raises(RuntimeError, match=message):
             import main  # noqa: F401
 
-    mock_app_cls.assert_not_called()
+    mock_auth_test.assert_not_called()
     sys.modules.pop("main", None)
     sys.modules.pop("group", None)
     sys.modules.pop("cli_auth", None)

@@ -416,3 +416,104 @@ def test_pre_upgrade_request_writes_no_expired_entry(revoker):
 
     slack_client.chat_update.assert_called_once()
     mock_log_operation.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Nightly pruning of old requester versions (SnapStart bills each one)
+# ---------------------------------------------------------------------------
+
+
+class _ResourceConflict(Exception):
+    pass
+
+
+class _ResourceNotFound(Exception):
+    pass
+
+
+def _lambda_client(live: int, states: dict[int, str], delete_errors: dict[int, Exception] | None = None) -> MagicMock:
+    """A Lambda client whose alias points at live and whose versions have the given states."""
+    client = MagicMock()
+    client.exceptions.ResourceConflictException = _ResourceConflict
+    client.exceptions.ResourceNotFoundException = _ResourceNotFound
+    client.get_alias.return_value = {"FunctionVersion": str(live)}
+    versions = [{"Version": "$LATEST"}] + [{"Version": str(v)} for v in sorted(states)]
+    client.get_paginator.return_value.paginate.return_value = [{"Versions": versions[:3]}, {"Versions": versions[3:]}]
+    client.get_function_configuration.side_effect = lambda FunctionName, Qualifier: {"State": states[int(Qualifier)]}  # noqa: ARG005, N803
+
+    def _delete(FunctionName, Qualifier):  # noqa: ARG001, N803
+        if error := (delete_errors or {}).get(int(Qualifier)):
+            raise error
+
+    client.delete_function.side_effect = _delete
+    return client
+
+
+def _deleted(client: MagicMock) -> list[int]:
+    return [int(c.kwargs["Qualifier"]) for c in client.delete_function.call_args_list]
+
+
+def test_prune_keeps_live_and_the_previous_version_and_nothing_above_live(revoker):
+    client = _lambda_client(live=5, states=dict.fromkeys(range(1, 8), "Active"))
+    revoker.prune_requester_versions(client, "requester", "live")
+    client.get_alias.assert_called_once_with(FunctionName="requester", Name="live")
+    assert sorted(_deleted(client)) == [1, 2, 3]
+
+
+def test_prune_skips_a_failed_version_when_choosing_the_rollback(revoker):
+    # live 10 -> failed publish 11 -> live 12: 10 is still the rollback target.
+    states = dict.fromkeys(range(1, 13), "Active") | {11: "Failed"}
+    client = _lambda_client(live=12, states=states)
+    revoker.prune_requester_versions(client, "requester", "live")
+    assert sorted(_deleted(client)) == list(range(1, 10))
+
+
+def test_prune_deletes_nothing_without_an_active_version_below_live(revoker):
+    client = _lambda_client(live=3, states={1: "Failed", 2: "Failed", 3: "Active"})
+    revoker.prune_requester_versions(client, "requester", "live")
+    client.delete_function.assert_not_called()
+
+
+def test_prune_deletes_nothing_when_live_is_the_only_version(revoker):
+    client = _lambda_client(live=1, states={1: "Active"})
+    revoker.prune_requester_versions(client, "requester", "live")
+    client.delete_function.assert_not_called()
+
+
+def test_prune_skips_conflicting_and_missing_versions(revoker):
+    errors = {1: _ResourceConflict("alias points here"), 2: _ResourceNotFound("gone")}
+    client = _lambda_client(live=5, states=dict.fromkeys(range(1, 6), "Active"), delete_errors=errors)
+    revoker.prune_requester_versions(client, "requester", "live")
+    assert _deleted(client) == [3, 2, 1]
+
+
+def test_prune_is_off_without_a_requester_name(revoker):
+    client = MagicMock()
+    revoker.prune_requester_versions(client, "", "live")
+    client.get_alias.assert_not_called()
+
+
+def test_nightly_run_prunes_after_both_revocation_passes(revoker):
+    calls = MagicMock()
+    with (
+        patch.object(revoker.config, "get_slack_secret", return_value="xoxb"),
+        patch.object(revoker, "handle_sso_elevator_group_scheduled_revocation", calls.groups),
+        patch.object(revoker, "handle_sso_elevator_scheduled_revocation", calls.accounts),
+        patch.object(revoker, "prune_requester_versions", calls.prune),
+    ):
+        revoker.lambda_handler({"action": "sso_elevator_scheduled_revocation"}, None)
+    assert [c[0] for c in calls.mock_calls] == ["groups", "accounts", "prune"]
+    assert calls.prune.call_args.args == (revoker.lambda_client, revoker.cfg.requester_function_name, revoker.cfg.requester_alias_name)
+
+
+def test_nightly_run_survives_a_pruning_failure(revoker):
+    with (
+        patch.object(revoker.config, "get_slack_secret", return_value="xoxb"),
+        patch.object(revoker, "handle_sso_elevator_group_scheduled_revocation"),
+        patch.object(revoker, "handle_sso_elevator_scheduled_revocation") as accounts,
+        patch.object(revoker, "prune_requester_versions", side_effect=RuntimeError("AccessDenied")),
+        patch.object(revoker.logger, "exception") as log_exception,
+    ):
+        assert revoker.lambda_handler({"action": "sso_elevator_scheduled_revocation"}, None) is None
+    accounts.assert_called_once()
+    assert "AccessDenied" in log_exception.call_args.args[0]
