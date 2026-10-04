@@ -665,8 +665,12 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
 
-    # Buttons go before the grant runs (#194 A2), so a later click has nothing to press.
-    # A click that already raced past them hits Identity Center's ConflictException (#212).
+    # Buttons go before the grant runs (#194 A2), so a later click has nothing to press. A click
+    # already past them stops here once another took the request off Pending, so its Processing
+    # can't overwrite that click's result; one racing even this hits ConflictException (#212).
+    if slack_helpers.decided_elsewhere(client, payload.channel_id, payload.thread_ts):
+        slack_helpers.post_thread_reply(client, payload.channel_id, payload.thread_ts, slack_helpers.already_decided_reply(approver.id))
+        return None
     decided_by = slack_helpers.approved_by(approver.id)
     slack_helpers.update_request_message(
         client, payload.channel_id, payload.thread_ts, card, slack_helpers.RequestState.processing(decided_by)

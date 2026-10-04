@@ -1549,6 +1549,22 @@ def test_handle_button_click_leaves_the_card_to_a_racing_grant_on_conflict(main_
     assert _thread_replies(client) == [main_module.slack_helpers.grant_conflict_reply("U_APPROVER")]
 
 
+def test_handle_button_click_stops_when_another_click_already_decided_the_request(main_module):
+    """#212: a click whose Processing would land on the winner's final state stops before painting it."""
+    sh = main_module.slack_helpers
+    client = _slack_client()
+    card = sh.RequestCard.for_request(_request(main_module, account_name="aft"))
+    _, processing = sh.build_request_message(card, sh.RequestState.processing(sh.approved_by("U_OTHER")))
+    client.conversations_history.return_value = {"messages": [{"ts": "12345.6789", "blocks": processing}]}
+
+    result, mock_execute, *_ = _click(main_module, _button_click_body(main_module), client)
+
+    assert result is None
+    mock_execute.assert_not_called()
+    client.chat_update.assert_not_called()
+    assert _thread_replies(client) == [sh.already_decided_reply("U_APPROVER")]
+
+
 @pytest.mark.parametrize(
     "error",
     [

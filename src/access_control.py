@@ -491,6 +491,9 @@ def execute_decision(  # noqa: PLR0913
             message_ts=message_ts,
         )
     except Exception as e:
+        if sso.is_grant_conflict(e):
+            # A racing click's grant owns this request and writes its own audit entry (#212).
+            raise
         s3.log_operation_best_effort(
             s3.AuditEntry(
                 account_id=account_id,
@@ -619,6 +622,8 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             message_ts=message_ts,
         )
     except Exception as e:
+        if sso.is_grant_conflict(e):
+            raise  # As in execute_decision: the racing click audits its own grant.
         s3.log_operation_best_effort(
             s3.AuditEntry(
                 group_name=group.name,

@@ -293,6 +293,21 @@ def test_group_button_click_leaves_the_card_to_a_racing_grant_on_conflict(group_
     assert _thread_replies(slack_client) == [group_module.slack_helpers.grant_conflict_reply(APPROVER_1.id)]
 
 
+def test_group_button_click_stops_when_another_click_already_decided_the_request(group_module, slack_client):
+    """#212: a click whose Processing would land on the winner's final state stops before painting it."""
+    sh = group_module.slack_helpers
+    payload = _payload(group_module)
+    card = sh.RequestCard.for_request(payload.request)
+    _, discarded = sh.build_request_message(card, sh.RequestState.discarded(APPROVER_2.id))
+    slack_client.conversations_history.return_value = {"messages": [{"ts": payload.thread_ts, "blocks": discarded}]}
+
+    mock_exec = _click(group_module, slack_client, payload)
+
+    mock_exec.assert_not_called()
+    slack_client.chat_update.assert_not_called()
+    assert _thread_replies(slack_client) == [sh.already_decided_reply(APPROVER_1.id)]
+
+
 @pytest.mark.parametrize(
     "error",
     [
