@@ -4,15 +4,6 @@ variable "create_api_gateway" {
   default     = true
 }
 
-variable "create_lambda_url" {
-  description = <<-EOT
-  If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future
-  If false, Lambda url will be deleted.
-  EOT
-  type        = bool
-  default     = true
-}
-
 variable "ecr_repo_name" {
   description = "The name of the ECR repository."
   type        = string
@@ -116,28 +107,16 @@ variable "requester_lambda_name" {
   default     = "access-requester"
 }
 
-variable "event_brige_check_on_inconsistency_rule_name" {
-  description = "DEPRECATED: Use event_bridge_check_on_inconsistency_rule_name instead. This variable contains a typo and will be removed in a future version."
-  type        = string
-  default     = "sso-elevator-check-on-inconsistency"
-}
-
-variable "event_brige_scheduled_revocation_rule_name" {
-  description = "DEPRECATED: Use event_bridge_scheduled_revocation_rule_name instead. This variable contains a typo and will be removed in a future version."
-  type        = string
-  default     = "sso-elevator-scheduled-revocation"
-}
-
 variable "event_bridge_check_on_inconsistency_rule_name" {
   description = "value for the event bridge check on inconsistency rule name"
   type        = string
-  default     = null
+  default     = "sso-elevator-check-on-inconsistency"
 }
 
 variable "event_bridge_scheduled_revocation_rule_name" {
   description = "value for the event bridge scheduled revocation rule name"
   type        = string
-  default     = null
+  default     = "sso-elevator-scheduled-revocation"
 }
 
 variable "schedule_group_name" {
@@ -490,23 +469,12 @@ variable "identity_store_id" {
 # ==========================================
 
 variable "enable_access_requester_cli" {
-  description = "If true (and create_api_gateway is also true), adds the POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Off by default so upgrading an existing deployment doesn't silently add a new AWS_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it."
+  description = "If true, creates a separate REST API with a POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Requires create_api_gateway = true. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Off by default so upgrading an existing deployment doesn't silently add a new AWS_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it."
   type        = bool
   default     = false
-}
 
-variable "cli_sso_role_name_prefix" {
-  description = "Required prefix on a CLI caller's assumed-role name for the request to be accepted as an SSO-provisioned session."
-  type        = string
-  default     = "AWSReservedSSO_"
-
-  # src/config.py rejects "" at load time, and main.py calls get_config() at
-  # module import -- so an empty value here wouldn't just break the CLI
-  # route, it would crash the Lambda's import and take the Slack path down
-  # with it. Catching this at `terraform plan`/`apply` is a lot cheaper than
-  # finding out from a broken deployment.
   validation {
-    condition     = var.cli_sso_role_name_prefix != ""
-    error_message = "cli_sso_role_name_prefix must not be empty -- it would disable the check entirely (str.startswith(\"\") is always true) and crash the Lambda's config load, breaking the Slack path too."
+    condition     = !var.enable_access_requester_cli || var.create_api_gateway
+    error_message = "enable_access_requester_cli = true requires create_api_gateway = true."
   }
 }

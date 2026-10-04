@@ -6,9 +6,9 @@ Submit a temporary AWS access request without Slack.
 
 The normal SSO Elevator flow happens entirely in Slack: you post a request, an approver clicks Approve, and the module grants a temporary permission set. That works well for a person, but it's awkward for a script, a CI job, or an AI coding agent that can't click a button — they need a command that submits the same request and reports a clear result via its exit code (0 on success, non-zero otherwise) and human-readable output on stdout/stderr. There's no `--json` / structured-output mode yet, so a caller that needs to parse the result programmatically (rather than just check the exit code) has to parse this prose output itself. `elevator` signs the request with your own local AWS credentials and posts it directly to the module's `POST /access-requester-cli` route; API Gateway's `AWS_IAM` authorizer verifies that signature itself, and the Lambda extracts your identity from the verified request context (`src/cli_auth.py`) before running it through the exact same approval pipeline a Slack-submitted request goes through — same approvers, same self-approval rules, same audit log.
 
-Your AWS identity also needs `execute-api:Invoke` permission on this route in the account the module is deployed into — typical member-account SSO credentials (e.g. a plain `ReadOnly` session in a different account) will not have it, and you'll see a `403` if it's missing. Check with whoever manages your SSO permission sets if you're not sure you have it.
+You must call from an account in the module's AWS Organization. Outside the module's own account, your permission set also needs `execute-api:Invoke` on the module's `requester_api_execution_arn_cli` output.
 
-`execute-api:Invoke` alone is not sufficient, though: the Lambda's own identity check (`src/cli_auth.py`) additionally requires the caller to be an active **IAM Identity Center SSO session, in the deployment account specifically**, whose session name resolves to a **Slack user in this workspace**. Plain IAM users, other-account SSO sessions, and OIDC-federated CI roles (e.g. a GitHub Actions or GitLab CI job's own workload identity) are all rejected regardless of what `execute-api:Invoke` grant they hold, since none of them are IAM Identity Center-provisioned sessions in the first place — this matters especially for the "CI job" use case above, which needs a genuine SSO session available to it (e.g. via `aws sso login` in a runner with that capability), not just an IAM policy grant.
+You must sign with an IAM Identity Center (SSO) session, for example after `aws sso login`. IAM users, other roles, and CI/OIDC roles are rejected, so a CI job needs a real SSO session too. Your Identity Store user's primary email must belong to a Slack user in the workspace. See the main [README's CLI section](../../README.md#cli-tool) for details.
 
 ## Install
 
@@ -76,6 +76,8 @@ codesign --verify -R '=anchor apple generic and certificate leaf[subject.OU] = T
    elevator configure --endpoint https://<api-id>.execute-api.<region>.amazonaws.com/default/access-requester-cli
    ```
    (writes `~/.elevator/config.json`)
+
+Use the module's `requester_api_endpoint_url_cli` output as the endpoint. After a module upgrade that moved the CLI route to its own REST API, re-run `elevator configure --endpoint` with the new value.
 
 Credentials and region come from the standard AWS SDK chain — `AWS_PROFILE`, `AWS_REGION`, an active SSO session, etc. — the same way any AWS CLI command resolves them. `elevator` doesn't have its own profile setting; there's nothing extra to configure for auth beyond a normal AWS environment.
 

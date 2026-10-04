@@ -79,22 +79,9 @@ module "access_requester_slack_handler" {
       # already uses (#194 High #5, found by Andrey Devyatkin).
       CONFIG_BUCKET_KMS_KEY_ARN = var.config_bucket_kms_key_arn != null ? var.config_bucket_kms_key_arn : ""
     },
-    # Only set when the CLI route actually exists. Gated on both flags, not
-    # enable_access_requester_cli alone: create_api_gateway = false means
-    # module.http_api has count = 0, so referencing module.http_api[0] below
-    # would fail outright with that combination -- which is also correct
-    # user-facing behavior for it, since enable_access_requester_cli = true
-    # with create_api_gateway = false previously applied cleanly while
-    # silently creating no route at all (these vars set, nothing to use
-    # them, no error anywhere).
-    var.create_api_gateway && var.enable_access_requester_cli ? {
-      CLI_EXPECTED_ACCOUNT_ID  = local.cli_expected_account_id
-      CLI_SSO_ROLE_NAME_PREFIX = var.cli_sso_role_name_prefix
-      # Defense-in-depth against a naive/accidental direct lambda:InvokeFunction
-      # call bypassing API Gateway entirely -- not a real access control, since
-      # a deliberate forgery can just set this field too. See src/config.py's
-      # cli_expected_api_id docstring.
-      CLI_EXPECTED_API_ID = module.http_api[0].api_id
+    local.create_cli_rest_api ? {
+      # Defense-in-depth only, not an access control: see src/config.py's cli_expected_api_id.
+      CLI_EXPECTED_API_ID = aws_api_gateway_rest_api.cli[0].id
     } : {}
   )
 
@@ -105,22 +92,14 @@ module "access_requester_slack_handler" {
         source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path}"
       }
     } : {},
-    var.create_api_gateway && var.enable_access_requester_cli ? {
+    # The CLI REST API (cli_rest_api.tf), scoped to its one stage and method.
+    local.create_cli_rest_api ? {
       AllowExecutionFromAPIGatewayCli = {
         service    = "apigateway"
-        source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path_cli}"
+        source_arn = "${aws_api_gateway_rest_api.cli[0].execution_arn}/${local.api_stage_name}/POST${local.api_resource_path_cli}"
       }
     } : {}
   )
-
-  create_lambda_function_url = var.create_lambda_url ? true : false
-
-  cors = var.create_lambda_url ? {
-    allow_credentials = true
-    allow_origins     = ["https://slack.com"]
-    allow_methods     = ["POST"]
-    max_age           = 86400
-  } : null
 
   attach_policy_json = true
   policy_json        = data.aws_iam_policy_document.slack_handler.json
@@ -134,24 +113,6 @@ module "access_requester_slack_handler" {
   cloudwatch_logs_retention_in_days = var.logs_retention_in_days
 
   tags = var.tags
-}
-
-# By default, the same policy is created by the "aws_lambda_function_url" resource
-# But for reason i was not able to find out, in some cases of creation with the "API Gateway" resource, the policy is not created
-# So we are creating the same policy but using the "aws_lambda_permission" resource.
-resource "aws_lambda_permission" "url" {
-  count                  = var.create_lambda_url ? 1 : 0
-  action                 = "lambda:InvokeFunctionUrl"
-  function_name          = module.access_requester_slack_handler.lambda_function_name
-  principal              = "*"
-  statement_id           = "AllowExecutionFromLambdaURL"
-  function_url_auth_type = "NONE"
-  # Adds the following condition keys, which are required for the function to be invoked from a URL:
-  # "Condition": {
-  #      "StringEquals": {
-  #        "lambda:FunctionUrlAuthType": "None"
-  #      }
-  #    }
 }
 
 data "aws_iam_policy_document" "slack_handler" {
@@ -211,12 +172,8 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:sso:::account/*"
     ]
   }
-  # iam:GetRole here is also what src/cli_auth.py relies on to verify a CLI
-  # caller's assumed role is genuinely IAM Identity Center-provisioned: the
-  # resource scoping below means a role at any other path 403s on GetRole
-  # rather than returning a (non-matching) real path, so a spoofed role
-  # never gets its metadata read at all. Don't broaden these resources
-  # without checking that function's expectations.
+  # IAM Identity Center provisions the AWSReservedSSO_ role with the caller's permissions when it
+  # creates an account assignment in the management account (AWS docs: AccessToSSOProvisionedRoles).
   statement {
     effect = "Allow"
     actions = [
@@ -232,11 +189,7 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"
     ]
   }
-  # identitystore:ListUsers here is also what src/cli_auth.py (via
-  # sso.find_email_by_username) relies on to resolve a CLI caller's
-  # Identity Store username (RoleSessionName) to their real registered
-  # email — RoleSessionName isn't always an email itself (AD-style
-  # usernames, or a long email truncated to its 64-character limit).
+  # identitystore:ListUsers maps a CLI caller's session name to an Identity Store user (src/cli_auth.py).
   statement {
     effect = "Allow"
     actions = [
@@ -343,39 +296,17 @@ module "http_api" {
     max_age           = 86400
   }
 
-  routes = merge(
-    {
-      "POST ${local.api_resource_path}" : {
-        integration = {
-          uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
-          type = "AWS_PROXY"
-        }
-        throttling_burst_limit = var.api_gateway_throttling_burst_limit
-        throttling_rate_limit  = var.api_gateway_throttling_rate_limit
+  # Slack route only. The CLI route is a REST API (cli_rest_api.tf), which supports resource policies.
+  routes = {
+    "POST ${local.api_resource_path}" : {
+      integration = {
+        uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+        type = "AWS_PROXY"
       }
-    },
-    # Same Lambda, same deployment — a second route for the CLI's signed
-    # requests, only added when explicitly enabled (enable_access_requester_cli
-    # defaults to false, so upgrading an existing deployment doesn't silently
-    # add this new AWS_IAM-authorized entry point). AWS_IAM here means API
-    # Gateway itself verifies the caller's SigV4 signature (unlike the Slack
-    # route above, which relies on Slack's own signing secret checked inside
-    # the Lambda), and populates requestContext.authorizer.iam for
-    # main.lambda_handler to read. The Lambda forks on the request path to
-    # decide which of the two to run — see CLI_ACCESS_REQUEST_PATH in main.py.
-    var.enable_access_requester_cli ? {
-      "POST ${local.api_resource_path_cli}" : {
-        integration = {
-          uri                    = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
-          type                   = "AWS_PROXY"
-          payload_format_version = "2.0" # routeKey and requestContext.authorizer.iam only exist in 2.0 — see main.py/cli_auth.py
-        }
-        authorization_type     = "AWS_IAM"
-        throttling_burst_limit = var.api_gateway_throttling_burst_limit
-        throttling_rate_limit  = var.api_gateway_throttling_rate_limit
-      }
-    } : {}
-  )
+      throttling_burst_limit = var.api_gateway_throttling_burst_limit
+      throttling_rate_limit  = var.api_gateway_throttling_rate_limit
+    }
+  }
   stage_name         = local.api_stage_name
   create_domain_name = false
   tags               = var.tags

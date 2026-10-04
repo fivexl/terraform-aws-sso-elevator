@@ -20,32 +20,15 @@ locals {
   # In case of non-default value for var.config_bucket_name, we use the value as is and expect the name is unique.
   config_bucket_name = var.config_bucket_name != "sso-elevator-config" ? var.config_bucket_name : "sso-elevator-config-${random_string.random.result}"
 
-  # HTTP API configuration
-  api_resource_path     = "/access-requester"
+  # HTTP API configuration (Slack route only; the CLI route is cli_rest_api.tf's REST API)
+  api_resource_path = "/access-requester"
+  api_stage_name    = "default"
+  full_api_url      = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
+
+  # Must match main.py's CLI_ACCESS_REQUEST_PATH.
   api_resource_path_cli = "/access-requester-cli"
-  api_stage_name        = "default"
-  full_api_url          = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
-  full_api_url_cli      = var.create_api_gateway && var.enable_access_requester_cli ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path_cli}" : ""
 
-  # CLI access-request path: which account a caller's verified IAM ARN must belong to.
-  # Always the account this module is deployed into -- not operator-configurable,
-  # because cli_auth.py's iam:GetRole check (verifying the caller's role is
-  # genuinely SSO-provisioned) can only ever resolve against this same
-  # account regardless of what this value claimed. Letting them diverge
-  # either broke every request (if pointed at some other real account) or,
-  # in the case where that other account happened to be one an attacker
-  # controlled, let a same-named role there impersonate a real user here.
-  cli_expected_account_id = data.aws_caller_identity.current.account_id
-
-  # Event Bridge rule names with fallback to deprecated variables
-  event_bridge_check_on_inconsistency_rule_name = coalesce(
-    var.event_bridge_check_on_inconsistency_rule_name,
-    var.event_brige_check_on_inconsistency_rule_name
-  )
-  event_bridge_scheduled_revocation_rule_name = coalesce(
-    var.event_bridge_scheduled_revocation_rule_name,
-    var.event_brige_scheduled_revocation_rule_name
-  )
+  create_cli_rest_api = var.enable_access_requester_cli
 
   # Attribute sync configuration
   attribute_sync_event_rule_name = var.attribute_sync_event_rule_name

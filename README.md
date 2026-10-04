@@ -466,24 +466,29 @@ Notes:
 SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one except them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
 
 ## API gateway feature
-To address the [lambda-1](https://docs.aws.amazon.com/securityhub/latest/userguide/lambda-controls.html#lambda-1) SecurityHub control alert triggered by the default creation of a FunctionURLAllowPublicAccess resource-based policy for lambda, in 1.4.0 release module will eventually migrate to the usage of API Gateway by default. You still can use lambda URL to seamlessly migrate to the API Gateway url, but it is deprecated and will be removed in future releases. You can use the following variables to control the behavior:
+The requester Lambda is invoked via API Gateway (`create_api_gateway`, defaults to `true`). The Lambda Function URL path (`create_lambda_url`) has been removed. `create_lambda_url` defaulted to `true`, so a deployment that never set it loses its Function URL on the next apply, with no plan error. Before applying, point the Slack App manifest's Request URL at the `requester_api_endpoint_url` output, and remove `create_lambda_url` from your configuration if you set it.
 
-```hcl
-create_api_gateway = true # This will create an API Gateway for the requester lambda
-create_lambda_url = false # This will delete lambda url
-```
-
-To fix the Security Hub issue when migrating to API Gateway, manually delete the FunctionURLAllowPublicAccess policy statement in the AWS Console.
-**After updating the module, you can find the API URL in the output of the module. Please don't forget to update the Slack App manifest with the new URL.**
+The misspelled `event_brige_*` variables are removed; use `event_bridge_*`.
 
 ## CLI tool
-Access requests can also be submitted from the command line, without Slack, via the `POST /access-requester-cli` route — signed directly with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. This route is off by default; set `enable_access_requester_cli = true` to add it. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
+Access requests can also be submitted from the command line, without Slack, via `POST /access-requester-cli` on a separate REST API, signed with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. The route is off by default; set `enable_access_requester_cli = true` to create it. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
 
-Each caller's AWS identity also needs `execute-api:Invoke` permission on this route — without it, API Gateway itself rejects the request with a `403` before the Lambda ever runs. Use the `requester_api_execution_arn_cli` module output as the policy's `Resource` when granting it.
+Requirements:
+- The deployment account must belong to an AWS Organization: the REST API's resource policy is built from the organization id. The principal running Terraform needs `organizations:DescribeOrganization`, `organizations:ListAccounts`, `organizations:ListRoots` and `organizations:ListAWSServiceAccessForOrganization`, which the `aws_organizations_organization` data source calls.
+- The resource policy (`aws:PrincipalOrgID`) admits callers from any account in the organization, and API Gateway rejects everyone else. Callers in the deployment account need nothing more. Callers in any other account also need `execute-api:Invoke` on the `requester_api_execution_arn_cli` output in their own identity policy (their permission set), as IAM requires for cross-account `AWS_IAM` calls.
+- Callers must sign with an IAM Identity Center (SSO) session. IAM users, other roles, and CI/OIDC roles are rejected.
+- The session name must be the caller's Identity Store username. IAM Identity Center sets it that way, so a normal `aws sso login` session qualifies. The Lambda matches it exactly (case-sensitive) against `UserName`, takes that user's primary email (or the first listed one), and looks up the Slack user with that email. If any step finds no match, the request is rejected with the same generic message as an invalid session. A username longer than 64 characters is truncated in the session name and therefore never matches.
 
-**Trust model warning:** the requester Lambda itself does not re-verify the caller's *signature* — that part is entirely API Gateway's `AWS_IAM` authorizer's job, done before the Lambda ever runs. (It does independently re-verify the *identity* that authorizer already authenticated — the account ID, that the assumed role is genuinely IAM Identity Center-provisioned via its real IAM path rather than just a matching name, and that the session resolves to a real Identity Store user — see `src/cli_auth.py`. That verification only means anything for a request whose signature was itself genuine, which is exactly the guarantee a direct Lambda invocation skips.) This means anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway entirely and invoke it directly with a forged event. The access this grants isn't "themselves" in any sense tied to the invoker's own AWS session — `access_control.execute_decision` grants against the *verified identity carried in the event* (the forged `requestContext.authorizer.iam.userArn` and whatever it resolves to), not against whatever credentials actually placed the `InvokeFunction` call. In practice that still means a forger can obtain the configured permission set against any real SSO user of their choosing, provided the forged ARN is one `cli_auth.extract_identity` accepts: the right account ID, an IAM Identity Center-provisioned role name, and a session name that resolves to a genuine Identity Store user by exact match — so the resulting access lands on whichever real user's identity was forged into the request, not necessarily the invoker. Keep `lambda:InvokeFunction` on this function restricted to API Gateway's own invocation role — do not grant it to anyone as a general-purpose IAM permission. The Lambda does check that the event's `requestContext.apiId` matches this deployment's API Gateway, but that value is not secret (it's visible via `DescribeApi`/Terraform state to anyone with read access) and, in a deployment without the CLI route enabled, defaults to an empty string that a forged event can trivially satisfy — so treat it as a defense-in-depth measure against an accidental or naive direct invocation, not a control a deliberate forgery needs to work around.
+**Trust model:** the requester Lambda does not re-verify the caller's signature; API Gateway's `AWS_IAM` authorizer does that before the Lambda runs. `src/cli_auth.py` then checks that the assumed role's name starts with `AWSReservedSSO_` and that the session name matches a real Identity Store user. IAM reserves role names starting with `AWSReservedSSO_` in every account. This was tested: `aws iam create-role --role-name AWSReservedSSO_ForgeTest_0000000000000000 ...` with administrator permissions fails with `InvalidInput: The role name 'AWSReservedSSO_ForgeTest_0000000000000000' is reserved for AWS use`. So the name alone proves the session comes from IAM Identity Center, in any account of the organization, with no IAM call. The caller's account is not checked in the Lambda; the resource policy covers that.
 
-The CLI route isn't currently usable outside the standard `aws` partition: this module's IAM policies hardcode `arn:aws:` throughout, so a GovCloud/China caller's otherwise-valid SSO session fails at the Lambda's own `iam:GetRole` call and is rejected with the same generic message an invalid session gets.
+The residual risk is a direct invoke: anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway with a forged event, including a forged identity. API Gateway needs no IAM permission: the function's resource policy admits `apigateway.amazonaws.com`, scoped by source ARN. So grant `lambda:InvokeFunction` on the requester Lambda to no other principal. When `enable_access_requester_cli` is false, the Lambda rejects every CLI-shaped event.
+
+The CLI supports only the standard `aws` partition.
+
+**Upgrading a deployment that already had `enable_access_requester_cli = true`:**
+- The CLI route moves to a new REST API on a new host. Re-run `elevator configure --endpoint` with the `requester_api_endpoint_url_cli` output.
+- Callers in other accounts need `execute-api:Invoke` in their permission sets on the new `requester_api_execution_arn_cli` value.
+- Remove `cli_sso_role_name_prefix` from your configuration.
 
 ## Slack secrets in SSM Parameter Store
 
@@ -766,8 +771,8 @@ group_config = [
 ]
 }
 
-output "aws_sso_elevator_lambda_function_url" {
-  value = module.aws_sso_elevator.lambda_function_url
+output "requester_api_endpoint_url" {
+  value = module.aws_sso_elevator.requester_api_endpoint_url
 }
 ```
 
@@ -777,7 +782,7 @@ output "aws_sso_elevator_lambda_function_url" {
 3. Click `From an app manifest`
 4. Select workspace, click `next`
 5. Choose `yaml` for app manifest format
-6. Update lambda url (from output `aws_sso_elevator_lambda_function_url`) to `request_url` field and paste the following into the text box: 
+6. Update the Request URL (from output `requester_api_endpoint_url`) to the `request_url` field and paste the following into the text box: 
 ```yaml
 display_information:
   name: AWS SSO Access Elevator
@@ -862,6 +867,14 @@ settings:
 
 | Name | Type |
 | ---- | ---- |
+| [aws_api_gateway_deployment.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_deployment) | resource |
+| [aws_api_gateway_integration.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_integration) | resource |
+| [aws_api_gateway_method.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method) | resource |
+| [aws_api_gateway_method_settings.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method_settings) | resource |
+| [aws_api_gateway_resource.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_resource) | resource |
+| [aws_api_gateway_rest_api.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_rest_api) | resource |
+| [aws_api_gateway_rest_api_policy.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_rest_api_policy) | resource |
+| [aws_api_gateway_stage.cli](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage) | resource |
 | [aws_cloudwatch_event_rule.attribute_sync_schedule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_rule.sso_elevator_check_on_inconsistency](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
 | [aws_cloudwatch_event_rule.sso_elevator_scheduled_revocation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule) | resource |
@@ -871,7 +884,6 @@ settings:
 | [aws_iam_role.eventbridge_role](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy.eventbridge_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_lambda_permission.eventbridge](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
-| [aws_lambda_permission.url](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
 | [aws_s3_object.approval_config](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_object) | resource |
 | [aws_scheduler_schedule_group.one_time_schedule_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule_group) | resource |
 | [aws_sns_topic.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
@@ -885,6 +897,7 @@ settings:
 | [aws_iam_policy_document.read_slack_secrets](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.revoker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.slack_handler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_organizations_organization.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/organizations_organization) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
 | [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
 | [aws_ssoadmin_instances.all](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssoadmin_instances) | data source |
@@ -909,20 +922,16 @@ settings:
 | <a name="input_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#input\_attribute\_syncer\_lambda\_name) | Name for the attribute syncer Lambda function. | `string` | `"attribute-syncer"` | no |
 | <a name="input_aws_sns_topic_subscription_email"></a> [aws\_sns\_topic\_subscription\_email](#input\_aws\_sns\_topic\_subscription\_email) | value for the email address to subscribe to the SNS topic | `string` | `""` | no |
 | <a name="input_cache_enabled"></a> [cache\_enabled](#input\_cache\_enabled) | Enable caching of AWS accounts, permission sets, and Identity Store users (names, usernames, emails) in S3, as a fallback if the live AWS API call fails. If set to false, caching is disabled but the S3 bucket will still be created for future config storage. | `bool` | `true` | no |
-| <a name="input_cli_sso_role_name_prefix"></a> [cli\_sso\_role\_name\_prefix](#input\_cli\_sso\_role\_name\_prefix) | Required prefix on a CLI caller's assumed-role name for the request to be accepted as an SSO-provisioned session. | `string` | `"AWSReservedSSO_"` | no |
 | <a name="input_config"></a> [config](#input\_config) | value for the SSO Elevator config | `any` | `[]` | no |
 | <a name="input_config_bucket_kms_key_arn"></a> [config\_bucket\_kms\_key\_arn](#input\_config\_bucket\_kms\_key\_arn) | ARN of the KMS key to use for config S3 bucket encryption. If not provided, uses AES256 encryption. | `string` | `null` | no |
 | <a name="input_config_bucket_name"></a> [config\_bucket\_name](#input\_config\_bucket\_name) | Name of the S3 bucket for storing configuration and cache data (accounts, permission sets, and future config files) | `string` | `"sso-elevator-config"` | no |
 | <a name="input_create_api_gateway"></a> [create\_api\_gateway](#input\_create\_api\_gateway) | If true, module will create & configure API Gateway for the Lambda function | `bool` | `true` | no |
-| <a name="input_create_lambda_url"></a> [create\_lambda\_url](#input\_create\_lambda\_url) | If true, the Lambda function will continue to use the Lambda URL, which will be deprecated in the future<br/>If false, Lambda url will be deleted. | `bool` | `true` | no |
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
 | <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.4.3"` | no |
-| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true (and create\_api\_gateway is also true), adds the POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
-| <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `null` | no |
-| <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `null` | no |
-| <a name="input_event_brige_check_on_inconsistency_rule_name"></a> [event\_brige\_check\_on\_inconsistency\_rule\_name](#input\_event\_brige\_check\_on\_inconsistency\_rule\_name) | DEPRECATED: Use event\_bridge\_check\_on\_inconsistency\_rule\_name instead. This variable contains a typo and will be removed in a future version. | `string` | `"sso-elevator-check-on-inconsistency"` | no |
-| <a name="input_event_brige_scheduled_revocation_rule_name"></a> [event\_brige\_scheduled\_revocation\_rule\_name](#input\_event\_brige\_scheduled\_revocation\_rule\_name) | DEPRECATED: Use event\_bridge\_scheduled\_revocation\_rule\_name instead. This variable contains a typo and will be removed in a future version. | `string` | `"sso-elevator-scheduled-revocation"` | no |
+| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true, creates a separate REST API with a POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Requires create\_api\_gateway = true. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
+| <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `"sso-elevator-check-on-inconsistency"` | no |
+| <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `"sso-elevator-scheduled-revocation"` | no |
 | <a name="input_group_config"></a> [group\_config](#input\_group\_config) | value for the SSO Elevator group config | `any` | `[]` | no |
 | <a name="input_identity_store_id"></a> [identity\_store\_id](#input\_identity\_store\_id) | The Identity Store ID. If not provided and sso\_instance\_arn is also not provided, it will be automatically discovered. | `string` | `""` | no |
 | <a name="input_lambda_architecture"></a> [lambda\_architecture](#input\_lambda\_architecture) | The instruction set architecture for Lambda functions. Valid values are 'x86\_64' or 'arm64'. Use 'arm64' for better price/performance on Graviton2. | `string` | `"x86_64"` | no |
@@ -965,10 +974,9 @@ settings:
 | <a name="output_attribute_syncer_lambda_name"></a> [attribute\_syncer\_lambda\_name](#output\_attribute\_syncer\_lambda\_name) | The name of the attribute syncer Lambda function. |
 | <a name="output_config_s3_bucket_arn"></a> [config\_s3\_bucket\_arn](#output\_config\_s3\_bucket\_arn) | The ARN of the S3 bucket for storing configuration and cache data. |
 | <a name="output_config_s3_bucket_name"></a> [config\_s3\_bucket\_name](#output\_config\_s3\_bucket\_name) | The name of the S3 bucket for storing configuration and cache data. |
-| <a name="output_lambda_function_url"></a> [lambda\_function\_url](#output\_lambda\_function\_url) | value for the access\_requester lambda function URL |
 | <a name="output_requester_api_endpoint_url"></a> [requester\_api\_endpoint\_url](#output\_requester\_api\_endpoint\_url) | The full URL to invoke the API. Pass this URL into the Slack App manifest as the Request URL. |
 | <a name="output_requester_api_endpoint_url_cli"></a> [requester\_api\_endpoint\_url\_cli](#output\_requester\_api\_endpoint\_url\_cli) | The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR\_ENDPOINT). null unless enable\_access\_requester\_cli is also true. |
-| <a name="output_requester_api_execution_arn_cli"></a> [requester\_api\_execution\_arn\_cli](#output\_requester\_api\_execution\_arn\_cli) | The execute-api ARN for the CLI's access-request route, for building the execute-api:Invoke IAM policy CLI callers need (e.g. as the policy's Resource, optionally narrowed from */* to <stage>/POST). null unless enable\_access\_requester\_cli is also true. |
+| <a name="output_requester_api_execution_arn_cli"></a> [requester\_api\_execution\_arn\_cli](#output\_requester\_api\_execution\_arn\_cli) | The execute-api ARN of the CLI's access-request route. Callers in other accounts need execute-api:Invoke on this ARN in their permission set. null unless enable\_access\_requester\_cli is also true. |
 | <a name="output_sso_elevator_bucket_id"></a> [sso\_elevator\_bucket\_id](#output\_sso\_elevator\_bucket\_id) | The name of the SSO elevator bucket. |
 <!-- END_TF_DOCS -->
 

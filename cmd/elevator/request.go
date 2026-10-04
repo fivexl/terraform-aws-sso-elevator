@@ -116,9 +116,9 @@ func resolveEndpoint(flagEndpoint, envEndpoint, configEndpoint string) string {
 	return configEndpoint
 }
 
-// requestTimeout bounds a single attempt. HTTP APIs cap the API Gateway to
-// Lambda integration at 30s, so this is set just above that ceiling — long
-// enough that the server, not this client, is what times out first.
+// requestTimeout bounds a single attempt. The REST API's default integration
+// timeout is 29s, so this is set just above it — long enough that the
+// server, not this client, is what times out first.
 const requestTimeout = 35 * time.Second
 
 // maxConnectAttempts bounds retries of connection-level failures only (DNS,

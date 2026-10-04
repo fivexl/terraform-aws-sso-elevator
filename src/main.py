@@ -1,4 +1,3 @@
-import base64
 import json
 import re
 from datetime import timedelta
@@ -43,15 +42,15 @@ app = App(
 )
 
 
-# Route path for the CLI's signed-request intake, on the same API Gateway HTTP
-# API as the Slack route but with an AWS_IAM authorizer instead of Slack's own
-# signature check — see api_resource_path_cli in locals.tf.
+# Must match api_resource_path_cli in locals.tf (the CLI REST API's resource path).
 CLI_ACCESS_REQUEST_PATH = "/access-requester-cli"
-# routeKey (not rawPath/requestContext.http.path) is what actually identifies which
-# route matched: it's always exactly "{METHOD} {path}" as defined in the routes map,
-# regardless of the stage name, whereas rawPath's relationship to a named (non-$default)
-# stage's prefix isn't something to rely on without checking case by case.
-CLI_ACCESS_REQUEST_ROUTE_KEY = f"POST {CLI_ACCESS_REQUEST_PATH}"
+
+
+def _is_cli_event(event: dict) -> bool:
+    """Whether event is a REST API proxy event for the CLI route. Slack events come from an
+    HTTP API (payload format 2.0, routeKey instead of httpMethod/resource), so they never match.
+    """
+    return event.get("httpMethod") == "POST" and event.get("resource") == CLI_ACCESS_REQUEST_PATH
 
 
 def _transient_aws_error_response() -> dict:
@@ -69,108 +68,45 @@ def _transient_aws_error_response() -> dict:
 
 
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
-    if event.get("routeKey") == CLI_ACCESS_REQUEST_ROUTE_KEY:
+    if _is_cli_event(event):
         return handle_cli_access_request(event)
     slack_handler = SlackRequestHandler(app=app)
     return slack_handler.handle(event, context)
 
 
 def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, PLR0915
-    """Handle a signed CLI request for AWS access, submitted via the AWS_IAM-authenticated
-    CLI_ACCESS_REQUEST_PATH route instead of the Slack modal.
-
-    API Gateway has already verified the caller's SigV4 signature by the time this runs;
-    cli_auth.extract_identity only decides whether the resulting identity is trustworthy
-    enough to act on. Past that point, this funnels into the same process_access_request
-    the Slack modal path uses, so approval and everything downstream is unchanged.
-    """
+    """Handle a CLI access request on CLI_ACCESS_REQUEST_PATH. API Gateway has verified the
+    signature; cli_auth decides whether the identity may act. Then it joins the Slack path at
+    process_access_request."""
     logger.info("Handling CLI access request")
     try:
-        # Each hop uses `or {}` rather than a .get(..., {}) default, since a
-        # key can be present with an explicit JSON null value -- a default
-        # only kicks in when the key is missing entirely, so
-        # "authorizer": null would otherwise reach .get("iam") on None and
-        # raise, turning a routine unverified-identity case into a 500 with
-        # a Slack post instead of the clean 403 it should be.
-        #
-        # Extracted here, before the apiId check below, purely so every
-        # rejection past this point -- including the apiId mismatch itself
-        # -- can log the caller's asserted ARN (#194 B10). This is only ever
-        # used for logging until cli_auth.extract_identity independently
-        # verifies it further down; nothing here trusts it operationally.
-        # This is API Gateway's own AWS_IAM-authorizer-verified value, not
-        # attacker-controlled JSON body content, so logging it plainly (not
-        # just at DEBUG, which the default LOG_LEVEL=INFO deployment never
-        # emits) is what makes a rejected request attributable at all --
-        # without it, an operator investigating a wave of rejections has no
-        # identity to go on beyond "some signed caller", since API
-        # Gateway's own access log format has no equivalent field
-        # ($context.authorizer.iam.userArn isn't one of its available
-        # variables) to fall back on either.
-        iam_context = ((event.get("requestContext") or {}).get("authorizer") or {}).get("iam") or {}
-        user_arn = iam_context.get("userArn", "")
+        # `or {}` because a key may hold an explicit JSON null. user_arn is read early so every
+        # rejection can log it; it is authorizer-verified, and the stage has no access logging.
+        request_context = event.get("requestContext") or {}
+        user_arn = (request_context.get("identity") or {}).get("userArn", "")
 
-        # Defense-in-depth, not a real access control: this only blocks a
-        # direct lambda:InvokeFunction call that doesn't bother forging
-        # requestContext.apiId (an accidental or naive one), not a
-        # deliberate one -- a direct invoker controls the entire event JSON,
-        # so this value is guessable (visible via DescribeApi/Terraform
-        # state to anyone with read access), not secret. The real trust
-        # boundary is the IAM policy on who may invoke this Lambda at all;
-        # see the README's CLI section. cli_expected_api_id defaults to ""
-        # when the CLI route doesn't exist, and a forged event carrying
-        # "apiId": "" satisfies this check too -- so does simply omitting
-        # requestContext.apiId (or requestContext itself), since dict.get
-        # returns None by default when a key is missing, not this comment's
-        # own prior claim of "" -- though None != "" is also true, so the
-        # comparison below still rejects it the same way (#194 B1) -- it is
-        # NOT itself a
-        # fail-closed guard against a deliberate forgery in
-        # that configuration. The deployment still fails closed overall in
-        # that case, but via a different check: cli_auth.extract_identity's
-        # cli_expected_account_id comparison, which also defaults to ""
-        # when the CLI route doesn't exist, and _ASSUMED_ROLE_ARN_RE
-        # requires account_id to be exactly 12 digits -- a value "" can
-        # never match.
-        if (event.get("requestContext") or {}).get("apiId") != cfg.cli_expected_api_id:
+        # When the CLI route is disabled the expected API id is "", so a forged direct invoke
+        # carrying "apiId": "" would pass the comparison. Rejecting outright keeps a deployment
+        # that never enabled the CLI from accepting CLI-shaped events.
+        if not cfg.cli_expected_api_id:
+            logger.info("Rejected CLI request: the CLI route is not enabled", extra={"user_arn": user_arn})
+            return cli_auth.GENERIC_REJECTION
+
+        # Defense-in-depth only; see config.cli_expected_api_id.
+        if request_context.get("apiId") != cfg.cli_expected_api_id:
             logger.info(
                 "Rejected CLI request: requestContext.apiId did not match this deployment's API Gateway",
                 extra={"user_arn": user_arn},
             )
             return cli_auth.GENERIC_REJECTION
 
-        logger.info("Authorizer IAM userArn", extra={"user_arn": user_arn})
+        logger.info("CLI caller userArn", extra={"user_arn": user_arn})
 
-        # Cheap request-body validation (JSON syntax, field presence, reason
-        # length, duration format -- all local, no AWS calls) happens before
-        # cli_auth.extract_identity below, not after (#193 item 1): that
-        # call does an iam:GetRole plus a full paginated
-        # identitystore:ListUsers scan, the single most expensive thing on
-        # this path. A caller sending malformed JSON, a non-object body,
-        # missing fields, or an over-length reason used to still pay for
-        # both AWS calls before getting its 400 -- and since this route's
-        # AWS_IAM authorizer only proves the caller can *sign* a request,
-        # not that they're a legitimate SSO principal, this meant anyone
-        # able to sign a request (not just genuine SSO users) could drive
-        # full Identity Store scans with garbage payloads at the route's
-        # throttle. Validating the body first rejects that for free, before
-        # any AWS call runs at all.
+        # Validate the body before extract_identity: its Identity Store scan is the most expensive
+        # call here, and any signer could otherwise drive it with garbage payloads.
         try:
-            # API Gateway HTTP APIs base64-encode the body onto this same
-            # "body" field, rather than using a separate field, whenever it
-            # decides the request's content-type should be treated as
-            # binary -- isBase64Encoded is the only signal that happened.
-            # The shipped Go CLI always sends application/json, which HTTP
-            # APIs never base64-encode, so this never actually triggers
-            # against it -- but ignoring the flag entirely (#194 B7) would
-            # silently misreport a different signed client's genuinely
-            # valid, merely-encoded request as "not valid JSON", when the
-            # real problem is that it was never decoded in the first place.
-            raw_body = event.get("body") or "{}"
-            if event.get("isBase64Encoded"):
-                raw_body = base64.b64decode(raw_body).decode("utf-8")
-            body = json.loads(raw_body)
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            body = json.loads(event.get("body") or "{}")
+        except json.JSONDecodeError:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
@@ -269,29 +205,12 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 ),
             }
 
-        # Identity verification (iam:GetRole plus a full paginated
-        # identitystore:ListUsers scan) runs only now, after every cheap,
-        # local check on the body above has already passed -- see the
-        # comment where user_arn is extracted for why.
         try:
             identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if user_arn else None
-        except cli_auth.TransientIAMError as e:
-            # IAM couldn't answer iam:GetRole right now (throttled, a 5xx,
-            # briefly unavailable) -- this says nothing about whether the
-            # caller's identity is valid, so it shouldn't be reported as
-            # GENERIC_REJECTION's "your credentials are invalid", nor paged
-            # to the approvals channel as an unexpected error. A 503 tells
-            # the caller this is worth retrying.
-            #
-            # The underlying cause is logged, not just the fact that some
-            # transient error happened (#194 AGENTS.md convention pass) --
-            # otherwise there's no way to tell a throttle apart from a 5xx
-            # apart from a connectivity blip from this log line alone.
-            # TransientIAMError itself is always raised bare (`raise
-            # TransientIAMError from e`, no message), so str(e) here would
-            # be empty -- the real detail is on __cause__, from that `from
-            # e` chain.
-            logger.warning(f"Transient IAM error while verifying CLI identity; asking the caller to retry: {e.__cause__}")
+        except cli_auth.TransientIdentityStoreError as e:
+            # The Identity Store couldn't answer right now; that says nothing about the caller,
+            # so ask them to retry. The exception is raised bare, so the detail is on __cause__.
+            logger.warning(f"Transient Identity Store error while verifying CLI identity; asking the caller to retry: {e.__cause__}")
             return _transient_aws_error_response()
         if not identity:
             logger.info("Rejected CLI request: could not verify a signed identity with an email", extra={"user_arn": user_arn})
@@ -355,32 +274,8 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "account and permission_set must both be ones this deployment is configured for."}),
             }
-        # No "does the caller already hold this exact assignment" check here
-        # -- issue #193: that defense-in-depth check (round-1 finding #6)
-        # required the requester to already have the specific account/
-        # permission-set pair they were requesting, which rejects every
-        # genuine elevation request by construction (the whole point of this
-        # tool is granting access the caller does not currently have). It
-        # only ever passed for a redundant re-request of a still-live grant
-        # SSO Elevator had itself just issued. Removed rather than rescoped:
-        # a correct principal-wide "do they have any real assignment
-        # anywhere" check needs sso-admin:ListAccountAssignmentsForPrincipal,
-        # which round-3 already established doesn't work from this module's
-        # own recommended delegated-admin deployment topology, and any
-        # per-account variant has the same "rejects legitimate first-time
-        # access" problem this one did. The identity is still verified by
-        # SigV4 + AWS_IAM, iam:GetRole's reserved-path check (round-1 #6's
-        # own conclusion: AWS itself blocks non-Identity-Center role
-        # creation there -- confirmed live, not just inferred from docs: a
-        # real `aws iam create-role --path /aws-reserved/sso.amazonaws.com/`
-        # call against this deployment's own account was rejected outright
-        # with "InvalidInput: The path '/aws-reserved/sso.amazonaws.com/' is
-        # reserved for AWS use", regardless of the caller's iam:CreateRole
-        # permissions -- so a forged role at that path to impersonate this
-        # check is not achievable through the IAM API, closing #194's
-        # unresolved disagreement over whether this was a real bypass), the
-        # session name resolving to a real Identity Store user, and the
-        # email round-trip cross-check below.
+        # No check that the caller already holds this assignment: elevation grants access the
+        # caller lacks, so such a check would reject every genuine request.
         try:
             requester = slack_helpers.get_user_by_email(app.client, identity_email)
         except slack_sdk.errors.SlackApiError as e:
@@ -429,14 +324,8 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # collision fix above closes off, so it must not be trusted here to
         # confirm this cross-check).
         #
-        # Reuses list_of_users from the identity tuple above rather than
-        # calling sso.list_users(...) again -- that's the exact full
-        # paginated Identity Store scan cli_auth.extract_identity's own
-        # comment calls "the call on this path most likely to throttle", and
-        # a second, unguarded call here would both double that cost per
-        # request and reintroduce the transient-error gap (ClientError/
-        # BotoCoreError -> 500 + Slack post) extract_identity was
-        # specifically hardened against.
+        # Reuses list_of_users from extract_identity: a second Identity Store scan would double the
+        # cost and lose extract_identity's transient-error handling.
         try:
             requester_user_id = sso.find_user_principal_id_by_email_strict(requester.email, list_of_users)
         except (SSOUserNotFound, AmbiguousSSOUser):

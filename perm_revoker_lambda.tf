@@ -106,7 +106,7 @@ data "aws_iam_policy_document" "revoker" {
       "events:DescribeRule"
     ]
     resources = [
-      "arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.event_bridge_scheduled_revocation_rule_name}"
+      "arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${var.event_bridge_scheduled_revocation_rule_name}"
     ]
   }
   statement {
@@ -186,7 +186,7 @@ data "aws_iam_policy_document" "revoker" {
 }
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_scheduled_revocation" {
-  name                = local.event_bridge_scheduled_revocation_rule_name
+  name                = var.event_bridge_scheduled_revocation_rule_name
   description         = "Triggers on schedule to revoke temporary permissions."
   schedule_expression = var.schedule_expression
   tags                = var.tags
@@ -201,7 +201,7 @@ resource "aws_cloudwatch_event_target" "sso_elevator_scheduled_revocation" {
 }
 
 resource "aws_cloudwatch_event_rule" "sso_elevator_check_on_inconsistency" {
-  name                = local.event_bridge_check_on_inconsistency_rule_name
+  name                = var.event_bridge_check_on_inconsistency_rule_name
   description         = "Triggers on schedule to check on inconsistency."
   schedule_expression = var.schedule_expression_for_check_on_inconsistency
   tags                = var.tags

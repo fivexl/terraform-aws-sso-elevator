@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import botocore.exceptions
@@ -6,328 +5,118 @@ import pytest
 
 import cli_auth
 
-# Matches conftest.py's mock_env: cli_expected_account_id="111111111111",
-# cli_sso_role_name_prefix="AWSReservedSSO_".
 EMAIL_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/requester@example.com"
 
-# AD-style username, no '@' at all -- the exact case the identity-store
-# lookup exists to handle: RoleSessionName is the Identity Store username,
-# not necessarily an email.
+# AD-style username with no '@': the session name is the Identity Store username, not an email.
 USERNAME_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/jsmith"
 
-# A session name that doesn't match any real Identity Store user -- e.g. a
-# long email truncated by RoleSessionName's 64-character limit.
+# A session name that matches no Identity Store user, e.g. a truncated long username.
 UNMATCHED_SESSION_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/i-0abc123def456"
 
-# Correct account and a name-prefix match, but the session name resolves to
-# nothing -- this ARN tests the account+role checks pass while the identity
-# resolution fails on its own.
-WRONG_ACCOUNT_ARN = "arn:aws:sts::999999999999:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/attacker@evil.com"
+OTHER_ACCOUNT_ARN = "arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/requester@example.com"
 
-# Correct account and a session name, but the role name itself doesn't even
-# have the expected prefix -- rejected before get_role is ever called.
-NON_SSO_ROLE_ARN = "arn:aws:sts::111111111111:assumed-role/SomeOtherRole/attacker@evil.com"
+NON_SSO_ROLE_ARN = "arn:aws:sts::111111111111:assumed-role/SomeOtherRole/requester@example.com"
 
-# The actual bypass this module exists to close: a role name with the right
-# prefix -- satisfying the old, insufficient check -- but not actually
-# provisioned by IAM Identity Center (i.e. not at the reserved path), which
-# is exactly what anyone with iam:CreateRole could produce themselves.
-SPOOFED_PREFIX_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Spoofed/attacker@evil.com"
+# Close to the reserved prefix but not it; IAM lets anyone create these names.
+LOOKALIKE_PREFIX_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSOAdmin/requester@example.com"
 
 NOT_ASSUMED_ROLE_ARN = "arn:aws:iam::111111111111:user/requester@example.com"
-
-RESERVED_PATH = "/aws-reserved/sso.amazonaws.com/"
-# Multi-region (or non-us-east-1 identity source) deployments add a region
-# segment to the reserved path -- still a genuine SSO role.
-RESERVED_PATH_WITH_REGION = "/aws-reserved/sso.amazonaws.com/eu-central-1/"
 
 IDENTITY_STORE_ID = "d-1234567890"
 
 
-def _get_role_response(path: str) -> dict:
-    return {"Role": {"Path": path, "RoleName": "irrelevant-for-this-test"}}
-
-
-def _access_denied() -> botocore.exceptions.ClientError:
-    # What this Lambda's own iam:GetRole call actually gets back for a role
-    # outside the reserved path, since slack_handler_lambda.tf's policy
-    # scopes that permission to the reserved-path resource shape only.
+def _client_error(code: str, status: int = 400) -> botocore.exceptions.ClientError:
     return botocore.exceptions.ClientError(
-        error_response={"Error": {"Code": "AccessDenied", "Message": "not authorized"}},
-        operation_name="GetRole",
+        error_response={"Error": {"Code": code, "Message": "x"}, "ResponseMetadata": {"HTTPStatusCode": status}},
+        operation_name="ListUsers",
     )
 
 
-def _no_such_entity() -> botocore.exceptions.ClientError:
-    return botocore.exceptions.ClientError(
-        error_response={"Error": {"Code": "NoSuchEntity", "Message": "role not found"}},
-        operation_name="GetRole",
-    )
-
-
-def _throttled() -> botocore.exceptions.ClientError:
-    return botocore.exceptions.ClientError(
-        error_response={"Error": {"Code": "Throttling", "Message": "Rate exceeded"}},
-        operation_name="GetRole",
-    )
-
-
-def _unrecognized_5xx() -> botocore.exceptions.ClientError:
-    # A 5xx whose error code isn't in the transient-code allowlist -- only
-    # sso.is_transient_aws_error's HTTP-status fallback can catch this one.
-    return botocore.exceptions.ClientError(
-        error_response={
-            "Error": {"Code": "SomeUnmappedServiceError", "Message": "unavailable"},
-            "ResponseMetadata": {"HTTPStatusCode": 503},
-        },
-        operation_name="GetRole",
-    )
-
-
-def extract_identity(user_arn: str, identity_store_client=None, s3_client=None):
-    """extract_identity always takes an identity store client + id + s3
-    client now -- this wrapper lets most call sites in this file omit the
-    boilerplate. s3_client is unused by any test here directly since
-    mock_list_users below patches list_users_with_cache as a whole, but the
-    real signature still needs a value in its place."""
-    return cli_auth.extract_identity(user_arn, identity_store_client, IDENTITY_STORE_ID, s3_client)
-
-
-@pytest.fixture(autouse=True)
-def mock_iam_client():
-    """Stubs cli_auth's iam:GetRole call so tests don't hit real AWS. Each
-    test below configures return_value/side_effect on the fixture's mock
-    directly, since which role gets looked up (and what path it "has")
-    varies per test."""
-    with patch.object(cli_auth, "_iam_client") as mock_client:
-        yield mock_client
+def extract_identity(user_arn: str):
+    return cli_auth.extract_identity(user_arn, None, IDENTITY_STORE_ID, None)
 
 
 @pytest.fixture(autouse=True)
 def mock_list_users():
-    """Stubs the cached Identity Store list_users call extract_identity makes
-    before find_email_by_username -- the returned content doesn't matter
-    here since find_email_by_username itself is separately mocked below,
-    this just stands in for the identity_store_client=None/s3_client=None
-    passed by the extract_identity wrapper above. Patches
-    list_users_with_cache as a whole (#193 item 2 added caching), not the
-    raw list_users it wraps -- exercising the real cache-resilience
-    machinery here would mean mocking S3 and threading for no test value,
-    since that machinery is covered on its own in test_cache.py/test_sso.py."""
+    """Patches list_users_with_cache as a whole; its cache behavior is covered in test_cache.py/test_sso.py."""
     with patch.object(cli_auth.sso, "list_users_with_cache", return_value={"Users": []}) as mock_list:
         yield mock_list
 
 
 @pytest.fixture(autouse=True)
 def mock_find_email_by_username():
-    """Stubs the Identity Store username-to-email lookup so tests don't hit
-    real AWS. Defaults to "no match" (None); tests that need a successful
-    resolution set return_value explicitly."""
+    """Defaults to "no match"; tests that need a resolved user set return_value."""
     with patch.object(cli_auth.sso, "find_email_by_username", return_value=None) as mock_find:
         yield mock_find
 
 
-def test_extract_identity_accepts_valid_sso_session(mock_iam_client, mock_find_email_by_username):
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
+def test_extract_identity_accepts_valid_sso_session(mock_find_email_by_username):
     mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
 
     assert extract_identity(EMAIL_ARN) == ("requester@example.com", "u-1", {"Users": []})
     mock_find_email_by_username.assert_called_once_with({"Users": []}, "requester@example.com")
 
 
-def test_extract_identity_accepts_valid_sso_session_with_region_segment(mock_iam_client, mock_find_email_by_username):
-    """Multi-region / non-us-east-1-identity-source deployments provision
-    roles with an extra region segment in the path -- must still be
-    accepted, not just the no-region shape."""
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH_WITH_REGION)
+def test_extract_identity_accepts_caller_from_another_account(mock_find_email_by_username):
     mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
 
-    assert extract_identity(EMAIL_ARN) == ("requester@example.com", "u-1", {"Users": []})
+    assert extract_identity(OTHER_ACCOUNT_ARN) == ("requester@example.com", "u-1", {"Users": []})
 
 
-def test_extract_identity_accepts_govcloud_partition(mock_iam_client, mock_find_email_by_username):
-    """A hardcoded "aws" partition would reject 100% of requests in
-    GovCloud/China with the same generic message a genuinely invalid ARN
-    gets -- the regex must also match arn:aws-us-gov:/arn:aws-cn:."""
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
-    govcloud_arn = "arn:aws-us-gov:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/requester@example.com"
+@pytest.mark.parametrize("partition", ["aws-us-gov", "aws-cn"])
+def test_extract_identity_rejects_other_partitions(partition, mock_find_email_by_username):
+    arn = EMAIL_ARN.replace("arn:aws:", f"arn:{partition}:")
 
-    assert extract_identity(govcloud_arn) == ("requester@example.com", "u-1", {"Users": []})
+    assert extract_identity(arn) is None
+    mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_accepts_china_partition(mock_iam_client, mock_find_email_by_username):
-    """Companion to the GovCloud test above -- the docstring there claims
-    both arn:aws-us-gov: and arn:aws-cn: are matched, but only the GovCloud
-    ARN was actually exercised. arn:aws-cn: is the third real AWS partition
-    _ASSUMED_ROLE_ARN_RE is supposed to accept."""
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
-    china_arn = "arn:aws-cn:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_bb7a6d8b5397bb50/requester@example.com"
-
-    assert extract_identity(china_arn) == ("requester@example.com", "u-1", {"Users": []})
-
-
-def test_extract_identity_accepts_ad_style_username_with_no_at_sign(mock_iam_client, mock_find_email_by_username):
-    """The fix this module exists for: RoleSessionName being an AD-style
-    username (no '@' at all) is a legitimate SSO session, not something to
-    reject outright -- it must be resolved through the Identity Store,
-    same as any other username."""
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
+def test_extract_identity_accepts_ad_style_username_with_no_at_sign(mock_find_email_by_username):
     mock_find_email_by_username.return_value = ("j.smith@company.com", "u-2")
 
     assert extract_identity(USERNAME_ARN) == ("j.smith@company.com", "u-2", {"Users": []})
     mock_find_email_by_username.assert_called_once_with({"Users": []}, "jsmith")
 
 
-def test_extract_identity_rejects_session_name_matching_no_user(mock_iam_client):
-    """A session name that doesn't resolve to any real Identity Store user
-    -- e.g. a long email truncated by RoleSessionName's 64-character limit
-    -- is rejected. This is a known, accepted limitation (see
-    sso.find_email_by_username's docstring): it deliberately does not fall
-    back to a fuzzy/prefix match, since that could resolve to the wrong
-    person."""
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    # mock_find_email_by_username's default return_value (None) already
-    # models "no match" -- nothing to configure.
-
+def test_extract_identity_rejects_session_name_matching_no_user():
     assert extract_identity(UNMATCHED_SESSION_ARN) is None
 
 
-def test_extract_identity_rejects_wrong_account_even_with_valid_session_name(mock_iam_client, mock_find_email_by_username):
-    assert extract_identity(WRONG_ACCOUNT_ARN) is None
-    # Rejected on the account check alone -- neither AWS call should be reached.
-    mock_iam_client.get_role.assert_not_called()
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_rejects_everything_when_account_id_unset(mock_iam_client, mock_find_email_by_username):
-    """cli_expected_account_id isn't operator-configurable -- Terraform
-    always sets it to the deploying account (locals.tf) -- but Config()
-    used directly, without going through Terraform (tests, or any other
-    direct construction), still defaults it to "". This confirms that case
-    rejects every request, including one with an otherwise-perfectly-valid
-    ARN, rather than silently matching everything."""
-    with patch.object(cli_auth.config, "get_config") as mock_get_config:
-        mock_get_config.return_value = SimpleNamespace(cli_expected_account_id="", cli_sso_role_name_prefix="AWSReservedSSO_")
-        assert extract_identity(EMAIL_ARN) is None
-    mock_iam_client.get_role.assert_not_called()
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_rejects_non_sso_role_even_with_valid_session_name(mock_iam_client, mock_find_email_by_username):
-    assert extract_identity(NON_SSO_ROLE_ARN) is None
-    # Rejected on the name-prefix check alone -- neither AWS call should be reached.
-    mock_iam_client.get_role.assert_not_called()
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_rejects_role_with_matching_prefix_but_wrong_path(mock_iam_client, mock_find_email_by_username):
-    """The bypass this fix closes: role_name.startswith(prefix) alone used
-    to be sufficient. A role anyone could create with iam:CreateRole --
-    right name, wrong (non-reserved) path -- must now be rejected. Covers
-    the case where get_role somehow still succeeds despite the path
-    mismatch (defense in depth on top of the AccessDenied case below)."""
-    mock_iam_client.get_role.return_value = _get_role_response("/")
-
-    assert extract_identity(SPOOFED_PREFIX_ARN) is None
-    mock_iam_client.get_role.assert_called_once_with(RoleName="AWSReservedSSO_Spoofed")
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_rejects_role_get_role_access_denied(mock_iam_client, mock_find_email_by_username):
-    """The realistic outcome for a spoofed (non-reserved-path) role: this
-    Lambda's own iam:GetRole permission is scoped to the reserved path, so
-    AWS itself refuses the read rather than returning the role's real
-    (non-matching) path."""
-    mock_iam_client.get_role.side_effect = _access_denied()
-
-    assert extract_identity(SPOOFED_PREFIX_ARN) is None
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_rejects_role_that_no_longer_exists(mock_iam_client, mock_find_email_by_username):
-    mock_iam_client.get_role.side_effect = _no_such_entity()
+def test_extract_identity_rejects_username_shared_by_two_users(mock_find_email_by_username):
+    mock_find_email_by_username.side_effect = cli_auth.errors.AmbiguousSSOUser("duplicate")
 
     assert extract_identity(EMAIL_ARN) is None
-    mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_raises_transient_error_on_throttling(mock_iam_client, mock_find_email_by_username):
-    """A throttled iam:GetRole says nothing about whether the role is
-    genuinely SSO-provisioned -- it must not be treated the same as
-    NoSuchEntity/AccessDenied (which return None, a real rejection)."""
-    mock_iam_client.get_role.side_effect = _throttled()
+@pytest.mark.parametrize("arn", [NON_SSO_ROLE_ARN, LOOKALIKE_PREFIX_ARN, NOT_ASSUMED_ROLE_ARN, ""])
+def test_extract_identity_rejects_non_sso_identity_without_identity_store_lookup(arn, mock_list_users, mock_find_email_by_username):
+    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
 
-    with pytest.raises(cli_auth.TransientIAMError):
-        extract_identity(SPOOFED_PREFIX_ARN)
-    mock_find_email_by_username.assert_not_called()
+    assert extract_identity(arn) is None
+    mock_list_users.assert_not_called()
 
 
-def test_extract_identity_raises_transient_error_on_unrecognized_5xx(mock_iam_client, mock_find_email_by_username):
-    mock_iam_client.get_role.side_effect = _unrecognized_5xx()
+@pytest.mark.parametrize(
+    "error",
+    [
+        _client_error("Throttling"),
+        # A 5xx code outside the transient allowlist; caught by the HTTP-status fallback.
+        _client_error("SomeUnmappedServiceError", status=503),
+        botocore.exceptions.EndpointConnectionError(endpoint_url="https://identitystore.amazonaws.com"),
+    ],
+)
+def test_extract_identity_raises_transient_error_on_identity_store_failure(error, mock_list_users, mock_find_email_by_username):
+    mock_list_users.side_effect = error
 
-    with pytest.raises(cli_auth.TransientIAMError):
-        extract_identity(SPOOFED_PREFIX_ARN)
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_raises_transient_error_on_get_role_connection_failure(mock_iam_client, mock_find_email_by_username):
-    """A connect/read-timeout or endpoint-resolution failure (BotoCoreError,
-    not ClientError -- there's no HTTP response at all) says nothing about
-    whether the role is genuinely SSO-provisioned, the same as a throttled
-    ClientError above."""
-    mock_iam_client.get_role.side_effect = botocore.exceptions.EndpointConnectionError(endpoint_url="https://iam.amazonaws.com")
-
-    with pytest.raises(cli_auth.TransientIAMError):
-        extract_identity(SPOOFED_PREFIX_ARN)
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_raises_transient_error_on_list_users_throttling(mock_iam_client, mock_list_users, mock_find_email_by_username):
-    """sso.list_users is a full paginated Identity Store scan -- the call on
-    this path most likely to throttle -- and previously had no error
-    handling at all, unwinding to the generic 500-plus-Slack-post handler."""
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_list_users.side_effect = _throttled()
-
-    with pytest.raises(cli_auth.TransientIAMError):
+    with pytest.raises(cli_auth.TransientIdentityStoreError):
         extract_identity(EMAIL_ARN)
     mock_find_email_by_username.assert_not_called()
 
 
-def test_extract_identity_raises_transient_error_on_list_users_connection_failure(
-    mock_iam_client, mock_list_users, mock_find_email_by_username
-):
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_list_users.side_effect = botocore.exceptions.EndpointConnectionError(endpoint_url="https://identitystore.amazonaws.com")
-
-    with pytest.raises(cli_auth.TransientIAMError):
-        extract_identity(EMAIL_ARN)
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_propagates_non_transient_list_users_error(mock_iam_client, mock_list_users, mock_find_email_by_username):
-    """Unlike a transient failure, a non-transient ClientError from
-    list_users (e.g. this Lambda's own IAM policy unexpectedly missing
-    identitystore:ListUsers) is a real misconfiguration, not a signal about
-    the caller's identity -- it must propagate rather than being silently
-    swallowed into a rejection or a retry signal."""
-    mock_iam_client.get_role.return_value = _get_role_response(RESERVED_PATH)
-    mock_list_users.side_effect = _access_denied()
+def test_extract_identity_propagates_non_transient_identity_store_error(mock_list_users):
+    """A non-transient error such as a missing identitystore:ListUsers permission is a
+    misconfiguration, so it propagates instead of becoming a rejection or a retry."""
+    mock_list_users.side_effect = _client_error("AccessDeniedException")
 
     with pytest.raises(botocore.exceptions.ClientError):
         extract_identity(EMAIL_ARN)
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_rejects_non_assumed_role_arn(mock_iam_client, mock_find_email_by_username):
-    assert extract_identity(NOT_ASSUMED_ROLE_ARN) is None
-    mock_iam_client.get_role.assert_not_called()
-    mock_find_email_by_username.assert_not_called()
-
-
-def test_extract_identity_rejects_empty_string(mock_iam_client, mock_find_email_by_username):
-    assert extract_identity("") is None
-    mock_iam_client.get_role.assert_not_called()
-    mock_find_email_by_username.assert_not_called()
