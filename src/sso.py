@@ -388,17 +388,9 @@ def list_users_with_cache(
     s3_client: S3Client,
     cfg: config.Config,
 ) -> dict:
-    """List all Identity Store users with cache resilience, same shape and
-    resilience contract as list_permission_sets_with_cache above (#193 item
-    2): list_users is a full paginated scan, documented elsewhere
-    in this module as the call on the CLI path most likely to throttle, and
-    unlike the account and permission-set catalogs it used to have no
-    caching at all -- every single CLI request paid for a fresh scan, with
-    no fallback if that scan happened to throttle.
-
-    This function calls both the Identity Store API and S3 cache in parallel.
-    If the API call succeeds, it compares with cached data and updates if different.
-    If the API call fails, it falls back to cached data.
+    """List all Identity Store users with cache resilience, same contract as
+    list_permission_sets_with_cache above. Cached because list_users is a full
+    paginated scan, the call on the CLI path most likely to throttle (#193 item 2).
 
     Args:
         client: Identity Store client

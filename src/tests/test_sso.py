@@ -30,13 +30,10 @@ def test_list_users_collects_users_across_pages():
     paginator.paginate.assert_called_once_with(IdentityStoreId="d-1234567890")
 
 
-def test_list_users_with_cache_returns_the_same_shape_as_list_users_when_cache_is_disabled():
-    """Regression test (#193 item 2): list_users_with_cache must return the
-    exact {"Users": [...]} shape list_users itself does, not the raw cached
-    list get_cached_users/set_cached_users deal in -- find_email_by_username
-    and every other caller expect that key. Cache disabled here so the real,
-    un-mocked with_cache_resilience machinery exercises only the API path,
-    not S3."""
+def test_list_users_with_cache_returns_projected_sorted_users_when_cache_is_disabled():
+    """Regression test (#193 item 2): callers expect the {"Users": [...]} wrapper,
+    not the bare list get_cached_users returns. Cache disabled so the real
+    with_cache_resilience exercises only the API path."""
     client = MagicMock()
     paginator = MagicMock()
     client.get_paginator.return_value = paginator
