@@ -117,17 +117,18 @@ def main_module():
 
 
 def _cli_request_event(body: dict | None = None, user_arn: str | None = None, api_id: str | None = "test-api-id") -> dict:
-    """A Lambda proxy event shaped like what the CLI's REST API route (cli_rest_api.tf, issue
-    #214) actually sends: httpMethod/resource rather than routeKey, and the verified identity
-    at requestContext.identity.userArn. These tests call handle_cli_access_request directly
+    """A Lambda proxy event shaped like what the CLI's REST API route (cli_rest_api.tf)
+    sends: httpMethod/resource rather than routeKey, and the verified identity at
+    requestContext.identity.userArn. These tests call handle_cli_access_request directly
     rather than going through lambda_handler's dispatch (that's covered separately, below).
+    Needs the main_module fixture to have imported main.
 
     api_id defaults to conftest.py's mock_env cli_expected_api_id value, so every test below
     passes the apiId check for free unless it's overridden -- that check is exercised on its
     own, separately."""
     event = {
         "httpMethod": "POST",
-        "resource": "/access-requester-cli",
+        "resource": sys.modules["main"].CLI_ACCESS_REQUEST_PATH,
         "body": json.dumps(body) if body is not None else None,
         "requestContext": {"apiId": api_id} if api_id is not None else {},
     }
@@ -179,7 +180,7 @@ def test_main_refuses_to_start_without_usable_slack_secrets(get_parameter_kwargs
 
 
 def test_lambda_handler_routes_cli_event_to_cli_handler(main_module):
-    """The CLI's REST API proxy event (cli_rest_api.tf, issue #214) has no routeKey at all --
+    """The CLI's REST API proxy event (cli_rest_api.tf) has no routeKey at all --
     it's identified by httpMethod/resource instead."""
     event = {"httpMethod": "POST", "resource": main_module.CLI_ACCESS_REQUEST_PATH, "path": "/default/access-requester-cli"}
     with patch.object(main_module, "handle_cli_access_request", return_value={"statusCode": 200}) as mock_handle:
@@ -270,12 +271,8 @@ def test_handle_cli_access_request_rejects_missing_api_id(main_module):
 
 
 def test_handle_cli_access_request_accepts_caller_from_a_different_account(main_module):
-    """The whole point of the CLI's REST API route (issue #214) is a resource policy that lets
-    a request from any account in the AWS Organization reach API Gateway with no per-account
-    IAM setup -- and, since cli_auth.py's account check was retired (trusting that resource
-    policy instead, confirmed intentional), that now actually means a genuine, otherwise
-    well-formed request from a different account succeeds end to end too, not just reaches the
-    Lambda before being rejected."""
+    """cli_auth.py does not check the caller's account (the REST API's org resource policy
+    does), so a well-formed request from a different account in the org succeeds end to end."""
     event = _cli_request_event(
         body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
         user_arn="arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_Foo/req@example.com",

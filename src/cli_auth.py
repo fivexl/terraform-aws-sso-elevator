@@ -1,50 +1,28 @@
 """Identity verification for the CLI access-request path.
 
 The CLI signs its request directly against API Gateway (SigV4, an AWS_IAM
-authorizer) instead of going through Slack. API Gateway verifies the
-signature itself and populates the caller's verified identity before the
-Lambda ever runs (requestContext.identity.userArn on the REST API this route
-uses -- see cli_rest_api.tf, issue #214) -- extract_identity here doesn't
-verify a signature, it decides whether that already-verified identity is
-trustworthy enough to act on: a real SSO session, under a role whose name
-matches this deployment's configured prefix, resolved to a real registered
-email via an Identity Store lookup.
+authorizer). API Gateway verifies the signature and puts the caller's
+identity at requestContext.identity.userArn before the Lambda runs.
+extract_identity doesn't verify a signature; it decides whether that
+identity is trustworthy enough to act on: a real SSO session, under a role
+whose name matches this deployment's configured prefix, resolved to a real
+registered email via an Identity Store lookup.
 
-Which AWS account the caller is in is NOT checked here as a reject condition
--- the real gate for account/org membership is the REST API's own resource
-policy (scoped to aws:PrincipalOrgID): any account outside the AWS
-Organization never reaches this code at all, API Gateway rejects it first.
-Trusting the resource policy for that, rather than duplicating a single-
-hardcoded-account comparison here, is an intentional simplification,
-confirmed explicitly rather than an oversight.
+The caller's account is not checked here. The REST API's resource policy
+(aws:PrincipalOrgID) makes API Gateway reject callers outside the AWS
+Organization before this code runs.
 
-Whether the role's real IAM path is genuinely IAM Identity Center's reserved
-one IS still checked here, but only when the caller's account matches this
-deployment's own (cli_expected_account_id) -- iam:GetRole is account-scoped,
-so this Lambda can never resolve a role's real path in a *different*
-account, meaning that stronger check is only available at all for the
-same-account case. (An earlier version of this file dropped the path check
-for every caller, same-account included, reasoning that it couldn't work
-cross-account anyway -- found in review to be a broader regression than
-necessary: the check remained fully valid, and AWS-enforced, for same-account
-callers, so it's restored for exactly that case.)
+The role-name prefix check is AWS-enforced in every account, provided
+cli_sso_role_name_prefix starts with AWSReservedSSO_: IAM refuses to create
+a role with that name prefix, or at IAM Identity Center's reserved path.
+Callers in this deployment's own account (cli_expected_account_id) also get
+an iam:GetRole check of the role's reserved path. GetRole is account-scoped,
+so that check cannot run for other accounts.
 
-The accepted residual risk, narrowed to cross-account callers only: an
-assumed-role ARN never carries the underlying role's IAM path, only its name
--- a role's *name* is not an AWS-enforced signal at all; anyone with
-iam:CreateRole in an allowed *different* account can name a role of their own
-AWSReservedSSO_Anything, assume it, and set its session name to an arbitrary
-string (RoleSessionName is caller-specified at AssumeRole time). If that
-string happens to match a real Identity Store username, find_email_by_username
-below would resolve it to that real user's email, letting the caller submit a
-request attributed to someone else. This requires iam:CreateRole plus
-sts:AssumeRole in some account already inside the organization -- a more
-common permission combination (routine on developer sandboxes and CI/CD
-roles) than "admin-only", so this residual risk should not be treated as
-rare. Defending against it fully would require a cross-account role-path
-verification mechanism this module does not yet have; until then, this is a
-judged, accepted tradeoff for letting the CLI route work org-wide without a
-per-identity IAM grant.
+The remaining residual risk is a direct lambda:InvokeFunction call: the
+invoker controls the whole event, including requestContext.identity, so
+this check is only as strong as the restriction on who may invoke the
+Lambda (see the README's CLI section).
 
 Separately, the session name (RoleSessionName) is set by IAM Identity Center
 to the caller's Identity Store *username*, not necessarily their email —
@@ -86,11 +64,9 @@ _ASSUMED_ROLE_ARN_RE = re.compile(
     r"^arn:(?:aws|aws-cn|aws-us-gov):sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)$"
 )
 
-# The path prefix IAM Identity Center provisions its own roles under — this is the part of a
-# role's identity AWS itself enforces, unlike the role's name, which anyone with iam:CreateRole
-# can imitate. A prefix, not an exact path, because a multi-region (or non-us-east-1 identity
-# source) deployment adds a region segment: .../sso.amazonaws.com/<region>/AWSReservedSSO_... —
-# the same reason slack_handler_lambda.tf's own IAM policy lists both resource shapes.
+# The path IAM Identity Center provisions its roles under. A prefix, not an exact path: some
+# deployments add a region segment (.../sso.amazonaws.com/<region>/AWSReservedSSO_...), which
+# is also why slack_handler_lambda.tf's GetRole policy lists both resource shapes.
 _SSO_RESERVED_ROLE_PATH_PREFIX = "/aws-reserved/sso.amazonaws.com/"
 
 _iam_client = boto3.Session().client("iam")
@@ -150,11 +126,8 @@ def extract_identity(
     if not role_name.startswith(cfg.cli_sso_role_name_prefix):
         return None
 
-    # Only checkable for a same-account caller -- iam:GetRole is account-scoped, so this Lambda
-    # can never resolve a role's real path in a different account. A different-account caller
-    # skips straight to the Identity Store resolution below, relying on the REST API's resource
-    # policy (org membership) and the name-prefix check above instead; see the module docstring
-    # for the accepted residual risk that leaves for that case specifically.
+    # iam:GetRole is account-scoped, so the path check only runs for same-account callers.
+    # Other accounts rely on the name-prefix check above, which IAM enforces (module docstring).
     if match["account_id"] == cfg.cli_expected_account_id and not _is_sso_provisioned_role(role_name):
         return None
 
@@ -203,33 +176,9 @@ def extract_identity(
 
 
 def _is_sso_provisioned_role(role_name: str) -> bool:
-    """Whether role_name is a real IAM role at IAM Identity Center's own
-    reserved path, within THIS Lambda's own account -- the caller must
-    already be confirmed to be in this deployment's own account before this
-    is called (see extract_identity), since iam:GetRole cannot resolve a
-    role in a different account.
-
-    This is the part role_name.startswith(prefix) can't check: an
-    assumed-role ARN never carries the role's path, only its name, so a role
-    created (with iam:CreateRole) at any ordinary path but given a matching
-    name would pass a name-only check. iam:GetRole looks the role up
-    directly to get its real path.
-
-    This Lambda's own iam:GetRole permission (slack_handler_lambda.tf) is
-    itself scoped to only the reserved-path resource shape, so a role at
-    any other path 403s here rather than returning its real (non-matching)
-    path — caught the same as any other lookup failure, since either way
-    the answer is "not a genuine SSO role".
-
-    Whether someone with iam:CreateRole could forge a role directly at the
-    reserved path (making this whole check moot) was an open disagreement
-    in #194's review, not just a documentation gap: confirmed closed by a
-    live test against this deployment's own account -- `aws iam create-role
-    --path /aws-reserved/sso.amazonaws.com/ ...` was rejected outright with
-    "InvalidInput: The path '/aws-reserved/sso.amazonaws.com/' is reserved
-    for AWS use", independent of the caller's own IAM permissions. AWS
-    enforces this path as reserved at the IAM API level itself, not merely
-    by convention."""
+    """Whether role_name is an IAM role at IAM Identity Center's reserved path in this
+    Lambda's own account. Only call it for same-account callers: iam:GetRole is account-scoped.
+    A role at any other path is denied by this Lambda's GetRole policy, which counts as False."""
     try:
         role = _iam_client.get_role(RoleName=role_name)["Role"]
     except botocore.exceptions.ClientError as e:

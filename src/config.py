@@ -162,19 +162,12 @@ class Config(BaseSettings):
 
     sso_instance_arn: str
 
-    # CLI access-request path: identity read from the AWS_IAM authorizer's
-    # userArn is only trusted if the assumed role's name starts with this
-    # prefix. See cli_auth.py's module docstring for how this combines with
-    # cli_expected_account_id below.
+    # CLI caller's assumed-role name must start with this. IAM reserves the AWSReservedSSO_
+    # name prefix in every account, so keep that prefix. See cli_auth.py's module docstring.
     cli_sso_role_name_prefix: str = "AWSReservedSSO_"
 
-    # This deployment's own account -- used only to decide whether a caller's role can be
-    # checked more strongly (see cli_auth.py's module docstring): iam:GetRole can only ever
-    # resolve a role's real IAM path within this Lambda's own account, so that stronger check
-    # only runs for a caller whose account matches this one. A caller from a different account
-    # is identified by role name alone instead; the REST API's own resource policy is what
-    # gates org membership for that case, not this file. The "" default here only matters for
-    # tests/direct Config() use that don't go through Terraform at all.
+    # Callers in this account also get the iam:GetRole reserved-path check, which cannot look
+    # up roles in other accounts. Terraform always sets it; "" only applies to tests.
     cli_expected_account_id: str = ""
 
     # Defense-in-depth only, not a real access control: a direct-invoke caller

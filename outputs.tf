@@ -8,13 +8,6 @@ output "requester_api_endpoint_url" {
   value       = var.create_api_gateway ? local.full_api_url : null
 }
 
-# The CLI's access-request route (see cli_rest_api.tf, issue #214) -- a REST API, not the
-# HTTP API above (that one is Slack-only now). Unlike an HTTP API, no per-caller
-# execute-api:Invoke IAM policy needs building for this: the REST API's own resource policy
-# already lets any account in this AWS Organization reach API Gateway, so there's no
-# "_execution_arn_cli" output to pair with this one (there was, for the removed HTTP API CLI
-# route). See the README's CLI section and src/cli_auth.py's module docstring for exactly what
-# identity verification a caller from a different account still goes through past this point.
 output "requester_api_endpoint_url_cli" {
   description = "The full URL for the CLI's access-request route. Pass this to `elevator configure --endpoint` (or set as ELEVATOR_ENDPOINT). null unless enable_access_requester_cli is also true."
   value       = local.create_cli_rest_api ? "${aws_api_gateway_stage.cli[0].invoke_url}${local.api_resource_path_cli}" : null
