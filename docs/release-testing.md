@@ -105,9 +105,11 @@ CLI:
       with the CLI route on and with it off.
 - [ ] `enable_access_requester_cli` on, then off, then on: each apply is followed by a clean
       `terraform plan -detailed-exitcode`. After turning it off, the stage may still route
-      `POST /access-requester-cli` until the next redeploy; expect `403` or `500`, with the Lambda
-      rejecting it for lack of `CLI_EXPECTED_API_ID`.
-      `terraform apply -replace=aws_api_gateway_deployment.requester` removes the route.
+      `POST /access-requester-cli` until the next redeploy; expect `500` from API Gateway (its Lambda
+      permission is gone, so the Lambda never runs).
+      `terraform apply -replace=aws_api_gateway_deployment.requester` removes the route, but API
+      Gateway takes 1–2 minutes to switch to `404`; turning the CLI back on likewise returns `404` for
+      about a minute.
 
 WAF:
 

@@ -530,7 +530,7 @@ Optional, off by default. Two modes, which cannot be combined (plan fails if bot
   4. `AWSManagedRulesAmazonIpReputationList`.
 
   Cost is about $9 a month plus $0.60 per million requests.
-- `waf_web_acl_arn = "<arn>"`: associates a REGIONAL web ACL you manage. The ARN must be known at plan time, so pass an existing ARN or apply the web ACL first; otherwise the association's `count` is unknown and the plan fails.
+- `waf_web_acl_arn = "<arn>"`: associates a REGIONAL web ACL you manage. Setting it together with `waf_enabled` fails at plan only when the ARN is known then; an ARN of a web ACL created in the same apply defers that check to apply time.
 
 If AWS Firewall Manager associates a web ACL with your API Gateway stages, leave both unset: an association from the module would conflict with it.
 
