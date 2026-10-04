@@ -84,11 +84,16 @@ def main_module():
         with (
             patch.object(main.organizations, "get_accounts_from_config_with_cache", side_effect=_fake_accounts_from_config),
             patch.object(main.sso, "get_permission_sets_from_config_with_cache", side_effect=_fake_permission_sets_from_config),
+            patch.object(main.organizations, "describe_account", side_effect=lambda _client, account_id: _account(main, account_id)),
         ):
             yield main
 
     sys.modules.pop("main", None)
     sys.modules.pop("group", None)
+
+
+def _account(main, account_id: str):  # noqa: ANN001, ANN202
+    return main.entities.aws.Account(id=account_id, name="aft")
 
 
 def _cli_request_event(body: dict | None = None, user_arn: str | None = None, api_id: str | None = "test-api-id") -> dict:
@@ -460,47 +465,30 @@ def test_handle_cli_access_request_rejects_malformed_body_without_resolving_iden
     assert result["statusCode"] == 400
 
 
-def test_handle_cli_access_request_rejects_oversized_reason(main_module):
-    """Slack's section-block text fields cap at 2000 chars; an oversized
-    reason used to reach chat_postMessage unbounded, get rejected with
-    invalid_blocks, and unwind to the generic 500 handler."""
+def test_handle_cli_access_request_rejects_a_reason_over_the_limit(main_module):
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "Foo", "reason": "x" * 2001, "duration": "1"},
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x" * 1001, "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
     )
     result = main_module.handle_cli_access_request(event)
-    assert result["statusCode"] == 400
+    assert result["statusCode"] == 400  # noqa: PLR2004
+    assert json.loads(result["body"]) == {"message": "Reason must be 1000 characters or fewer."}
 
 
-def test_handle_cli_access_request_rejects_reason_that_only_overflows_once_wrapped(main_module):
-    """Regression test: the cap used to be a plain 2000, not 2000 minus the
-    length of the "Reason: " prefix slack_helpers.py wraps it in for that
-    Slack field -- a 1993-2000 character reason passed the old check but
-    still produced a field over Slack's real 2000-char limit once wrapped
-    (e.g. 1996 chars -> "Reason: " + 1996 chars = 2004), reaching
-    chat_postMessage and unwinding to the generic 500 handler."""
+def test_handle_cli_access_request_rejects_a_request_too_large_for_the_button(main_module):
+    """Within the reason cap, but JSON escaping doubles every quote: the button value would pass 2000 characters."""
     event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "Foo", "reason": "x" * 1993, "duration": "1"},
+        body={"account": "111111111111", "permission_set": "Foo", "reason": '"' * 1000, "duration": "1"},
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
     )
-    result = main_module.handle_cli_access_request(event)
-    assert result["statusCode"] == 400
-
-
-def test_handle_cli_access_request_rejects_reason_that_only_overflows_once_escaped(main_module):
-    """Regression test (#194 A1): the cap used to check len(reason) directly,
-    but the field actually posted is escape_mrkdwn(reason), and escape_mrkdwn
-    expands "&" to "&amp;" -- 5x length. 400 "&" characters is only 400 raw
-    characters, nowhere near the old 1992-char raw-length cap, but expands
-    to a 2000-char escaped string -- 2008 once wrapped in "Reason: ", over
-    Slack's real 2000-char field limit. The old check let this straight
-    through to chat_postMessage."""
-    event = _cli_request_event(
-        body={"account": "111111111111", "permission_set": "Foo", "reason": "&" * 400, "duration": "1"},
-        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
-    )
-    result = main_module.handle_cli_access_request(event)
-    assert result["statusCode"] == 400
+    with (
+        patch.object(main_module.slack_helpers, "get_user_by_email", return_value=MagicMock(id="U_REQ", email="req@example.com")),
+        patch.object(main_module, "process_access_request") as mock_process,
+    ):
+        result = main_module.handle_cli_access_request(event)
+    assert result["statusCode"] == 400  # noqa: PLR2004
+    assert json.loads(result["body"]) == {"message": "Request is too large for Slack; shorten the reason."}
+    mock_process.assert_not_called()
 
 
 def test_handle_cli_access_request_rejects_wildcard_account_not_in_the_real_organization(main_module):
@@ -1054,427 +1042,461 @@ def test_handle_cli_access_request_logs_the_caller_arn_when_identity_cannot_be_v
 # ---------------------------------------------------------------------------
 
 
+def test_handle_cli_access_request_does_not_repost_a_failure_the_request_already_shows(main_module):
+    """A grant failure is already on the request message and in its thread;
+    the CLI handler must not add a second, top-level error post."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    with (
+        patch.object(main_module.slack_helpers, "get_user_by_email", return_value=MagicMock(id="U_REQ", email="req@example.com")),
+        patch.object(main_module, "process_access_request", side_effect=main_module.ShownOnRequest("Granting access failed: boom")),
+        patch.object(main_module.app.client, "chat_postMessage") as mock_post,
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result["statusCode"] == 500  # noqa: PLR2004
+    assert "Slack thread" in json.loads(result["body"])["message"]
+    mock_post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# process_access_request
+# ---------------------------------------------------------------------------
+
+
+def _request(main_module, **overrides):  # noqa: ANN001, ANN202, ANN003
+    fields = {
+        "account_id": "111111111111",
+        "permission_set_name": "FullOrgAdmin",
+        "reason": "testing",
+        "requester_slack_id": "U_REQ",
+        "permission_duration": main_module.timedelta(hours=1),
+    }
+    return main_module.slack_helpers.RequestForAccess(**(fields | overrides))
+
+
+def _slack_client() -> MagicMock:
+    client = MagicMock()
+    client.chat_postMessage.return_value = {"ts": "123.456"}
+    client.conversations_members.return_value = MagicMock(data={"members": []})
+    return client
+
+
+def _texts(method: MagicMock) -> list[str]:
+    return [c.kwargs.get("text") or "" for c in method.call_args_list]
+
+
+def _thread_replies(client: MagicMock) -> list[str]:
+    return [c.kwargs["text"] for c in client.chat_postMessage.call_args_list if c.kwargs.get("thread_ts")]
+
+
+def _decision(main_module, reason, grant=False, approvers=frozenset()):  # noqa: ANN001, ANN202
+    return main_module.access_control.AccessRequestDecision(
+        grant=grant, reason=reason, based_on_statements=frozenset(), approvers=approvers
+    )
+
+
+def _process(main_module, client, decision, execute=None, approvers=None):  # noqa: ANN001, ANN202
+    """Runs process_access_request with AWS mocked; execute is execute_decision's side_effect."""
+    with (
+        patch.object(main_module.access_control, "make_decision_on_access_request", return_value=decision),
+        patch.object(main_module.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
+        patch.object(main_module.slack_helpers, "find_approvers_in_slack", return_value=approvers or ([], [])),
+        patch.object(main_module.schedule, "schedule_discard_buttons_event") as mock_discard,
+        patch.object(main_module.schedule, "schedule_approver_notification_event"),
+        patch.object(main_module.access_control, "execute_decision", side_effect=execute or (lambda **_: [])) as mock_execute,
+    ):
+        requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
+        request = _request(main_module, account_name="aft")
+        result = main_module.process_access_request(request=request, requester=requester, client=client)
+    return result, mock_execute, mock_discard
+
+
 def test_process_access_request_reflects_a_grant_failure_instead_of_claiming_success(main_module):
-    """Regression test: chat_update (recoloring the message and setting its
-    text) previously ran before execute_decision -- for an auto-grant
-    decision (SelfApproval/ApprovalNotRequired), that meant the message was
-    already updated to good_result_emoji/"will be approved automatically"
-    before the actual grant was even attempted. A failure in execute_decision
-    (a stale permission set name, an AWS API error, anything) then left that
-    misleading "success" message in the channel permanently, with the real
-    error surfacing as a disconnected message from whichever blanket handler
-    the exception unwound to. execute_decision now runs first, so a failure
-    can override the message before it's ever posted, and the "Permissions
-    granted" follow-up must never fire."""
-    request = main_module.slack_helpers.RequestForAccess(
-        account_id="111111111111",
-        permission_set_name="FullOrgAdmin",
-        reason="testing",
-        requester_slack_id="U_REQ",
-        permission_duration=main_module.timedelta(hours=1),
-    )
-    requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
-    client = MagicMock()
-    client.chat_postMessage.return_value = {"ts": "123.456", "message": {"blocks": []}}
-    client.conversations_members.return_value = MagicMock(data={"members": []})
-    client.users_info.return_value = MagicMock(
-        data={"user": {"id": "U_REQ", "profile": {"email": "email@domen.com"}, "real_name": "Test User"}}
-    )
+    """The request is posted as Processing, granted, and only then shown as an
+    outcome -- a failed grant ends Failed with the detail in the thread, and
+    nothing ever claims success."""
+    client = _slack_client()
+    decision = _decision(main_module, main_module.access_control.DecisionReason.SelfApproval, grant=True)
 
-    fake_decision = main_module.access_control.AccessRequestDecision(
-        grant=True,
-        reason=main_module.access_control.DecisionReason.SelfApproval,
-        based_on_statements=frozenset(),
-        approvers=frozenset(),
-    )
-    fake_account = main_module.entities.aws.Account(id="111111111111", name="test-account")
+    def _fail(**_kwargs):  # noqa: ANN202, ANN003
+        raise RuntimeError("boom: permission set not found")
 
-    with (
-        patch.object(main_module.access_control, "make_decision_on_access_request", return_value=fake_decision),
-        patch.object(main_module.organizations, "describe_account", return_value=fake_account),
-        patch.object(main_module.slack_helpers.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
-        patch.object(main_module.access_control, "execute_decision", side_effect=RuntimeError("boom: permission set not found")),
-        pytest.raises(RuntimeError, match="boom"),
-    ):
-        main_module.process_access_request(request=request, requester=requester, client=client)
+    with pytest.raises(main_module.ShownOnRequest):
+        _process(main_module, client, decision, execute=_fail)
 
-    update_call = client.chat_update.call_args
-    assert update_call is not None, "chat_update should still have run, with the failure reflected in it"
-    assert "error occurred" in update_call.kwargs["text"].lower()
-    assert not any("permissions granted" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
-    # Regression coverage for a second bug in the same area: execute_decision
-    # used to run *after* the thread reply and DM were already sent (only
-    # the header's chat_update was moved earlier), so those two messages
-    # could still read "will be approved automatically" even once the
-    # header itself correctly showed the failure. Every chat_postMessage
-    # call here -- the thread reply included -- must reflect the failure,
-    # and none may still carry the stale pre-grant wording.
-    assert any("error occurred" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
-    assert not any("will be approved automatically" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
+    assert client.chat_postMessage.call_args_list[0].kwargs["text"].startswith(":hourglass_flowing_sand: *Processing")
+    assert client.chat_update.call_args.kwargs["text"].startswith(":x: *Failed")
+    assert "Granting access failed: boom" in _thread_replies(client)[0]
+    assert not any("access granted" in t for t in _texts(client.chat_postMessage) + _texts(client.chat_update))
 
 
-def test_process_access_request_posts_granted_message_on_success(main_module):
-    """Companion to the failure-path test above: the reordering must not
-    break the ordinary success path -- execute_decision succeeding still
-    results in the "Permissions granted" follow-up being posted."""
-    request = main_module.slack_helpers.RequestForAccess(
-        account_id="111111111111",
-        permission_set_name="FullOrgAdmin",
-        reason="testing",
-        requester_slack_id="U_REQ",
-        permission_duration=main_module.timedelta(hours=1),
-    )
-    requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
-    client = MagicMock()
-    client.chat_postMessage.return_value = {"ts": "123.456", "message": {"blocks": []}}
-    client.conversations_members.return_value = MagicMock(data={"members": []})
-    client.users_info.return_value = MagicMock(
-        data={"user": {"id": "U_REQ", "profile": {"email": "email@domen.com"}, "real_name": "Test User"}}
-    )
+def test_process_access_request_shows_the_outcome_only_after_the_grant(main_module):
+    """#194 ordering: nothing reads as granted before execute_decision runs."""
+    client = _slack_client()
+    decision = _decision(main_module, main_module.access_control.DecisionReason.SelfApproval, grant=True)
 
-    fake_decision = main_module.access_control.AccessRequestDecision(
-        grant=True,
-        reason=main_module.access_control.DecisionReason.SelfApproval,
-        based_on_statements=frozenset(),
-        approvers=frozenset(),
-    )
-    fake_account = main_module.entities.aws.Account(id="111111111111", name="test-account")
+    def _grant(**kwargs):  # noqa: ANN202, ANN003
+        assert client.chat_update.call_count == 0
+        assert not any("access granted" in t for t in _texts(client.chat_postMessage))
+        assert kwargs["channel_id"] == "x"
+        assert kwargs["message_ts"] == "123.456"
+        return []
 
-    with (
-        patch.object(main_module.access_control, "make_decision_on_access_request", return_value=fake_decision),
-        patch.object(main_module.organizations, "describe_account", return_value=fake_account),
-        patch.object(main_module.slack_helpers.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
-        patch.object(main_module.access_control, "execute_decision", return_value=True),
-    ):
-        result, succeeded = main_module.process_access_request(request=request, requester=requester, client=client)
+    (result, succeeded), _, _ = _process(main_module, client, decision, execute=_grant)
 
-    assert result is fake_decision
+    assert result is decision
     assert succeeded is True
-    assert any("permissions granted" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
+    final = client.chat_update.call_args.kwargs
+    assert final["text"] == ":white_check_mark: *Auto-approved · FullOrgAdmin → aft #111111111111 for* <@U_REQ>"
+    status = next(b for b in final["blocks"] if b["block_id"] == "status")["elements"][0]["text"]
+    assert status.startswith("Self-approval allowed · access ends at <!date^")
+    assert _thread_replies(client)[0].startswith("<@U_REQ> access granted, ends at <!date^")
+    assert not any("will be approved automatically" in t for t in _texts(client.chat_postMessage))
+
+
+def test_process_access_request_pings_the_requester_even_when_the_final_update_fails(main_module):
+    client = _slack_client()
+    client.chat_update.side_effect = RuntimeError("Slack is briefly unavailable")
+    decision = _decision(main_module, main_module.access_control.DecisionReason.ApprovalNotRequired, grant=True)
+
+    (_, succeeded), _, _ = _process(main_module, client, decision)
+
+    assert succeeded is True
+    assert any(t.startswith("<@U_REQ> access granted") for t in _thread_replies(client))
 
 
 def test_process_access_request_still_notifies_when_channel_membership_check_fails(main_module):
-    """Regression test (#194 A4): check_if_user_is_in_channel used to be the
-    first statement inside the single shared best-effort try block, so its
-    failure aborted the thread reply, header chat_update, DM, and
-    "Permissions granted" follow-up all at once -- while succeeded (derived
-    from color_coding_emoji, set before any of this) stayed True. A CLI
-    caller would see ok:true for a grant nobody was ever actually told
-    about, and the request would sit granted-but-silently-pending in Slack.
-    A channel-membership-check hiccup must not suppress every other
-    notification."""
-    request = main_module.slack_helpers.RequestForAccess(
-        account_id="111111111111",
-        permission_set_name="FullOrgAdmin",
-        reason="testing",
-        requester_slack_id="U_REQ",
-        permission_duration=main_module.timedelta(hours=1),
-    )
-    requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
-    client = MagicMock()
-    client.chat_postMessage.return_value = {"ts": "123.456", "message": {"blocks": []}}
+    """A failed membership check must not suppress any notification (#194 A4);
+    it counts as outside the channel, so the requester gets a DM too."""
+    client = _slack_client()
     client.conversations_members.side_effect = RuntimeError("Slack is briefly unavailable")
-    client.users_info.return_value = MagicMock(
-        data={"user": {"id": "U_REQ", "profile": {"email": "email@domen.com"}, "real_name": "Test User"}}
-    )
+    decision = _decision(main_module, main_module.access_control.DecisionReason.SelfApproval, grant=True)
 
-    fake_decision = main_module.access_control.AccessRequestDecision(
-        grant=True,
-        reason=main_module.access_control.DecisionReason.SelfApproval,
-        based_on_statements=frozenset(),
-        approvers=frozenset(),
-    )
-    fake_account = main_module.entities.aws.Account(id="111111111111", name="test-account")
-
-    with (
-        patch.object(main_module.access_control, "make_decision_on_access_request", return_value=fake_decision),
-        patch.object(main_module.organizations, "describe_account", return_value=fake_account),
-        patch.object(main_module.slack_helpers.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
-        patch.object(main_module.access_control, "execute_decision", return_value=True),
-    ):
-        result, succeeded = main_module.process_access_request(request=request, requester=requester, client=client)
+    (_, succeeded), _, _ = _process(main_module, client, decision)
 
     assert succeeded is True
-    # The header chat_update and the "Permissions granted" follow-up must
-    # both still happen despite the channel-membership check failing.
-    assert client.chat_update.call_args_list, "header chat_update should still have run"
-    assert any("permissions granted" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
+    assert client.chat_update.call_args_list
+    assert any("access granted" in t for t in _thread_replies(client))
+    assert any(c.kwargs["channel"] == "U_REQ" for c in client.chat_postMessage.call_args_list)
+
+
+def test_process_access_request_shows_a_post_grant_failure_as_granted_not_scheduled(main_module):
+    """The assignment exists, so this is not Failed: the request says access is live."""
+    client = _slack_client()
+    decision = _decision(main_module, main_module.access_control.DecisionReason.SelfApproval, grant=True)
+
+    def _post_grant_failure(**_kwargs):  # noqa: ANN202, ANN003
+        raise main_module.access_control.PostGrantError("throttled")
+
+    (_, succeeded), _, _ = _process(main_module, client, decision, execute=_post_grant_failure)
+
+    assert succeeded is True
+    assert client.chat_update.call_args.kwargs["text"].startswith(":warning: *Granted")
+    assert "could not be scheduled: throttled" in _thread_replies(client)[0]
+
+
+def _old_revoke_event(main_module):  # noqa: ANN001, ANN202
+    return main_module.schedule.RevokeEvent(
+        schedule_name="s",
+        approver=main_module.entities.slack.User(id="U_OLD_APPROVER", email="a@x.com", real_name="A"),
+        requester=main_module.entities.slack.User(id="U_REQ", email="r@x.com", real_name="R"),
+        user_account_assignment=main_module.sso.UserAccountAssignment(
+            instance_arn="i", account_id="111111111111", permission_set_arn="ps", user_principal_id="u"
+        ),
+        permission_duration=main_module.timedelta(hours=1),
+        channel_id="C_OLD",
+        message_ts="100.1",
+    )
+
+
+def _client_with_old_request() -> MagicMock:
+    client = _slack_client()
+    client.chat_getPermalink.return_value = {"permalink": "https://x.slack.com/archives/C/p123456"}
+    old_message = {"ts": "100.1", "blocks": [{"block_id": "reason", "type": "section", "text": {"type": "mrkdwn", "text": ">old"}}]}
+    client.conversations_history.return_value = {"messages": [old_message]}
+    return client
+
+
+def test_process_access_request_marks_a_replaced_request_as_extended(main_module):
+    client = _client_with_old_request()
+    old_event = _old_revoke_event(main_module)
+    decision = _decision(main_module, main_module.access_control.DecisionReason.SelfApproval, grant=True)
+
+    _process(main_module, client, decision, execute=lambda **_: [old_event])
+
+    extended = next(c.kwargs for c in client.chat_update.call_args_list if c.kwargs["ts"] == "100.1")
+    assert extended["channel"] == "C_OLD"
+    assert extended["text"].startswith(":repeat: *Extended · FullOrgAdmin → aft #111111111111 for* <@U_REQ>")
+    status = next(b for b in extended["blocks"] if b["block_id"] == "status")["elements"][0]["text"]
+    assert status == "Approved by <@U_OLD_APPROVER> · extended by <https://x.slack.com/archives/C/p123456|newer request>"
+
+
+def test_process_access_request_marks_replaced_requests_extended_when_the_new_schedule_fails(main_module):
+    """The older schedules were deleted before the new one failed, so the older
+    request no longer ends when it says: it must still show Extended."""
+    client = _client_with_old_request()
+    old_event = _old_revoke_event(main_module)
+    decision = _decision(main_module, main_module.access_control.DecisionReason.SelfApproval, grant=True)
+
+    def _schedule_failed(**_kwargs):  # noqa: ANN202, ANN003
+        raise main_module.access_control.PostGrantError("throttled", [old_event])
+
+    _process(main_module, client, decision, execute=_schedule_failed)
+
+    assert client.chat_update.call_args_list[0].kwargs["text"].startswith(":warning: *Granted")
+    extended = next(c.kwargs for c in client.chat_update.call_args_list if c.kwargs["ts"] == "100.1")
+    assert extended["text"].startswith(":repeat: *Extended")
+
+
+def test_process_access_request_posts_pending_with_buttons_and_pings_approvers(main_module):
+    client = _slack_client()
+    approver = main_module.entities.slack.User(id="U_APP", email="approver@example.com", real_name="A")
+    decision = _decision(
+        main_module, main_module.access_control.DecisionReason.RequiresApproval, approvers=frozenset(["approver@example.com"])
+    )
+
+    (_, succeeded), mock_execute, mock_discard = _process(main_module, client, decision, approvers=([approver], []))
+
+    assert succeeded is True
+    posted = client.chat_postMessage.call_args_list[0].kwargs
+    assert posted["text"].endswith("*for 1 hour*")
+    assert any(b["block_id"] == "buttons" for b in posted["blocks"])
+    assert _thread_replies(client) == ["<@U_APP>: waiting for your approval"]
+    mock_discard.assert_called_once()
+    mock_execute.assert_not_called()
 
 
 def test_process_access_request_reports_not_succeeded_when_requires_approval_finds_no_approvers_in_slack(main_module):
-    """Regression test: a RequiresApproval decision whose approver emails
-    don't resolve to any real Slack user (find_approvers_in_slack returns an
-    empty list) leaves decision.reason == RequiresApproval -- that's still
-    the correct *policy* reason -- even though the request was never
-    actually posted for anyone to approve. `succeeded` must reflect that
-    (derived from color_coding_emoji, same as every other branch), not just
-    mirror decision.reason, or a caller like the CLI has no way to tell this
-    case apart from a genuinely pending approval."""
-    request = main_module.slack_helpers.RequestForAccess(
-        account_id="111111111111",
-        permission_set_name="FullOrgAdmin",
-        reason="testing",
-        requester_slack_id="U_REQ",
-        permission_duration=main_module.timedelta(hours=1),
-    )
-    requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
-    client = MagicMock()
-    client.chat_postMessage.return_value = {"ts": "123.456", "message": {"blocks": []}}
-    client.conversations_members.return_value = MagicMock(data={"members": []})
-    client.users_info.return_value = MagicMock(
-        data={"user": {"id": "U_REQ", "profile": {"email": "email@domen.com"}, "real_name": "Test User"}}
+    """RequiresApproval keeps its reason even when no approver exists in Slack,
+    but nothing is queued: the request is posted Failed, without buttons."""
+    client = _slack_client()
+    decision = _decision(
+        main_module, main_module.access_control.DecisionReason.RequiresApproval, approvers=frozenset(["approver@example.com"])
     )
 
-    fake_decision = main_module.access_control.AccessRequestDecision(
-        grant=False,
-        reason=main_module.access_control.DecisionReason.RequiresApproval,
-        based_on_statements=frozenset(),
-        approvers=frozenset(["approver@example.com"]),
-    )
-    fake_account = main_module.entities.aws.Account(id="111111111111", name="test-account")
+    (result, succeeded), _, mock_discard = _process(main_module, client, decision, approvers=([], ["approver@example.com"]))
 
-    with (
-        patch.object(main_module.access_control, "make_decision_on_access_request", return_value=fake_decision),
-        patch.object(main_module.organizations, "describe_account", return_value=fake_account),
-        patch.object(main_module.slack_helpers.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
-        patch.object(main_module.slack_helpers, "find_approvers_in_slack", return_value=([], ["approver@example.com"])),
-        patch.object(main_module.access_control, "execute_decision", return_value=False),
-    ):
-        result, succeeded = main_module.process_access_request(request=request, requester=requester, client=client)
-
-    assert result is fake_decision
     assert result.reason == main_module.access_control.DecisionReason.RequiresApproval
     assert succeeded is False
-    assert any("cannot be processed" in (c.kwargs.get("text") or "").lower() for c in client.chat_update.call_args_list)
+    posted = client.chat_postMessage.call_args_list[0].kwargs
+    assert posted["text"].startswith(":x: *Failed")
+    assert not any(b["block_id"] == "buttons" for b in posted["blocks"])
+    assert "None of the approvers" in _thread_replies(client)[0]
+    mock_discard.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("reason", "status"),
+    [
+        ("NoApprovers", "Nobody can approve this request · details in thread"),
+        ("NoStatements", "No statement covers this request · details in thread"),
+        ("RequesterNotAllowed", "Requester is not allowed to request this · details in thread"),
+    ],
+)
+def test_process_access_request_posts_refusals_as_failed(main_module, reason, status):
+    client = _slack_client()
+    decision = _decision(main_module, main_module.access_control.DecisionReason[reason])
+
+    (_, succeeded), mock_execute, _ = _process(main_module, client, decision)
+
+    assert succeeded is False
+    posted = client.chat_postMessage.call_args_list[0].kwargs
+    assert next(b for b in posted["blocks"] if b["block_id"] == "status")["elements"][0]["text"] == status
+    assert len(_thread_replies(client)) == 1
+    mock_execute.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
 # handle_button_click
 # ---------------------------------------------------------------------------
-#
-# No coverage existed for this function before -- it's the approver-clicks-
-# Approve path, and it had the exact same "recolor the message green before
-# the grant is attempted" bug process_access_request did, independently,
-# since the two functions don't share that part of their code. See
-# test_process_access_request_reflects_a_grant_failure_instead_of_claiming_success
-# above for the sibling bug on the self-approval/CLI path.
 
 
-def _button_click_content_fields() -> list[dict]:
-    return [
-        {"text": "Requester: <@U_REQ>"},
-        {"text": "Account: 111111111111 #111111111111"},
-        {"text": "Role name: FullOrgAdmin"},
-        {"text": "Reason: testing"},
-        {"text": "Permission duration: 1h 0m"},
-    ]
-
-
-def _button_click_body() -> dict:
+def _button_click_body(main_module, action: str = "approve", **request_overrides) -> dict:  # noqa: ANN001, ANN003
+    """A click on a pending message the real builder produced."""
+    sh = main_module.slack_helpers
+    request = _request(main_module, account_name="aft", **request_overrides)
+    _, blocks = sh.build_request_message(sh.RequestCard.for_request(request), sh.RequestState.pending())
+    value = next(b for b in blocks if b["block_id"] == "buttons")["elements"][0]["value"]
     return {
-        "actions": [{"value": "approve"}],
+        "actions": [{"action_id": action, "value": value}],
         "user": {"id": "U_APPROVER"},
-        "message": {"ts": "12345.6789", "blocks": [{"block_id": "content", "fields": _button_click_content_fields()}]},
+        "message": {"ts": "12345.6789", "blocks": blocks},
         "channel": {"id": "C123"},
     }
 
 
-def test_handle_button_click_reflects_a_grant_failure_instead_of_claiming_success(main_module):
-    """Regression test: chat_update (recoloring the message green and
-    saying "Permissions granted to @x by @y") previously ran before
-    execute_decision -- a failure there (a stale/bogus permission set name,
-    IAM Identity Center throttling, anything) left that message
-    permanently incorrect, with no visible correction (@handle_errors'
-    generic error post is a separate message, not a fix to this one).
-    execute_decision now runs first, so a failure can override the message
-    before it's ever posted."""
-    body = _button_click_body()
-    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
-    requester = MagicMock(id="U_REQ", email="req@example.com")
-    client = MagicMock()
-    client.conversations_members.return_value = MagicMock(data={"members": []})
+APPROVER = SimpleNamespace(id="U_APPROVER", email="approver@example.com")
+REQUESTER = SimpleNamespace(id="U_REQ", email="req@example.com")
 
-    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
 
+def _click(main_module, body, client, execute=None, decision=None):  # noqa: ANN001, ANN202
+    decision = decision or main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
     with (
-        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
-        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
-        patch.object(main_module.access_control, "execute_decision", side_effect=RuntimeError("boom: permission set not found")),
-        pytest.raises(RuntimeError, match="boom"),
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[APPROVER, REQUESTER]),
+        patch.object(main_module.access_control, "get_requester_group_ids_if_needed", return_value=frozenset()) as mock_group_ids,
+        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=decision) as mock_decide,
+        patch.object(main_module.access_control, "execute_decision", side_effect=execute or (lambda **_: [])) as mock_execute,
     ):
-        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+        result = main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+    return result, mock_execute, mock_decide, mock_group_ids
 
-    update_call = client.chat_update.call_args
-    assert update_call is not None, "chat_update should still have run, with the failure reflected in it"
-    assert "error occurred" in update_call.kwargs["text"].lower()
-    assert not any("permissions granted" in (c.kwargs.get("text") or "").lower() for c in client.chat_postMessage.call_args_list)
-    # The dedup cache must be cleared even on a caught failure -- otherwise
-    # this exact request is permanently stuck reporting "already in
-    # progress" to any retry.
+
+def test_handle_button_click_reflects_a_grant_failure_instead_of_claiming_success(main_module):
+    client = _slack_client()
+
+    def _fail(**_kwargs):  # noqa: ANN202, ANN003
+        raise RuntimeError("boom: permission set not found")
+
+    with pytest.raises(main_module.ShownOnRequest):
+        _click(main_module, _button_click_body(main_module), client, execute=_fail)
+
+    assert client.chat_update.call_args.kwargs["text"].startswith(":x: *Failed · FullOrgAdmin → aft")
+    assert _thread_replies(client) == ["Granting access failed: boom: permission set not found"]
     assert main_module.cache_for_dublicate_requests == {}
 
 
-def test_handle_button_click_posts_granted_message_on_success(main_module):
-    """Companion to the failure-path test above: the reordering must not
-    break the ordinary success path."""
-    body = _button_click_body()
-    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
-    requester = MagicMock(id="U_REQ", email="req@example.com")
-    client = MagicMock()
-    client.conversations_members.return_value = MagicMock(data={"members": []})
+def test_handle_button_click_shows_approved_and_pings_the_requester(main_module):
+    client = _slack_client()
 
-    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
+    _, mock_execute, _, _ = _click(main_module, _button_click_body(main_module), client)
 
-    with (
-        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
-        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
-        patch.object(main_module.access_control, "execute_decision", return_value=True),
-    ):
-        result = main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
-
-    update_call = client.chat_update.call_args
-    assert update_call is not None
-    assert "permissions granted" in update_call.kwargs["text"].lower()
-    assert result is not None
+    assert mock_execute.call_args.kwargs["channel_id"] == "C123"
+    assert mock_execute.call_args.kwargs["message_ts"] == "12345.6789"
+    assert client.chat_update.call_args.kwargs["text"] == ":white_check_mark: *Approved · FullOrgAdmin → aft #111111111111 for* <@U_REQ>"
+    assert _thread_replies(client)[0].startswith("<@U_REQ> access granted, ends at")
+    assert len(_thread_replies(client)) == 1
     assert main_module.cache_for_dublicate_requests == {}
 
 
 def test_handle_button_click_clears_the_dedup_cache_when_make_decision_on_approve_request_raises(main_module):
-    """Regression test (#194 A3 residual, found live by Andrey Devyatkin):
-    the dedup cache is written just before this call, and every return path
-    around it clears the cache again -- except this one. Left unguarded, an
-    exception here (a malformed statement, anything) propagated straight to
-    @handle_errors with the cache still populated, leaving this exact
-    request permanently stuck reporting "already in progress" to any retry
-    for the rest of this container's life."""
-    body = _button_click_body()
-    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
-    requester = MagicMock(id="U_REQ", email="req@example.com")
-    client = MagicMock()
-    client.conversations_members.return_value = MagicMock(data={"members": []})
-
+    """#194 A3 residual: an exception here must not leave the request stuck on "already in progress"."""
+    client = _slack_client()
     with (
-        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
+        patch.object(main_module.slack_helpers, "get_user", side_effect=[APPROVER, REQUESTER]),
         patch.object(main_module.access_control, "make_decision_on_approve_request", side_effect=RuntimeError("boom")),
         pytest.raises(RuntimeError, match="boom"),
     ):
-        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+        main_module.handle_button_click.__wrapped__(body=_button_click_body(main_module), client=client, context={})
 
     assert main_module.cache_for_dublicate_requests == {}
 
 
 def test_handle_button_click_strips_buttons_before_execute_decision_runs(main_module):
-    """Regression test (#194 A2): the buttons must be removed via their own
-    chat_update *before* execute_decision runs, not only afterward together
-    with the rest of the outcome. cache_for_dublicate_requests can't close
-    this window by itself -- it's per-container in-memory state, so a second
-    approver clicking Approve while execute_decision (specifically
-    create_account_assignment_and_wait_for_result's polling) is still
-    running can land in a different, fresh Lambda container that sees an
-    empty cache and this message's still-live buttons. Verified by having
-    execute_decision itself assert, at the moment it's called, that
-    chat_update was already invoked with blocks that no longer contain the
-    buttons block."""
-    body = _button_click_body()
-    # The shared fixture's mock message has no "buttons" block at all, which
-    # would make the "buttons are gone" assertion below trivially true
-    # regardless of whether removal actually ran -- add one so the test
-    # genuinely proves something was stripped, not just that nothing was
-    # ever there.
-    body["message"]["blocks"].append({"block_id": "buttons", "elements": []})
-    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
-    requester = MagicMock(id="U_REQ", email="req@example.com")
-    client = MagicMock()
-    client.conversations_members.return_value = MagicMock(data={"members": []})
+    """#194 A2: the buttons go before the grant runs, so a second approver's
+    click in another Lambda container has nothing left to press."""
+    client = _slack_client()
 
-    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
+    def _execute(**_kwargs):  # noqa: ANN202, ANN003
+        assert client.chat_update.call_count == 1
+        early = client.chat_update.call_args.kwargs
+        assert not any(b["block_id"] == "buttons" for b in early["blocks"])
+        assert early["text"].startswith(":hourglass_flowing_sand: *Processing")
+        return []
 
-    def _execute_decision_checks_buttons_already_stripped(**_kwargs):
-        assert client.chat_update.call_count >= 1, "buttons should already have been stripped by now"
-        last_call_blocks = client.chat_update.call_args.kwargs["blocks"]
-        assert not any(b.get("block_id") == "buttons" for b in last_call_blocks)
-        return True
+    _click(main_module, _button_click_body(main_module), client, execute=_execute)
 
-    with (
-        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
-        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
-        patch.object(main_module.access_control, "execute_decision", side_effect=_execute_decision_checks_buttons_already_stripped),
-    ):
-        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
-
-    # Two chat_update calls total: the early button-strip, then the final
-    # outcome update -- not just one at the end.
     assert client.chat_update.call_count == 2  # noqa: PLR2004
 
 
 def test_handle_button_click_evaluates_eligibility_against_pinned_verified_email_for_cli_requests(main_module):
-    """Regression test (#194 B4): for a CLI-sourced request, eligibility
-    (requester_group_ids and make_decision_on_approve_request's
-    requester_email) must be computed from the submission-time verified
-    email round-tripped through the message's "Verified Email" field, not a
-    fresh Slack lookup of the requester's *current* profile email -- the
-    latter can drift between submission and approval (a Slack profile
-    change, a directory update) while the grant itself stays pinned to
-    verified_user_id from submission time. Evaluating eligibility against a
-    different identity than the one actually granted would be internally
-    inconsistent -- e.g. permitting the decision based on group membership
-    that person no longer even has, or denying it based on membership the
-    actually-granted identity does have."""
-    body = _button_click_body()
-    body["message"]["blocks"][0]["fields"] += [
-        {"text": "Source: CLI"},
-        {"text": "Verified ARN: arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/pinned.user"},
-        {"text": "Verified UserId: pinned-user-id"},
-        {"text": "Verified Email: pinned@example.com"},
-    ]
-    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
-    # The requester's *current* Slack profile email is deliberately different
-    # from "Verified Email" above, simulating a profile change since
-    # submission.
-    requester = MagicMock(id="U_REQ", email="drifted-current@example.com")
-    client = MagicMock()
-    client.conversations_members.return_value = MagicMock(data={"members": []})
+    """#194 B4: a CLI request is evaluated against the identity verified at
+    submission, carried in the button value, not the requester's current Slack email."""
+    client = _slack_client()
+    body = _button_click_body(
+        main_module,
+        request_source="cli",
+        verified_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/pinned.user",
+        verified_user_id="pinned-user-id",
+        verified_email="pinned@example.com",
+    )
 
-    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
+    _, mock_execute, mock_decide, mock_group_ids = _click(main_module, body, client)
 
-    with (
-        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
-        patch.object(main_module.access_control, "get_requester_group_ids_if_needed", return_value=frozenset()) as mock_get_group_ids,
-        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision) as mock_make_decision,
-        patch.object(main_module.access_control, "execute_decision", return_value=True),
-    ):
-        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
-
-    assert mock_get_group_ids.call_args.args[1] == "pinned@example.com"
-    assert mock_make_decision.call_args.kwargs["requester_email"] == "pinned@example.com"
+    assert mock_group_ids.call_args.args[1:] == ("pinned@example.com", "pinned-user-id")
+    assert mock_decide.call_args.kwargs["requester_email"] == "pinned@example.com"
+    assert mock_execute.call_args.kwargs["verified_user_id"] == "pinned-user-id"
 
 
 def test_handle_button_click_notification_failure_after_a_successful_grant_is_not_reported_as_failure(main_module):
-    """Regression test for the reorder's own regression: once
-    execute_decision succeeds, a Slack API failure while posting/updating
-    the resulting notifications must not propagate -- that would report
-    "this failed" for a request that actually succeeded, the inverted-truth
-    outcome the whole reordering exists to prevent, just from the
-    notification side rather than the ordering side."""
-    body = _button_click_body()
-    approver = MagicMock(id="U_APPROVER", email="approver@example.com")
-    requester = MagicMock(id="U_REQ", email="req@example.com")
-    client = MagicMock()
-    client.conversations_members.return_value = MagicMock(data={"members": []})
+    """Once the grant succeeded, a Slack failure while showing it must not
+    propagate -- and the requester is still pinged in the thread."""
+    client = _slack_client()
     client.chat_update.side_effect = RuntimeError("Slack is briefly unavailable")
 
-    fake_decision = main_module.access_control.ApproveRequestDecision(grant=True, permit=True, based_on_statements=frozenset())
-
-    with (
-        patch.object(main_module.slack_helpers, "get_user", side_effect=[approver, requester]),
-        patch.object(main_module.access_control, "make_decision_on_approve_request", return_value=fake_decision),
-        patch.object(main_module.access_control, "execute_decision", return_value=True),
-    ):
-        # Must not raise: the grant succeeded, only the follow-up
-        # notification failed.
-        result = main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+    result, _, _, _ = _click(main_module, _button_click_body(main_module), client)
 
     assert result is None
+    assert _thread_replies(client)[0].startswith("<@U_REQ> access granted")
+
+
+def test_handle_button_click_discard_shows_discarded_without_a_thread_reply(main_module):
+    client = _slack_client()
+
+    _, mock_execute, _, _ = _click(main_module, _button_click_body(main_module, action="discard"), client)
+
+    assert client.chat_update.call_args.kwargs["text"].startswith(":wastebasket: *Discarded")
+    assert _thread_replies(client) == []
+    assert any(
+        c.kwargs["channel"] == "U_REQ" and "discarded by <@U_APPROVER>" in c.kwargs["text"] for c in client.chat_postMessage.call_args_list
+    )
+    mock_execute.assert_not_called()
+
+
+def test_handle_button_click_discard_that_fails_to_show_tells_the_approver_not_the_requester(main_module):
+    """The buttons are still live, so the requester must not hear it was discarded."""
+    client = _slack_client()
+    client.chat_update.side_effect = RuntimeError("Slack is briefly unavailable")
+
+    _click(main_module, _button_click_body(main_module, action="discard"), client)
+
+    assert _thread_replies(client) == ["<@U_APPROVER> the discard did not go through, please try again."]
+    assert not any(c.kwargs["channel"] == "U_REQ" for c in client.chat_postMessage.call_args_list)
+
+
+def test_handle_button_click_on_a_pre_upgrade_message_asks_to_request_again(main_module):
+    client = _slack_client()
+    body = {
+        "actions": [{"action_id": "approve", "value": "approve"}],
+        "user": {"id": "U_APPROVER"},
+        "message": {
+            "ts": "12345.6789",
+            "text": "old",
+            "blocks": [{"block_id": "content", "fields": [{"text": "Requester: <@U_REQ>"}]}, {"block_id": "buttons", "elements": []}],
+        },
+        "channel": {"id": "C123"},
+    }
+    with patch.object(main_module.access_control, "execute_decision") as mock_execute:
+        main_module.handle_button_click.__wrapped__(body=body, client=client, context={})
+
+    assert _thread_replies(client) == ["This request was made before an Elevator upgrade — please request again"]
+    stripped = client.chat_update.call_args.kwargs
+    assert stripped["ts"] == "12345.6789"
+    assert [b["block_id"] for b in stripped["blocks"]] == ["content"]
+    assert stripped["text"] == "This request was made before an Elevator upgrade — please request again"
+    mock_execute.assert_not_called()
+
+
+def test_handle_button_click_routes_group_requests_by_kind(main_module):
+    sh = main_module.slack_helpers
+    request = sh.RequestForGroupAccess(
+        group_id="g-1", group_name="admins", reason="r", requester_slack_id="U_REQ", permission_duration=main_module.timedelta(hours=1)
+    )
+    _, blocks = sh.build_request_message(sh.RequestCard.for_request(request), sh.RequestState.pending())
+    value = next(b for b in blocks if b["block_id"] == "buttons")["elements"][0]["value"]
+    body = {
+        "actions": [{"action_id": "approve", "value": value}],
+        "user": {"id": "U_A"},
+        "message": {"ts": "1.2", "blocks": blocks},
+        "channel": {"id": "C1"},
+    }
+
+    with patch.object(main_module.group, "handle_group_button_click") as mock_group_click:
+        main_module.handle_button_click.__wrapped__(body=body, client=MagicMock(), context={})
+
+    assert mock_group_click.call_args.kwargs["payload"].request == request
 
 
 # ---------------------------------------------------------------------------
@@ -1482,48 +1504,37 @@ def test_handle_button_click_notification_failure_after_a_successful_grant_is_no
 # ---------------------------------------------------------------------------
 
 
-def test_handle_request_for_access_submittion_rejects_reason_too_long_once_escaped(main_module):
-    """Regression test: the Slack modal had no reason-length cap of any
-    kind (unlike the CLI path, which already checked this) -- reported live
-    by Andrey Devyatkin, reproduced against a real deployment with a 399-
-    "&"-character reason (raw length nowhere near any limit, but expands to
-    a 2003-character field once escaped and wrapped in "Reason: "), which
-    Slack's own chat.postMessage rejected with invalid_blocks, surfacing as
-    a 500 plus an "unexpected error" post in the approvals channel. The
-    modal has already closed by the time this lazy listener runs (it's
-    acked unconditionally beforehand), so the only thing left to do is DM
-    the requester and never attempt to post the request at all."""
-    fake_request = MagicMock(requester_slack_id="U_REQ", reason="&" * 400)
+def _submit_modal(main_module, request):  # noqa: ANN001, ANN202
     client = MagicMock()
-
+    requester = MagicMock(id="U_REQ", email="req@example.com")
     with (
-        patch.object(main_module.slack_helpers.RequestForAccessView, "parse", return_value=fake_request),
-        patch.object(main_module.slack_helpers, "get_user", return_value=MagicMock(id="U_REQ", email="req@example.com")),
+        patch.object(main_module.slack_helpers.RequestForAccessView, "parse", return_value=request),
+        patch.object(main_module.slack_helpers, "get_user", return_value=requester),
         patch.object(main_module, "process_access_request") as mock_process,
     ):
         result = main_module.handle_request_for_access_submittion.__wrapped__(body={}, ack=MagicMock(), client=client, context={})
-
     assert result is None
+    return client, requester, mock_process
+
+
+@pytest.mark.parametrize(
+    ("overrides", "rejection"),
+    [
+        ({"reason": "x" * 1001}, "Reason must be 1000 characters or fewer"),
+        ({"reason": "x" * 1000, "permission_set_name": "p" * 1000}, "Request is too large for Slack; shorten the reason"),
+    ],
+)
+def test_handle_request_for_access_submittion_rejects_by_dm(main_module, overrides, rejection):
+    """The modal is already closed when this runs, so the requester is told by DM."""
+    client, _, mock_process = _submit_modal(main_module, _request(main_module, **overrides))
+
     mock_process.assert_not_called()
-    client.chat_postMessage.assert_called_once()
-    assert client.chat_postMessage.call_args.kwargs["channel"] == "U_REQ"
-    assert "too long" in client.chat_postMessage.call_args.kwargs["text"].lower()
+    client.chat_postMessage.assert_called_once_with(channel="U_REQ", text=f"Your access request wasn't submitted: {rejection}.")
 
 
-def test_handle_request_for_access_submittion_still_submits_a_normal_reason(main_module):
-    """Companion to the test above: an ordinary reason must still reach
-    process_access_request unchanged -- the new check must not accidentally
-    reject legitimate requests."""
-    fake_request = MagicMock(requester_slack_id="U_REQ", reason="debugging prod issue")
-    fake_requester = MagicMock(id="U_REQ", email="req@example.com")
-    client = MagicMock()
+def test_handle_request_for_access_submittion_submits_a_normal_request_with_its_account_name(main_module):
+    client, requester, mock_process = _submit_modal(main_module, _request(main_module, reason="debugging prod issue"))
 
-    with (
-        patch.object(main_module.slack_helpers.RequestForAccessView, "parse", return_value=fake_request),
-        patch.object(main_module.slack_helpers, "get_user", return_value=fake_requester),
-        patch.object(main_module, "process_access_request") as mock_process,
-    ):
-        main_module.handle_request_for_access_submittion.__wrapped__(body={}, ack=MagicMock(), client=client, context={})
-
-    mock_process.assert_called_once_with(request=fake_request, requester=fake_requester, client=client)
+    named = _request(main_module, reason="debugging prod issue", account_name="aft")
+    mock_process.assert_called_once_with(request=named, requester=requester, client=client)
     client.chat_postMessage.assert_not_called()

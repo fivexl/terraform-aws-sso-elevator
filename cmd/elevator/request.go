@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -98,6 +99,16 @@ func validateDurationMinutes(s string) error {
 	minutes, err := strconv.Atoi(s)
 	if err != nil || minutes <= 0 {
 		return fmt.Errorf("--duration must be a positive integer number of minutes, got %q", s)
+	}
+	return nil
+}
+
+// maxReasonLength matches the server's limit; checking it here saves a signed round trip.
+const maxReasonLength = 1000
+
+func validateReason(s string) error {
+	if utf8.RuneCountInString(s) > maxReasonLength {
+		return fmt.Errorf("--reason must be %d characters or fewer", maxReasonLength)
 	}
 	return nil
 }
@@ -182,6 +193,9 @@ func runRequest(args []string) {
 		log.Fatalf("--account must be a 12-digit AWS account ID, got %q", *account)
 	}
 	if err := validateDurationMinutes(*duration); err != nil {
+		log.Fatal(err)
+	}
+	if err := validateReason(*reason); err != nil {
 		log.Fatal(err)
 	}
 

@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Literal, Union
+from typing import Literal, Optional, Union
 
 from pydantic import model_validator, RootModel
 
@@ -14,6 +14,10 @@ class RevokeEvent(BaseModel):
     requester: entities.slack.User
     user_account_assignment: sso.UserAccountAssignment
     permission_duration: timedelta
+    # The request message the revocation reports back to. None on events
+    # scheduled before they carried it; those get a standalone notice instead.
+    channel_id: Optional[str] = None
+    message_ts: Optional[str] = None
 
 
 class GroupRevokeEvent(BaseModel):
@@ -22,6 +26,8 @@ class GroupRevokeEvent(BaseModel):
     requester: entities.slack.User
     group_assignment: sso.GroupAssignment
     permission_duration: timedelta
+    channel_id: Optional[str] = None  # see RevokeEvent
+    message_ts: Optional[str] = None
 
 
 class ScheduledGroupRevokeEvent(BaseModel):

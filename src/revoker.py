@@ -62,14 +62,12 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 scheduler_client=scheduler_client,
                 org_client=org_client,
                 slack_client=slack_client,
-                identitystore_client=identitystore_client,
             )
 
         case ScheduledGroupRevokeEvent():
             logger.info("Handling GroupRevokeEvent", extra={"event": parsed_event})
             return handle_scheduled_group_assignment_deletion(
                 group_revoke_event=parsed_event.revoke_event,
-                sso_client=sso_client,
                 cfg=cfg,
                 scheduler_client=scheduler_client,
                 slack_client=slack_client,
@@ -207,10 +205,8 @@ def slack_notify_user_on_revoke(  # noqa: PLR0913
         identitystore_client=identitystore_client,
         slack_client=slack_client,
     )
-    return slack_client.chat_postMessage(
-        channel=cfg.slack_channel_id,
-        text=f"Revoked role {permission_set.name} for user {mention} in account {account.name}",
-    )
+    subject = slack_helpers.account_subject(permission_set.name, account.name, account.id)
+    return slack_client.chat_postMessage(channel=cfg.slack_channel_id, text=untracked_revocation_text(f"{subject} for {mention}"))
 
 
 def slack_notify_user_on_group_access_revoke(  # noqa: PLR0913
@@ -229,8 +225,46 @@ def slack_notify_user_on_group_access_revoke(  # noqa: PLR0913
     )
     return slack_client.chat_postMessage(
         channel=cfg.slack_channel_id,
-        text=f"User {mention} has been removed from the group {group_assignment.group_name}.",
+        text=untracked_revocation_text(f"{mention} removed from {slack_helpers.group_subject(group_assignment.group_name)}"),
     )
+
+
+def untracked_revocation_text(what: str) -> str:
+    # "Untracked", not "outside Elevator": a missing request link does not prove where access came from.
+    return f":broom: Revoked untracked access · {what}"
+
+
+def report_scheduled_revocation(  # noqa: PLR0913
+    cfg: config.Config,
+    slack_client: slack_sdk.WebClient,
+    revoke_event: RevokeEvent | GroupRevokeEvent,
+    subject: str,
+    ended: str,
+    untracked: str,
+) -> None:
+    """Flips the request message to Ended with a thread reply; without one, posts
+    a standalone notice. Never raises: the revocation itself already happened."""
+    try:
+        if revoke_event.channel_id and revoke_event.message_ts:
+            if slack_helpers.end_request_message(
+                slack_client,
+                revoke_event.channel_id,
+                revoke_event.message_ts,
+                subject,
+                revoke_event.requester.id,
+                revoke_event.approver.id,
+                f"Access ended: {ended}",
+            ):
+                return
+            logger.warning("Request message not found for a scheduled revocation", extra={"revoke_event": revoke_event})
+    except Exception as e:
+        logger.exception(f"Failed to show a scheduled revocation on its request message: {e}")
+    if not cfg.post_update_to_slack:
+        return
+    try:
+        slack_client.chat_postMessage(channel=cfg.slack_channel_id, text=untracked_revocation_text(untracked))
+    except Exception as e:
+        logger.exception(f"Failed to post a revocation notice, the revocation itself succeeded: {e}")
 
 
 def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
@@ -240,8 +274,7 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     scheduler_client: EventBridgeSchedulerClient,
     org_client: OrganizationsClient,
     slack_client: slack_sdk.WebClient,
-    identitystore_client: IdentityStoreClient,
-) -> SlackResponse | None:
+) -> None:
     logger.info("Handling scheduled account assignment deletion", extra={"revoke_event": revoke_event})
 
     user_account_assignment = revoke_event.user_account_assignment
@@ -273,29 +306,30 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     )
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
 
-    if cfg.post_update_to_slack:
-        # Not wrapped in try/except: unlike the loop paths, this invocation handles one revocation,
-        # and a propagated Slack failure is what raises the DLQ/SNS alert about a broken Slack setup.
-        account = organizations.describe_account(org_client, user_account_assignment.account_id)
-        slack_notify_user_on_revoke(
-            cfg=cfg,
-            account_assignment=user_account_assignment,
-            permission_set=permission_set,
-            account=account,
-            sso_client=sso_client,
-            identitystore_client=identitystore_client,
-            slack_client=slack_client,
-        )
+    account_id = user_account_assignment.account_id
+    try:
+        account_name = organizations.describe_account(org_client, account_id).name
+    except Exception as e:
+        logger.exception(f"Failed to describe account {account_id} for the revocation notice: {e}")
+        account_name = account_id
+    subject = slack_helpers.account_subject(permission_set.name, account_name, account_id)
+    report_scheduled_revocation(
+        cfg,
+        slack_client,
+        revoke_event,
+        subject=subject,
+        ended=f"{slack_helpers.escape_mrkdwn(permission_set.name)} removed from {slack_helpers.escape_mrkdwn(account_name)} #{account_id}",
+        untracked=f"{subject} for <@{revoke_event.requester.id}>",
+    )
 
 
-def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
+def handle_scheduled_group_assignment_deletion(
     group_revoke_event: GroupRevokeEvent,
-    sso_client: SSOAdminClient,
     cfg: config.Config,
     scheduler_client: EventBridgeSchedulerClient,
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
-) -> SlackResponse | None:
+) -> None:
     logger.info("Handling scheduled group access revokation", extra={"revoke_event": group_revoke_event})
     group_assignment = group_revoke_event.group_assignment
     sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
@@ -315,14 +349,15 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
         ),
     )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
-    if cfg.post_update_to_slack:
-        slack_notify_user_on_group_access_revoke(
-            cfg=cfg,
-            group_assignment=group_assignment,
-            sso_client=sso_client,
-            identitystore_client=identitystore_client,
-            slack_client=slack_client,
-        )
+    group = slack_helpers.group_subject(group_assignment.group_name)
+    report_scheduled_revocation(
+        cfg,
+        slack_client,
+        group_revoke_event,
+        subject=group,
+        ended=f"removed from {group}",
+        untracked=f"<@{group_revoke_event.requester.id}> removed from {group}",
+    )
 
 
 def handle_check_on_inconsistency(  # noqa: PLR0913
@@ -556,34 +591,21 @@ def handle_discard_buttons_event(
     if message is None:
         logger.warning("Message was not found", extra={"event": event})
         return
+    if not any(slack_helpers.get_block_id(block) == "buttons" for block in message.get("blocks") or []):
+        logger.info("Buttons were not found", extra={"event": event})
+        return
 
-    for block in message["blocks"]:
-        if slack_helpers.get_block_id(block) == "buttons":
-            blocks = slack_helpers.remove_blocks(message["blocks"], block_ids=["buttons"])
-            text = f"Request expired after {cfg.request_expiration_hours} hour(s)."
-            blocks.append(
-                slack_helpers.SectionBlock(
-                    block_id="footer",
-                    text=slack_helpers.MarkdownTextObject(
-                        text=text,
-                    ),
-                )
-            )
-            blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-                blocks=blocks,
-                color_coding_emoji=cfg.discarded_result_emoji,
-            )
-
-            slack_client.chat_update(
-                channel=event.channel_id,
-                ts=message["ts"],
-                blocks=blocks,
-                text=text,
-            )
-            logger.info("Buttons were removed", extra={"event": event})
-            return
-
-    logger.info("Buttons were not found", extra={"event": event})
+    request = slack_helpers.pending_request(message)
+    if request is None:
+        slack_helpers.strip_buttons(slack_client, event.channel_id, message)
+        logger.info("Buttons were removed from a pre-upgrade request", extra={"event": event})
+        return
+    card = slack_helpers.RequestCard.from_message(message, slack_helpers.request_subject(request), request.requester_slack_id)
+    text, blocks = slack_helpers.build_request_message(
+        card, slack_helpers.RequestState.expired(timedelta(hours=cfg.request_expiration_hours))
+    )
+    slack_client.chat_update(channel=event.channel_id, ts=message["ts"], blocks=blocks, text=text)
+    logger.info("Request expired", extra={"event": event})
 
 
 def handle_approvers_renotification_event(
@@ -599,7 +621,7 @@ def handle_approvers_renotification_event(
         logger.warning("Message not found", extra={"event": event})
         return
 
-    for block in message["blocks"]:
+    for block in message.get("blocks") or []:
         if slack_helpers.get_block_id(block) == "buttons":
             time_to_wait = timedelta(seconds=event.time_to_wait_in_seconds)
             if cfg.approver_renotification_backoff_multiplier != 0:

@@ -6,6 +6,7 @@ from typing import Callable
 import boto3
 import botocore.exceptions
 import slack_sdk.errors
+from pydantic import ValidationError
 from slack_bolt import Ack, App, BoltContext
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from slack_sdk import WebClient
@@ -20,7 +21,7 @@ import organizations
 import schedule
 import slack_helpers
 import sso
-from errors import AmbiguousSSOUser, SSOUserNotFound, handle_errors
+from errors import AmbiguousSSOUser, ShownOnRequest, SSOUserNotFound, handle_errors
 
 logger = config.get_logger(service="main")
 
@@ -140,24 +141,12 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "account, permission_set, and reason are all required and must be non-empty."}),
             }
-        # Slack's section-block text fields cap at 2000 chars
-        # (build_approval_request_message_blocks embeds reason in one), and
-        # slack_sdk doesn't validate this client-side -- an oversized reason
-        # reaches chat_postMessage, gets rejected with invalid_blocks, and
-        # unwinds to the same 500-plus-Slack-post blanket handler. This is
-        # NOT unique to the CLI: the Slack/group modals have no input-level
-        # cap of any kind either (confirmed live, reported by Andrey
-        # Devyatkin), and share the identical check via
-        # slack_helpers.reason_fits_slack_field -- see its own docstring for
-        # why the cap has to subtract the "Reason: " prefix and be checked
-        # against escape_mrkdwn's output, not raw len(reason).
-        if not slack_helpers.reason_fits_slack_field(reason):
+        # Cheap first cut; the full size check needs the account name, so it runs once that is known.
+        if len(reason) > slack_helpers.REASON_MAX_LENGTH:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},
-                "body": json.dumps(
-                    {"message": f"reason must be at most {slack_helpers.MAX_REASON_LENGTH} characters (after escaping any of & < >)."}
-                ),
+                "body": json.dumps({"message": f"{slack_helpers.REASON_TOO_LONG}."}),
             }
 
         # A strict, length-bounded digit-string match rather than a bare
@@ -341,17 +330,25 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             )
             return cli_auth.GENERIC_REJECTION
 
-        request = slack_helpers.RequestForAccess(
-            permission_set_name=permission_set_name,
-            account_id=account_id,
-            reason=reason,
-            requester_slack_id=requester.id,
-            permission_duration=timedelta(minutes=minutes),
-            request_source="cli",
-            verified_arn=user_arn,
-            verified_user_id=identity_user_id,
-            verified_email=identity_email,
+        request = _with_account_name(
+            slack_helpers.RequestForAccess(
+                permission_set_name=permission_set_name,
+                account_id=account_id,
+                reason=reason,
+                requester_slack_id=requester.id,
+                permission_duration=timedelta(minutes=minutes),
+                request_source="cli",
+                verified_arn=user_arn,
+                verified_user_id=identity_user_id,
+                verified_email=identity_email,
+            )
         )
+        if rejection := slack_helpers.request_rejection(request):
+            return {
+                "statusCode": 400,
+                "headers": {"content-type": "application/json"},
+                "body": json.dumps({"message": f"{rejection}."}),
+            }
 
         decision, succeeded = process_access_request(request=request, requester=requester, client=app.client)
 
@@ -367,6 +364,14 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             "statusCode": 200,
             "headers": {"content-type": "application/json"},
             "body": json.dumps({"ok": True, "message": "Request received and posted for approval in Slack."}),
+        }
+    except ShownOnRequest as e:
+        # The request's own Slack message and thread already show this failure.
+        logger.exception(f"CLI access request failed after it was posted: {e}")
+        return {
+            "statusCode": 500,
+            "headers": {"content-type": "application/json"},
+            "body": json.dumps({"message": "Access could not be granted. Details are in the request's Slack thread."}),
         }
     except Exception as e:
         logger.exception(f"Error handling CLI access request: {e}")
@@ -613,25 +618,20 @@ cache_for_dublicate_requests = {}
 
 
 @handle_errors
-def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # noqa: ARG001, PLR0912, PLR0915
-    # Registered as a Bolt lazy listener below -- its return value isn't
-    # consumed by the framework, so the None the final best-effort
-    # notification block can now produce (if that whole block fails) isn't
-    # a behavior change, just an honest type for what was already possible
-    # in spirit (nothing here ever depended on getting a real SlackResponse
-    # back from this function).
+def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # noqa: ARG001, PLR0911
     logger.info("Handling button click")
     try:
         payload = slack_helpers.ButtonClickedPayload.model_validate(body)
-    except Exception as e:
-        # A descriptive message with the exception interpolated, not the
-        # bare exception object as the log message itself (#194 AGENTS.md
-        # convention pass, missed in the first pass) -- this is also not
-        # necessarily a real error: it's the routing mechanism for telling
-        # an account-request button click apart from a group-request one,
-        # so it's expected to fail routinely for every genuine group click.
-        logger.exception(f"Payload did not validate as an account-request ButtonClickedPayload, trying group instead: {e}")
-        return group.handle_group_button_click(body=body, client=client, context=context)
+    except ValidationError as e:
+        logger.warning(f"Button value is not a request, treating the message as pre-upgrade: {e}")
+        message, channel_id = body["message"], body["channel"]["id"]
+        slack_helpers.post_thread_reply(client, channel_id, message["ts"], slack_helpers.OLD_REQUEST_REPLY)
+        # Expiry can be disabled, so the old buttons might otherwise stay forever.
+        slack_helpers.strip_buttons(client, channel_id, message)
+        return None
+    if isinstance(payload.request, slack_helpers.RequestForGroupAccess):
+        return group.handle_group_button_click(payload=payload, client=client, context=context)
+    request = payload.request
 
     logger.info("Button click payload", extra={"payload": payload})
     # Approver might be from different Slack workspace, if so, get_user will fail.
@@ -646,28 +646,14 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             Please check the module configuration.""",
             thread_ts=payload.thread_ts,
         )
-    requester = slack_helpers.get_user(client, id=payload.request.requester_slack_id)
-    # Isolated in its own try (#194 A4, extended to this call site in a
-    # final pre-delivery review -- the same fix already applied to
-    # process_access_request below hadn't been propagated here): left
-    # bare, a transient conversations_members hiccup at this point --
-    # right after the approver clicked Approve/Discard, before
-    # execute_decision has even run -- aborted the entire approval outright
-    # instead of just this one, unrelated notification-routing check.
-    # Defaults to False (not confirmed in the channel), matching
-    # process_access_request's own reasoning: fails toward over-notifying
-    # rather than silently skipping the only notification a requester who
-    # genuinely isn't in the channel would see.
-    try:
-        is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"Failed to check channel membership; assuming not in channel so the DM fallback still fires: {e}")
-        is_user_in_channel = False
+    requester = slack_helpers.get_user(client, id=request.requester_slack_id)
+    dm_requester = slack_helpers.should_dm(client, requester.id)
+    card = slack_helpers.RequestCard.from_message(payload.message, slack_helpers.request_subject(request), requester.id)
 
     if (
-        cache_for_dublicate_requests.get("requester_slack_id") == payload.request.requester_slack_id
-        and cache_for_dublicate_requests.get("account_id") == payload.request.account_id
-        and cache_for_dublicate_requests.get("permission_set_name") == payload.request.permission_set_name
+        cache_for_dublicate_requests.get("requester_slack_id") == request.requester_slack_id
+        and cache_for_dublicate_requests.get("account_id") == request.account_id
+        and cache_for_dublicate_requests.get("permission_set_name") == request.permission_set_name
     ):
         return client.chat_postMessage(
             channel=payload.channel_id,
@@ -675,76 +661,30 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
     if payload.action == entities.ApproverAction.Discard:
-        blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-            blocks=payload.message["blocks"],
-            color_coding_emoji=cfg.bad_result_emoji,
-        )
-
-        blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
-        blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
-
-        text = f"Request was discarded by<@{approver.id}> "
-        dm_text = f"Your request was discarded by <@{approver.id}>."
-        client.chat_update(
-            channel=payload.channel_id,
-            ts=payload.thread_ts,
-            blocks=blocks,
-            text=text,
-        )
-
+        slack_helpers.discard_request(client, payload.channel_id, payload.thread_ts, card, approver.id, requester.id, dm_requester)
         cache_for_dublicate_requests.clear()
-        if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
-            logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-            client.chat_postMessage(channel=requester.id, text=dm_text)
-        return client.chat_postMessage(
-            channel=payload.channel_id,
-            text=text,
-            thread_ts=payload.thread_ts,
-        )
+        return None
 
-    # Eligibility is evaluated against the identity execute_decision will
-    # actually grant, not necessarily requester.email as freshly re-fetched
-    # from Slack just now (#194 B4): for a "cli" request, requester.email can
-    # drift between submission and approval (a Slack profile change, a
-    # directory update), while the grant itself is pinned to
-    # payload.request.verified_user_id from submission time. Using the
-    # pinned verified_email here too keeps the permit/deny decision and the
-    # actual grant target evaluated against the same person. Falls back to
-    # requester.email for "slack" requests (verified_email is always "NA"
-    # there) and for pre-upgrade CLI messages that predate this field.
-    eligibility_email = (
-        payload.request.verified_email
-        if payload.request.request_source == "cli" and payload.request.verified_email != "NA"
-        else requester.email
-    )
-    # Passed alongside eligibility_email, not instead of it (#194 B4
-    # residual, found by Andrey Devyatkin): get_requester_group_ids_if_needed
-    # uses this to look up group membership directly against the
-    # already-verified principal, skipping the email-to-principal
-    # resolution (secondary-domain fallback included) eligibility_email
-    # alone would still have gone through -- which could otherwise resolve
-    # to a *different* principal than the one actually being granted.
+    # A CLI request is evaluated against the identity verified at submission
+    # (#194 B4), which is also the one execute_decision grants to; the
+    # requester's current Slack email may have drifted since.
+    eligibility_email = request.verified_email if request.request_source == "cli" and request.verified_email != "NA" else requester.email
     eligibility_verified_user_id = (
-        payload.request.verified_user_id if payload.request.request_source == "cli" and payload.request.verified_user_id != "NA" else None
-    )
+        request.verified_user_id if request.request_source == "cli" and request.verified_user_id != "NA" else None
+    )  # noqa: E501
     requester_group_ids = access_control.get_requester_group_ids_if_needed(cfg.statements, eligibility_email, eligibility_verified_user_id)
-    cache_for_dublicate_requests["requester_slack_id"] = payload.request.requester_slack_id
-    cache_for_dublicate_requests["account_id"] = payload.request.account_id
-    cache_for_dublicate_requests["permission_set_name"] = payload.request.permission_set_name
+    cache_for_dublicate_requests["requester_slack_id"] = request.requester_slack_id
+    cache_for_dublicate_requests["account_id"] = request.account_id
+    cache_for_dublicate_requests["permission_set_name"] = request.permission_set_name
 
-    # Cache write above and every clear below (the not-permitted return, and
-    # after execute_decision) are both already covered, but this call itself
-    # was not (#194 A3 residual, found by Andrey Devyatkin): with no handler
-    # of its own, an exception here propagated straight to @handle_errors
-    # with the cache left populated -- leaving this exact request
-    # permanently stuck reporting "already in progress" to any retry, for
-    # the rest of this container's life, with nothing left to ever clear it.
+    # Every exit below clears the dedup cache, or a retry would be stuck on
+    # "already in progress" for this container's life (#194 A3).
     try:
         decision = access_control.make_decision_on_approve_request(
             action=payload.action,
             statements=cfg.statements,
-            account_id=payload.request.account_id,
-            permission_set_name=payload.request.permission_set_name,
+            account_id=request.account_id,
+            permission_set_name=request.permission_set_name,
             approver_email=approver.email,
             requester_email=eligibility_email,
             requester_group_ids=requester_group_ids,
@@ -762,111 +702,48 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
 
-    text = f"Permissions granted to <@{requester.id}> by <@{approver.id}>."
-    dm_text = f"Your request was approved by <@{approver.id}>. Permissions granted."
-    color_coding_emoji = cfg.good_result_emoji
+    # Buttons go before the grant runs (#194 A2): the dedup cache is
+    # per-container, so only removing the buttons stops a second approver's
+    # click in another container from granting twice.
+    decided_by = slack_helpers.approved_by(approver.id)
+    slack_helpers.update_request_message(
+        client, payload.channel_id, payload.thread_ts, card, slack_helpers.RequestState.processing(decided_by)
+    )
 
-    # Buttons stripped *before* execute_decision runs, not only afterward
-    # with the rest of the outcome (#194 A2): cache_for_dublicate_requests
-    # is per-container in-memory state, so it can't close this window by
-    # itself -- a second approver clicking Approve while
-    # create_account_assignment_and_wait_for_result is still polling can
-    # land in a different, fresh Lambda container that sees an empty cache
-    # and this message's still-live buttons, and runs a second
-    # execute_decision -> schedule_revoke_event for the same request. Once
-    # the buttons are gone there's nothing left for a second click to hit,
-    # regardless of which container it would have landed in. Best-effort:
-    # a Slack hiccup here narrows the closed window rather than eliminating
-    # it, but must not stop the actual grant from being attempted -- the
-    # final chat_update after execute_decision still removes the buttons
-    # for good either way.
+    replaced, grant_error = [], None
     try:
-        client.chat_update(
-            channel=payload.channel_id,
-            ts=payload.thread_ts,
-            blocks=slack_helpers.remove_blocks(payload.message["blocks"], block_ids=["buttons"]),
-            text=f"<@{approver.id}> is processing this request...",
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"Failed to strip buttons before granting (best-effort, not re-raised): {e}")
-
-    # execute_decision runs before the chat_update/notifications below, not
-    # after: the old order recolored the message green and said
-    # "Permissions granted" before the grant had actually been attempted,
-    # so a failure here (a stale/bogus permission set name, IAM Identity
-    # Center throttling, anything) left that message incorrect with no
-    # visible correction -- @handle_errors' own generic error post is a
-    # separate message, not a fix to this one. Same shape as the CLI/
-    # self-approval path in process_access_request, for the same reason.
-    grant_error: Exception | None = None
-    try:
-        access_control.execute_decision(
+        replaced = access_control.execute_decision(
             decision=decision,
-            permission_set_name=payload.request.permission_set_name,
-            account_id=payload.request.account_id,
-            permission_duration=payload.request.permission_duration,
+            permission_set_name=request.permission_set_name,
+            account_id=request.account_id,
+            permission_duration=request.permission_duration,
             approver=approver,
             requester=requester,
-            reason=payload.request.reason,
-            request_source=payload.request.request_source,
-            verified_arn=payload.request.verified_arn,
-            verified_user_id=payload.request.verified_user_id,
+            reason=request.reason,
+            request_source=request.request_source,
+            verified_arn=request.verified_arn,
+            verified_user_id=request.verified_user_id,
+            channel_id=payload.channel_id,
+            message_ts=payload.thread_ts,
         )
     except Exception as e:  # noqa: BLE001
         grant_error = e
-        logger.exception(
-            f"execute_decision failed -- overriding the message to reflect the actual outcome: {e}", extra={"decision": decision.dict()}
-        )
-        color_coding_emoji = cfg.bad_result_emoji
-        text = f"An error occurred while granting access: {e}"
-        dm_text = text
-
-    # The dedup cache is cleared once the outcome is decided (success or a
-    # caught failure), not only on the success path -- otherwise a failed
-    # execute_decision left this exact request permanently stuck reporting
-    # "already in progress" to any retry, since nothing else ever clears it.
+        logger.exception(f"execute_decision failed: {e}", extra={"decision": decision.dict()})
     cache_for_dublicate_requests.clear()
 
-    blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-        blocks=payload.message["blocks"],
-        color_coding_emoji=color_coding_emoji,
+    slack_helpers.report_grant_outcome(
+        client,
+        channel_id=payload.channel_id,
+        ts=payload.thread_ts,
+        card=card,
+        decided_by=decided_by,
+        auto=False,
+        duration=request.permission_duration,
+        replaced=replaced or [],
+        error=grant_error,
+        dm_requester=dm_requester,
     )
-    blocks = slack_helpers.remove_blocks(blocks, block_ids=["buttons"])
-    blocks.append(slack_helpers.button_click_info_block(payload.action, approver.id).to_dict())
-
-    # Best-effort from here, not re-raised: once execute_decision has
-    # either succeeded (access is live) or definitively failed (captured as
-    # grant_error above), a Slack API hiccup while posting/updating these
-    # notifications must never be reported as "this failed" on top of a
-    # grant that actually succeeded -- the exact inverted-truth outcome the
-    # reordering above exists to prevent, just from the notification side
-    # instead of the ordering side.
-    result: SlackResponse | None = None
-    try:
-        client.chat_update(
-            channel=payload.channel_id,
-            ts=payload.thread_ts,
-            blocks=blocks,
-            text=text,
-        )
-        if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
-            logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-            client.chat_postMessage(channel=requester.id, text=dm_text)
-        result = client.chat_postMessage(
-            channel=payload.channel_id,
-            text=text,
-            thread_ts=payload.thread_ts,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"Failed to fully post/update notifications about this approval's outcome (best-effort, not re-raised): {e}")
-
-    if grant_error is not None:
-        # Re-raised after the messages above already reflect the failure
-        # (best-effort -- see above) -- @handle_errors still needs to know
-        # this happened, to post its own generic error notification.
-        raise grant_error
-
-    return result
+    return None
 
 
 def acknowledge_request(ack: Ack):  # noqa: ANN201
@@ -884,42 +761,24 @@ app.action(entities.ApproverAction.Discard.value)(
 )
 
 
-def process_access_request(  # noqa: PLR0915, PLR0912
+def process_access_request(
     request: slack_helpers.RequestForAccess,
     requester: entities.slack.User,
     client: WebClient,
 ) -> tuple[access_control.AccessRequestDecision, bool]:
-    """Decide on, post for approval (or auto-execute), and notify about an access request.
+    """Decide on, post, and (for auto-approval) grant an access request, which
+    _with_account_name has named and request_rejection has passed.
 
-    Shared by both intake paths: the Slack modal submission (handle_request_for_access_submittion,
-    below) and the CLI path (handle_cli_access_request). Both resolve a RequestForAccess and a
-    requester by the time they get here; everything past that point — the decision, the Slack
-    approval message, discard/renotify scheduling, and auto-execution — is identical regardless of
-    where the request came from, so it lives in one place rather than being duplicated.
-
-    Returns the decision alongside a `succeeded` bool: whether the request was actually granted or
-    successfully queued for approval, as opposed to e.g. RequiresApproval resolving zero approvers
-    in Slack -- which keeps decision.reason == RequiresApproval even though nothing was queued.
+    Shared by the Slack modal and the CLI. Returns the decision and whether the
+    request was granted or queued for approval: RequiresApproval with no
+    approver found in Slack keeps its reason yet queues nothing. Raises
+    ShownOnRequest when an auto-grant failed after the request was posted.
     """
-    # Pinned to request.verified_email for a CLI-sourced request, not
-    # requester.email, for the same reason handle_button_click's own
-    # eligibility_email is (#194 B4, and a final pre-delivery review that
-    # confirmed this specific asymmetry): today, at submission time, the two
-    # already agree (requester was resolved by handle_cli_access_request
-    # via this exact identity_email moments earlier), so this is currently
-    # a no-op in practice -- but making the eligibility decision here use
-    # the same pinned identity as the approval-time decision, rather than
-    # requester.email specifically, keeps that invariant true by
-    # construction instead of by coincidence of call order, and removes
-    # the one place a reviewer would otherwise have to reason through why
-    # two structurally identical decisions read two different variables.
+    # Pinned to the CLI's verified identity, same as at approval time (#194 B4).
     eligibility_email = request.verified_email if request.request_source == "cli" and request.verified_email != "NA" else requester.email
-    # See handle_button_click's identical eligibility_verified_user_id for
-    # why this is passed alongside eligibility_email (#194 B4 residual,
-    # found by Andrey Devyatkin).
     eligibility_verified_user_id = (
         request.verified_user_id if request.request_source == "cli" and request.verified_user_id != "NA" else None
-    )
+    )  # noqa: E501
     decision = access_control.make_decision_on_access_request(
         cfg.statements,
         account_id=request.account_id,
@@ -931,222 +790,80 @@ def process_access_request(  # noqa: PLR0915, PLR0912
     )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
-    account = organizations.describe_account(org_client, request.account_id)
+    # A CLI request is granted to its verified UserId, never via the fallback.
+    secondary_domain_used = request.request_source == "slack" and _secondary_domain_used(requester.email)
+    card = slack_helpers.RequestCard.for_request(request, secondary_domain_used)
+    outcome = slack_helpers.intake_outcome(client, decision, requester.id)
 
-    show_buttons = bool(decision.approvers)
-    slack_response = client.chat_postMessage(
-        blocks=slack_helpers.build_approval_request_message_blocks(
-            sso_client=sso_client,
-            identity_store_client=identity_store_client,
-            slack_client=client,
-            requester_slack_id=request.requester_slack_id,
-            account=account,
-            role_name=request.permission_set_name,
-            reason=request.reason,
-            permission_duration=request.permission_duration,
-            show_buttons=show_buttons,
-            color_coding_emoji=cfg.waiting_result_emoji,
-            request_source=request.request_source,
-            verified_arn=request.verified_arn,
-            verified_user_id=request.verified_user_id,
-            verified_email=request.verified_email,
-        ),
-        channel=cfg.slack_channel_id,
-        text=f"Request for access to {account.name} account from {requester.real_name}",
-    )
+    text, blocks = slack_helpers.build_request_message(card, outcome.state)
+    ts = client.chat_postMessage(channel=cfg.slack_channel_id, blocks=blocks, text=text)["ts"]
+    dm_requester = slack_helpers.should_dm(client, requester.id)
+    if outcome.thread_reply:
+        slack_helpers.post_thread_reply(client, cfg.slack_channel_id, ts, outcome.thread_reply)
+    if outcome.dm and dm_requester:
+        slack_helpers.send_dm(client, requester.id, outcome.dm)
+    if outcome.state.is_pending:
+        _schedule_pending_request_events(ts)
 
-    if show_buttons:
-        ts = slack_response["ts"]
-        if ts is not None:
-            schedule.schedule_discard_buttons_event(
-                schedule_client=schedule_client,
-                time_stamp=ts,
+    if decision.grant:
+        # Granted before the outcome is shown, so a failure is never reported as success.
+        replaced, grant_error = [], None
+        try:
+            replaced = access_control.execute_decision(
+                decision=decision,
+                permission_set_name=request.permission_set_name,
+                account_id=request.account_id,
+                permission_duration=request.permission_duration,
+                approver=requester,
+                requester=requester,
+                reason=request.reason,
+                request_source=request.request_source,
+                verified_arn=request.verified_arn,
+                verified_user_id=request.verified_user_id,
                 channel_id=cfg.slack_channel_id,
-            )
-            schedule.schedule_approver_notification_event(
-                schedule_client=schedule_client,
                 message_ts=ts,
-                channel_id=cfg.slack_channel_id,
-                time_to_wait=timedelta(
-                    minutes=cfg.approver_renotification_initial_wait_time,
-                ),
             )
-
-    match decision.reason:
-        case access_control.DecisionReason.ApprovalNotRequired:
-            text = "Approval for this Permission Set & Account is not required. Request will be approved automatically."
-            dm_text = "Approval for this Permission Set & Account is not required. Your request will be approved automatically."
-            color_coding_emoji = cfg.good_result_emoji
-        case access_control.DecisionReason.SelfApproval:
-            text = "Self approval is allowed and requester is an approver. Request will be approved automatically."
-            dm_text = "Self approval is allowed and you are an approver. Your request will be approved automatically."
-            color_coding_emoji = cfg.good_result_emoji
-        case access_control.DecisionReason.RequiresApproval:
-            approvers, approver_emails_not_found = slack_helpers.find_approvers_in_slack(
-                client,
-                decision.approvers,  # type: ignore # noqa: PGH003
-            )
-            if not approvers:
-                text = """
-                None of the approvers from configuration could be found in Slack.
-                Request cannot be processed. Please discard the request and check the module configuration.
-                """
-                dm_text = """
-                Your request cannot be processed because none of the approvers from configuration could be found in Slack.
-                Please discard the request and check the module configuration.
-                """
-                color_coding_emoji = cfg.bad_result_emoji
-            else:
-                mention_approvers = " ".join(f"<@{approver.id}>" for approver in approvers)
-                text = f"{mention_approvers} there is a request waiting for the approval."
-                if approver_emails_not_found:
-                    missing_emails = ", ".join(approver_emails_not_found)
-                    text += f"""
-                    Note: Some approvers ({missing_emails}) could not be found in Slack.
-                    Please discard the request and check the module configuration.
-                    """
-                dm_text = f"Your request is waiting for the approval from {mention_approvers}."
-                color_coding_emoji = cfg.waiting_result_emoji
-        case access_control.DecisionReason.NoApprovers:
-            text = "Nobody can approve this request."
-            dm_text = "Nobody can approve this request."
-            color_coding_emoji = cfg.bad_result_emoji
-        case access_control.DecisionReason.NoStatements:
-            text = "There are no statements for this Permission Set & Account."
-            dm_text = "There are no statements for this Permission Set & Account."
-            color_coding_emoji = cfg.bad_result_emoji
-        case access_control.DecisionReason.RequesterNotAllowed:
-            text = f"<@{requester.id}> is not allowed to request access to this Permission Set & Account."
-            dm_text = "You are not allowed to request access to this Permission Set & Account."
-            color_coding_emoji = cfg.bad_result_emoji
-
-    # execute_decision runs before every notification below -- the thread
-    # reply, the DM, and the header's chat_update -- not just before the
-    # last of the three. For an auto-grant decision (ApprovalNotRequired/
-    # SelfApproval), text/dm_text/color_coding_emoji are already set to their
-    # "will be approved automatically" / good_result_emoji wording purely
-    # from the *decision* above, before the grant has actually been
-    # attempted. Sending any of these three before running the real AWS
-    # calls in execute_decision meant a failure there (a stale/bogus
-    # permission set name, IAM Identity Center throttling, anything) left
-    # the thread reply and/or DM permanently reading "will be approved
-    # automatically" with no correction, even once the header's own
-    # chat_update was fixed to reflect the real outcome -- a reader
-    # following the thread, or the requester's DM, would see no indication
-    # the grant actually failed. Overriding text/dm_text/color_coding_emoji
-    # here, before any of the three sends below, keeps all of them
-    # consistent with each other and with what actually happened.
-    #
-    # For RequiresApproval, decision.grant is still False here (nothing has
-    # been approved yet), so execute_decision's own `if not decision.grant:
-    # return False` makes this a no-op -- this reordering only changes
-    # behavior for the two auto-grant reasons above.
-    grant_error: Exception | None = None
-    try:
-        access_control.execute_decision(
-            decision=decision,
-            permission_set_name=request.permission_set_name,
-            account_id=request.account_id,
-            permission_duration=request.permission_duration,
-            approver=requester,
-            requester=requester,
-            reason=request.reason,
-            request_source=request.request_source,
-            verified_arn=request.verified_arn,
-            verified_user_id=request.verified_user_id,
+        except Exception as e:  # noqa: BLE001
+            grant_error = e
+            logger.exception(f"execute_decision failed: {e}", extra={"decision": decision.dict()})
+        slack_helpers.report_grant_outcome(
+            client,
+            channel_id=cfg.slack_channel_id,
+            ts=ts,
+            card=card,
+            decided_by=slack_helpers.AUTO_APPROVAL_LABELS[decision.reason],
+            auto=True,
+            duration=request.permission_duration,
+            replaced=replaced or [],
+            error=grant_error,
+            dm_requester=dm_requester,
         )
-    except Exception as e:  # noqa: BLE001
-        grant_error = e
-        logger.exception(
-            f"execute_decision failed -- overriding the message to reflect the actual outcome: {e}", extra={"decision": decision.dict()}
-        )
-        color_coding_emoji = cfg.bad_result_emoji
-        text = f"An error occurred while granting access: {e}"
-        dm_text = text
+    return decision, not outcome.state.is_failed
 
-    # Isolated in its own try, not the first statement inside the shared
-    # best-effort block below (#194 A4): it used to be, so its failure
-    # aborted the thread reply, header chat_update, DM and "granted"
-    # follow-up all at once -- while succeeded (computed from
-    # color_coding_emoji, set above, before any of this) stayed True, so a
-    # CLI caller saw ok:true for a grant nobody was ever actually told
-    # about. Defaults to False (not confirmed in the channel) on failure,
-    # not True: that means the DM-if-not-in-channel fallback below still
-    # fires, so a membership-check hiccup fails toward over-notifying
-    # (an extra DM to someone already in the channel) rather than under-
-    # notifying (skipping the only notification a requester who genuinely
-    # isn't in the channel would see).
-    try:
-        is_user_in_channel = slack_helpers.check_if_user_is_in_channel(client, cfg.slack_channel_id, requester.id)
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"Failed to check channel membership; assuming not in channel so the DM fallback still fires: {e}")
-        is_user_in_channel = False
 
-    # Everything below is notification about an outcome that's already
-    # final by this point (execute_decision either succeeded -- access is
-    # live -- or failed outright -- nothing was granted, captured as
-    # grant_error above). Wrapped as one best-effort block, not re-raised:
-    # once the grant itself succeeded, a Slack API hiccup while posting or
-    # updating a message must never surface to the caller as "the request
-    # failed" when access was actually granted -- that would be exactly the
-    # inverted-truth outcome grant_error's own reordering exists to
-    # prevent, just from the opposite direction. Only grant_error (raised
-    # below, after this block, unconditionally) can still make the
-    # caller-visible outcome a failure.
-    try:
-        logger.info(f"Sending message to the channel {cfg.slack_channel_id}, message: {text}")
-        client.chat_postMessage(text=text, thread_ts=slack_response["ts"], channel=cfg.slack_channel_id)
-        if cfg.send_dm_if_user_not_in_channel and not is_user_in_channel:
-            logger.info(f"User {requester.id} is not in the channel. Sending DM with message: {dm_text}")
-            client.chat_postMessage(
-                channel=requester.id,
-                text=f"""
-                {dm_text} You are receiving this message in a DM because you are not a member of the channel <#{cfg.slack_channel_id}>.
-                """,
-            )
+def _with_account_name(request: slack_helpers.RequestForAccess) -> slack_helpers.RequestForAccess:
+    account = organizations.describe_account(org_client, request.account_id)
+    return request.model_copy(update={"account_name": account.name})
 
-        blocks = slack_helpers.HeaderSectionBlock.set_color_coding(
-            blocks=slack_response["message"]["blocks"],
-            color_coding_emoji=color_coding_emoji,
-        )
-        client.chat_update(
-            channel=cfg.slack_channel_id,
-            ts=slack_response["ts"],
-            blocks=blocks,
-            text=text,
-        )
 
-        if decision.grant and grant_error is None:
-            client.chat_postMessage(
-                channel=cfg.slack_channel_id,
-                text=f"Permissions granted to <@{requester.id}>",
-                thread_ts=slack_response["ts"],
-            )
-            if not is_user_in_channel and cfg.send_dm_if_user_not_in_channel:
-                client.chat_postMessage(
-                    channel=requester.id,
-                    text="Your request was processed, permissions granted.",
-                )
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"Failed to fully post/update notifications about this request's outcome (best-effort, not re-raised): {e}")
+def _secondary_domain_used(email: str) -> bool:
+    _, used = sso.get_user_principal_id_by_email(
+        identity_store_client=identity_store_client,
+        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+        email=email,
+        cfg=cfg,
+    )
+    return used
 
-    if grant_error is not None:
-        # Re-raised after the messages above already reflect the failure
-        # (best-effort -- see above) -- both callers
-        # (handle_request_for_access_submittion's @handle_errors,
-        # handle_cli_access_request's own blanket handler) still need to
-        # know this happened, e.g. to report a 500 to a CLI caller.
-        raise grant_error
 
-    # succeeded, not "decision.reason not in some hand-maintained denylist":
-    # color_coding_emoji is the single value every branch above (including
-    # the RequiresApproval/no-approvers-found sub-case, which keeps
-    # decision.reason == RequiresApproval even though the request could not
-    # be processed) already funnels its real outcome into -- deriving from
-    # it instead of duplicating that logic in a second set keeps the two
-    # from silently drifting apart the way DENIED_DECISION_REASONS did.
-    succeeded = color_coding_emoji != cfg.bad_result_emoji
-    return decision, succeeded
+def _schedule_pending_request_events(ts: str) -> None:
+    schedule.schedule_discard_buttons_event(schedule_client=schedule_client, time_stamp=ts, channel_id=cfg.slack_channel_id)
+    schedule.schedule_approver_notification_event(
+        schedule_client=schedule_client,
+        message_ts=ts,
+        channel_id=cfg.slack_channel_id,
+        time_to_wait=timedelta(minutes=cfg.approver_renotification_initial_wait_time),
+    )
 
 
 @handle_errors
@@ -1160,28 +877,9 @@ def handle_request_for_access_submittion(
     request = slack_helpers.RequestForAccessView.parse(body)
     logger.info("View submitted", extra={"view": request})
     requester = slack_helpers.get_user(client, id=request.requester_slack_id)
-    # Checked here, before process_access_request ever tries to post the
-    # approval message, not after (a real regression Andrey Devyatkin
-    # reproduced live): the modal has no input-level length cap of its own,
-    # and this view_submission is acked immediately and unconditionally
-    # (ack=acknowledge_request, above) before this lazy listener even runs
-    # -- by the time this function runs, the modal has already closed, so
-    # there's no way to reject the submission back into it. An oversized
-    # reason instead used to reach chat_postMessage and get rejected by
-    # Slack itself with invalid_blocks, surfacing as a 500 plus an
-    # "unexpected error" post to the approvals channel. DMing the requester
-    # and stopping here instead means the failure is at least attributable
-    # to them, not a mystery error in the shared channel.
-    if not slack_helpers.reason_fits_slack_field(request.reason):
-        logger.info("Rejected access request: reason too long once escaped", extra={"requester_slack_id": requester.id})
-        client.chat_postMessage(
-            channel=requester.id,
-            text=(
-                f"Your access request wasn't submitted: the reason is too long "
-                f"(must be at most {slack_helpers.MAX_REASON_LENGTH} characters, fewer if it contains &, <, or >). "
-                "Please shorten it and submit the request again."
-            ),
-        )
+    request = _with_account_name(request)
+    if rejection := slack_helpers.request_rejection(request):
+        slack_helpers.dm_rejection(client, requester.id, rejection)
         return
     process_access_request(request=request, requester=requester, client=client)
 
