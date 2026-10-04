@@ -100,6 +100,8 @@ select = [
 ignore = [
   # Allow imports not at top-level (used for circular dependency avoidance and lazy loading)
   "PLC0415",
+  # Stable since ruff 0.16; the existing handlers take many positional args by design.
+  "PLR0917",
 ]
 
 # Allow autofix for all enabled rules (when `--fix`) is provided.
