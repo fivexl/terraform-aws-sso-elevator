@@ -515,7 +515,7 @@ One stable bare SemVer tag releases the Terraform module, [Elevator CLI](cmd/ele
 4. Watch **CLI Release**. It verifies that the tag is on `main`, exercises Apple signing/notarization without publishing, runs the repository and CLI checks, then publishes and smoke-tests the signed binaries and Homebrew cask.
 5. A successful binary release starts **Build and Push Docker Images** asynchronously for `requester-X.Y.Z`, `revoker-X.Y.Z`, and `attribute-syncer-X.Y.Z`. The GitHub release can be available briefly before those images finish pushing.
 
-Pull requests from branches in this repository also run **Build and Push Docker Images** and publish `requester-pr-<N>-<sha>`, `revoker-pr-<N>-<sha>`, and `attribute-syncer-pr-<N>-<sha>`; set `ecr_repo_tag = "pr-<N>-<sha>"` to test one (the run summary shows the value). Fork PRs get no secrets and publish nothing. PR images expire automatically.
+Pull requests from branches in this repository also run **Build and Push Docker Images** and publish `requester-pr-<N>-<sha>`, `revoker-pr-<N>-<sha>`, and `attribute-syncer-pr-<N>-<sha>`; set `ecr_repo_tag = "pr-<N>-<sha>"` to test one (the run summary shows the value). Fork PRs get no secrets and publish nothing. Every push to `main` publishes `requester-main`, `revoker-main`, and `attribute-syncer-main`; set `ecr_repo_tag = "main"` to test the latest merge to `main`. The tag moves with every merge, and superseded `main` images expire automatically, as do PR images.
 
 An Apple error containing `FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED` requires the Apple Account Holder to accept the pending agreement in App Store Connect, then re-run the failed jobs. Never move a successfully published tag; release corrections under the next patch version.
 
