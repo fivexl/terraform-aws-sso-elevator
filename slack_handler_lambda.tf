@@ -155,6 +155,8 @@ resource "aws_lambda_permission" "url" {
 }
 
 data "aws_iam_policy_document" "slack_handler" {
+  source_policy_documents = [data.aws_iam_policy_document.read_slack_secrets["all"].json]
+
   statement {
     sid    = "GetSAMLProvider"
     effect = "Allow"
@@ -322,40 +324,6 @@ data "aws_iam_policy_document" "slack_handler" {
         "kms:Decrypt",
       ]
       resources = [statement.value]
-    }
-  }
-  statement {
-    sid    = "AllowReadSlackSecretsFromSSM"
-    effect = "Allow"
-    actions = [
-      "ssm:GetParameter",
-    ]
-    resources = [
-      aws_ssm_parameter.slack_bot_token.arn,
-      aws_ssm_parameter.slack_signing_secret.arn,
-    ]
-  }
-  # Resource is "*" because the key may be alias/aws/ssm or a customer managed key the
-  # operator chose in put-parameter; the conditions limit it to SSM decrypting these parameters.
-  statement {
-    sid    = "AllowDecryptSlackSecrets"
-    effect = "Allow"
-    actions = [
-      "kms:Decrypt",
-    ]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values = [
-        aws_ssm_parameter.slack_bot_token.arn,
-        aws_ssm_parameter.slack_signing_secret.arn,
-      ]
     }
   }
 }

@@ -93,6 +93,8 @@ module "attribute_syncer" {
 data "aws_iam_policy_document" "attribute_syncer" {
   count = var.attribute_sync_enabled ? 1 : 0
 
+  source_policy_documents = [data.aws_iam_policy_document.read_slack_secrets["bot_token"].json]
+
   statement {
     sid    = "AllowListSSOInstances"
     effect = "Allow"
@@ -135,35 +137,6 @@ data "aws_iam_policy_document" "attribute_syncer" {
       "s3:PutObject",
     ]
     resources = ["${local.s3_bucket_arn}/${var.s3_bucket_partition_prefix}/*"]
-  }
-
-  statement {
-    sid    = "AllowReadSlackBotTokenFromSSM"
-    effect = "Allow"
-    actions = [
-      "ssm:GetParameter",
-    ]
-    resources = [aws_ssm_parameter.slack_bot_token.arn]
-  }
-  # Resource is "*" because the key may be alias/aws/ssm or a customer managed key the
-  # operator chose in put-parameter; the conditions limit it to SSM decrypting this parameter.
-  statement {
-    sid    = "AllowDecryptSlackBotToken"
-    effect = "Allow"
-    actions = [
-      "kms:Decrypt",
-    ]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values   = [aws_ssm_parameter.slack_bot_token.arn]
-    }
   }
 }
 

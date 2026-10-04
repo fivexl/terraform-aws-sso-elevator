@@ -140,6 +140,37 @@ def test_slack_app_gets_its_secrets_from_ssm(main_module):
     assert call(Name="/test/slack-signing-secret", WithDecryption=True) in get_parameter_calls
 
 
+@pytest.mark.parametrize(
+    ("get_parameter_kwargs", "message"),
+    [
+        ({"side_effect": RuntimeError("AccessDeniedException")}, "Failed to read Slack secret parameter /test/slack-bot-token"),
+        ({"return_value": {"Parameter": {"Value": "REPLACE_ME"}}}, "/test/slack-bot-token still holds the placeholder"),
+    ],
+)
+def test_main_refuses_to_start_without_usable_slack_secrets(get_parameter_kwargs, message):
+    sys.modules.pop("main", None)
+    sys.modules.pop("group", None)
+    sys.modules.pop("cli_auth", None)
+    shared_client = MagicMock()
+    shared_client.get_parameter = MagicMock(**get_parameter_kwargs)
+    with (
+        patch.dict("sys.modules", {}),
+        patch("boto3.Session") as mock_boto3_session,
+        patch("boto3._get_default_session") as mock_default_session,
+        patch("sso.describe_sso_instance", return_value=MagicMock(identity_store_id="d-1234")),
+        patch("slack_bolt.App") as mock_app_cls,
+    ):
+        mock_boto3_session.return_value.client.return_value = shared_client
+        mock_default_session.return_value.client.return_value = shared_client
+        with pytest.raises(RuntimeError, match=message):
+            import main  # noqa: F401
+
+    mock_app_cls.assert_not_called()
+    sys.modules.pop("main", None)
+    sys.modules.pop("group", None)
+    sys.modules.pop("cli_auth", None)
+
+
 # ---------------------------------------------------------------------------
 # lambda_handler dispatch
 # ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@ import pytest
 
 
 def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
+    import config
+
     mock_env = {
         "schedule_policy_arn": "x",
         "revoker_function_arn": "x",
@@ -15,8 +17,8 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         "post_update_to_slack": "true",
         "send_dm_if_user_not_in_channel": "true",
         "slack_channel_id": "x",
-        "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME": "/test/slack-bot-token",
-        "SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME": "/test/slack-signing-secret",
+        config.SLACK_BOT_TOKEN_PARAMETER_ENV: "/test/slack-bot-token",
+        config.SLACK_SIGNING_SECRET_PARAMETER_ENV: "/test/slack-signing-secret",
         "sso_instance_arn": "x",
         "cli_expected_account_id": "111111111111",
         "cli_sso_role_name_prefix": "AWSReservedSSO_",

@@ -19,7 +19,7 @@ from slack_sdk import WebClient
 
 import s3 as s3_module
 from attribute_mapper import AttributeCondition, AttributeMappingRule, AttributeMapper
-from config import get_logger, get_slack_secret
+from config import SLACK_BOT_TOKEN_PARAMETER_ENV, get_logger, get_slack_secret
 from sync_config import (
     SyncConfiguration,
     SyncConfigurationError,
@@ -476,7 +476,7 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:  #
         }
 
     # Read per invocation, so a rotated token is picked up without waiting for a cold start.
-    slack_client = WebClient(token=get_slack_secret(_ssm_client, "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=True))
+    slack_client = WebClient(token=get_slack_secret(_ssm_client, SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=True))
 
     # Get identity store ID from environment
     identity_store_id = os.environ.get("IDENTITY_STORE_ID", "")

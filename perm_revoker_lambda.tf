@@ -97,6 +97,8 @@ module "access_revoker" {
 }
 
 data "aws_iam_policy_document" "revoker" {
+  source_policy_documents = [data.aws_iam_policy_document.read_slack_secrets["bot_token"].json]
+
   statement {
     sid    = "AllowDescribeRule"
     effect = "Allow"
@@ -180,34 +182,6 @@ data "aws_iam_policy_document" "revoker" {
       module.config_bucket.s3_bucket_arn,
       "${module.config_bucket.s3_bucket_arn}/*"
     ]
-  }
-  statement {
-    sid    = "AllowReadSlackBotTokenFromSSM"
-    effect = "Allow"
-    actions = [
-      "ssm:GetParameter",
-    ]
-    resources = [aws_ssm_parameter.slack_bot_token.arn]
-  }
-  # Resource is "*" because the key may be alias/aws/ssm or a customer managed key the
-  # operator chose in put-parameter; the conditions limit it to SSM decrypting this parameter.
-  statement {
-    sid    = "AllowDecryptSlackBotToken"
-    effect = "Allow"
-    actions = [
-      "kms:Decrypt",
-    ]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values   = [aws_ssm_parameter.slack_bot_token.arn]
-    }
   }
 }
 

@@ -38,7 +38,6 @@ identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH
 scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
 ssm_client = boto3.client("ssm")  # type: ignore # noqa: PGH003
-slack_client = slack_sdk.WebClient(token=config.get_slack_secret(ssm_client, "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=True))
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
@@ -47,6 +46,10 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
     except ValidationError as e:
         logger.warning("Got unexpected event:", extra={"event": event, "exception": e})
         raise e
+
+    # Read per invocation, so a rotated token is picked up without waiting for a cold start.
+    slack_token = config.get_slack_secret(ssm_client, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=True)
+    slack_client = slack_sdk.WebClient(token=slack_token)
 
     match parsed_event:
         case ScheduledRevokeEvent():
@@ -271,8 +274,8 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
 
     if cfg.post_update_to_slack:
-        # Not wrapped in try/except: this is the invocation's only action, not a loop, and a
-        # propagated Slack failure is what reaches the DLQ/SNS alerting.
+        # Not wrapped in try/except: unlike the loop paths, this invocation handles one revocation,
+        # and a propagated Slack failure is what raises the DLQ/SNS alert about a broken Slack setup.
         account = organizations.describe_account(org_client, user_account_assignment.account_id)
         slack_notify_user_on_revoke(
             cfg=cfg,
@@ -313,7 +316,6 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
     if cfg.post_update_to_slack:
-        # Not wrapped in try/except, same as handle_scheduled_account_assignment_deletion.
         slack_notify_user_on_group_access_revoke(
             cfg=cfg,
             group_assignment=group_assignment,

@@ -340,38 +340,54 @@ def test_config_group_statement_parsing_with_s3(mock_s3_client, monkeypatch):
 
 
 def test_get_slack_secret_reads_the_parameter_named_by_the_env_var(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/slack-bot-token")
+    monkeypatch.setenv(config.SLACK_BOT_TOKEN_PARAMETER_ENV, "/sso-elevator/slack-bot-token")
     ssm_client = MagicMock()
     ssm_client.get_parameter.return_value = {"Parameter": {"Value": "xoxb-real-token"}}
 
-    result = config.get_slack_secret(ssm_client, "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=False)
+    result = config.get_slack_secret(ssm_client, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=False)
 
     assert result == "xoxb-real-token"
     ssm_client.get_parameter.assert_called_once_with(Name="/sso-elevator/slack-bot-token", WithDecryption=True)
 
 
-@pytest.mark.parametrize("env_var_set", [True, False])
-def test_get_slack_secret_degrades_to_empty_string(monkeypatch, env_var_set):
-    """Revoker and attribute-syncer must keep revoking/syncing when Slack secrets are unreadable."""
-    if env_var_set:
-        monkeypatch.setenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", "/sso-elevator/slack-bot-token")
-    else:
-        monkeypatch.delenv("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", raising=False)
+def _ssm_failing() -> MagicMock:
     ssm_client = MagicMock()
     ssm_client.get_parameter.side_effect = RuntimeError("boom: KMS access denied")
+    return ssm_client
 
-    assert config.get_slack_secret(ssm_client, "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=True) == ""
 
-
-@pytest.mark.parametrize("env_var_set", [True, False])
-def test_get_slack_secret_raises_when_not_degrading(monkeypatch, env_var_set):
-    """The access-requester must fail at cold start rather than run with an empty secret."""
-    if env_var_set:
-        monkeypatch.setenv("SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME", "/sso-elevator/slack-signing-secret")
-    else:
-        monkeypatch.delenv("SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME", raising=False)
+def _ssm_returning_placeholder() -> MagicMock:
     ssm_client = MagicMock()
-    ssm_client.get_parameter.side_effect = RuntimeError("boom: KMS access denied")
+    ssm_client.get_parameter.return_value = {"Parameter": {"Value": config.SLACK_SECRET_PLACEHOLDER}}
+    return ssm_client
 
-    with pytest.raises(RuntimeError, match="SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME"):
-        config.get_slack_secret(ssm_client, "SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME", degrade_on_failure=False)
+
+# (env var value, SSM client factory, expected error fragment)
+_FAILURES = [
+    ("/sso-elevator/slack-signing-secret", _ssm_failing, "Failed to read Slack secret parameter /sso-elevator/slack-signing-secret"),
+    ("/sso-elevator/slack-signing-secret", _ssm_returning_placeholder, "/sso-elevator/slack-signing-secret still holds the placeholder"),
+    (None, _ssm_failing, f"Environment variable {config.SLACK_SIGNING_SECRET_PARAMETER_ENV} is not set"),
+]
+
+
+@pytest.mark.parametrize(("parameter_name", "make_ssm_client", "_message"), _FAILURES)
+def test_get_slack_secret_degrades_to_empty_string(monkeypatch, parameter_name, make_ssm_client, _message):
+    """Revoker and attribute-syncer must keep revoking/syncing when Slack secrets are unusable."""
+    if parameter_name:
+        monkeypatch.setenv(config.SLACK_SIGNING_SECRET_PARAMETER_ENV, parameter_name)
+    else:
+        monkeypatch.delenv(config.SLACK_SIGNING_SECRET_PARAMETER_ENV, raising=False)
+
+    assert config.get_slack_secret(make_ssm_client(), config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=True) == ""
+
+
+@pytest.mark.parametrize(("parameter_name", "make_ssm_client", "message"), _FAILURES)
+def test_get_slack_secret_raises_when_not_degrading(monkeypatch, parameter_name, make_ssm_client, message):
+    """The access-requester must fail at cold start rather than run with an empty or placeholder secret."""
+    if parameter_name:
+        monkeypatch.setenv(config.SLACK_SIGNING_SECRET_PARAMETER_ENV, parameter_name)
+    else:
+        monkeypatch.delenv(config.SLACK_SIGNING_SECRET_PARAMETER_ENV, raising=False)
+
+    with pytest.raises(RuntimeError, match=message):
+        config.get_slack_secret(make_ssm_client(), config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=False)

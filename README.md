@@ -487,48 +487,76 @@ The CLI route isn't currently usable outside the standard `aws` partition: this 
 
 ## Slack secrets in SSM Parameter Store
 
-The Lambdas read the Slack bot token and signing secret from two SSM SecureString parameters at runtime; no secret passes through Terraform. The module creates both parameters with the placeholder `REPLACE_ME` through the write-only `value_wo` argument, so neither the placeholder nor the real value is stored in Terraform state, and later applies never overwrite the value you set. Write-only arguments need Terraform >= 1.11.
+The Lambdas read the Slack bot token and signing secret from two SSM SecureString parameters at runtime; no secret passes through Terraform. The module creates both parameters with the placeholder `REPLACE_ME` through the write-only `value_wo` argument, so neither the placeholder nor the real value is stored in Terraform state. The Lambdas treat the placeholder as an unset secret. Write-only arguments need Terraform >= 1.11 and the module needs hashicorp/aws >= 6.0.
+
+Later applies leave the value you set alone, with three exceptions: changing `slack_*_ssm_parameter_name` or moving the module to a new address without a `moved` block replaces the parameter with a fresh placeholder, and `terraform destroy` deletes it.
 
 | Variable | Default | Read by |
 | -------- | ------- | ------- |
 | `slack_bot_token_ssm_parameter_name` | `/sso-elevator/slack-bot-token` | access-requester, revoker, attribute-syncer |
 | `slack_signing_secret_ssm_parameter_name` | `/sso-elevator/slack-signing-secret` | access-requester |
 
-### Install, or upgrade from v4
+The commands below assume the module block is named `aws_sso_elevator`, as in the [deployment example](#terraform-deployment-example), and the default parameter names. Substitute your own module name and, if you set `slack_*_ssm_parameter_name`, your parameter names.
 
-Create the parameters and set their values before the Lambdas switch to them. The commands below assume the module block is named `sso_elevator`.
+To keep the secrets out of shell history and the process list, read each one into a variable first and pass the variable:
 
-1. Upgrade from v4 only: remove `slack_bot_token` and `slack_signing_secret` from the module block (and any `aws_ssm_parameter` data sources that fed them), bump the module version, and run `terraform init -upgrade`. The v4 Lambdas keep their secrets in environment variables until step 4, so Slack keeps working throughout.
-2. Create only the two parameters:
+```sh
+read -rs SLACK_BOT_TOKEN        # paste the Bot User OAuth Token, then Enter
+read -rs SLACK_SIGNING_SECRET   # paste the Signing Secret, then Enter
+aws ssm put-parameter --overwrite --type SecureString --name /sso-elevator/slack-bot-token --value "$SLACK_BOT_TOKEN"
+aws ssm put-parameter --overwrite --type SecureString --name /sso-elevator/slack-signing-secret --value "$SLACK_SIGNING_SECRET"
+unset SLACK_BOT_TOKEN SLACK_SIGNING_SECRET
+```
+
+Without `--key-id`, SSM encrypts with the AWS managed key `alias/aws/ssm`. To use a customer managed KMS key, add `--key-id <key-arn>`; its key policy must allow IAM policies in the account to grant access, as the default key policy does. The Lambda roles allow `kms:Decrypt` only through SSM and only for these parameters.
+
+### Fresh install
+
+1. Run a full `terraform apply`. The Lambdas start with the placeholder: the access-requester refuses to start and the others run without Slack until step 3.
+2. [Create the Slack app](#slack-app-creation) with the request URL from the Terraform output.
+3. Write both secrets with the `put-parameter` commands above.
+
+No redeploy is needed. A failed access-requester start is not cached, so the next Slack request starts it again and it reads the new values; the revoker and attribute-syncer read the bot token on every invocation.
+
+### Upgrade from v4
+
+The v4 Lambdas keep their secrets in environment variables until step 5, so Slack keeps working throughout.
+
+1. In the root module, require Terraform >= 1.11 and hashicorp/aws >= 6.0 (see the provider's [version 6 upgrade guide](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/guides/version-6-upgrade) for your other resources). Remove `slack_bot_token` and `slack_signing_secret` from the module block, along with any `aws_ssm_parameter` data sources that fed them, tfvars entries, `-var` flags and `TF_VAR_*` variables in CI. Bump the module version and run `terraform init -upgrade`.
+2. If parameters already exist at the default names (the v4 example had you create both by hand), save their values, then delete them so the module can create its own:
+
+   ```sh
+   aws ssm get-parameter --with-decryption --name /sso-elevator/slack-bot-token --query Parameter.Value --output text
+   aws ssm get-parameter --with-decryption --name /sso-elevator/slack-signing-secret --query Parameter.Value --output text
+   aws ssm delete-parameter --name /sso-elevator/slack-bot-token
+   aws ssm delete-parameter --name /sso-elevator/slack-signing-secret
+   ```
+
+   If a parameter was already overwritten, `aws ssm get-parameter-history --with-decryption --name <name>` shows earlier values. You can also copy both secrets from the Slack app settings instead.
+3. Create only the two parameters:
 
    ```sh
    terraform apply \
-     -target='module.sso_elevator.aws_ssm_parameter.slack_bot_token' \
-     -target='module.sso_elevator.aws_ssm_parameter.slack_signing_secret'
+     -target='module.aws_sso_elevator.aws_ssm_parameter.slack_bot_token' \
+     -target='module.aws_sso_elevator.aws_ssm_parameter.slack_signing_secret'
    ```
 
-   If parameters already exist at these names (the v4 example had you create both by hand), the apply fails with `ParameterAlreadyExists`. Import them first, then run the targeted apply; it resets both to the placeholder, so step 3 is still required:
+4. Write both secrets with the `put-parameter` commands above.
+5. Run a full `terraform apply`. This switches the Lambdas to the v5 image and to SSM in one step. If you pin `ecr_repo_tag` or host images yourself (`ecr_repo_name`/`ecr_owner_account_id`), point it at a 5.x image first: a v4 image cannot read the secrets from SSM and fails at cold start.
 
-   ```sh
-   terraform import 'module.sso_elevator.aws_ssm_parameter.slack_bot_token' /sso-elevator/slack-bot-token
-   terraform import 'module.sso_elevator.aws_ssm_parameter.slack_signing_secret' /sso-elevator/slack-signing-secret
-   ```
-
-3. Write the real values:
-
-   ```sh
-   aws ssm put-parameter --overwrite --type SecureString --name /sso-elevator/slack-bot-token --value 'xoxb-...'
-   aws ssm put-parameter --overwrite --type SecureString --name /sso-elevator/slack-signing-secret --value '...'
-   ```
-
-   Without `--key-id`, SSM encrypts with the AWS managed key `alias/aws/ssm`. To use a customer managed KMS key, add `--key-id <key-arn>`; its key policy must allow IAM policies in the account to grant access, as the default key policy does. The Lambda roles allow `kms:Decrypt` only through SSM and only for these parameters.
-4. Run a full `terraform apply`. On an upgrade, this switches the Lambdas to the v5 image and to SSM in one step.
+Terraform state from v4 still holds both secrets, in the Lambda environment variables and in any `aws_ssm_parameter` data source values. After upgrading, rotate both secrets in Slack, and purge old state versions from your backend if that matters to you.
 
 ### Rotating a secret
 
-Run `aws ssm put-parameter --overwrite` again. The attribute-syncer reads the token on every run, but the access-requester and revoker read their secrets at cold start, so warm containers keep the old value until AWS recycles them. Any configuration update to those functions starts fresh containers immediately.
+Write the new value with `put-parameter` as above. The revoker and attribute-syncer read the bot token on every invocation. The access-requester reads both secrets at cold start, so warm containers keep the old values until they are recycled. A new bot token can wait for that, but a new signing secret takes effect in Slack immediately, and warm access-requester containers reject every Slack request until they restart. Force new containers right after writing it, for example with any configuration change:
 
-If a secret cannot be read, the access-requester fails at cold start; the revoker and attribute-syncer log the error and keep revoking and syncing without Slack notifications.
+```sh
+aws lambda update-function-configuration --function-name <requester_lambda_name> --description "Slack secret rotated $(date +%s)"
+```
+
+The next `terraform apply` sets the description back.
+
+If a secret cannot be read or still holds the placeholder, the access-requester fails at start and every Slack request errors. The revoker and attribute-syncer log the error and still revoke and sync, without Slack messages. Some revoker invocations then fail after their work is done: a scheduled revocation of a single assignment fails after revoking it, and the Slack-only events (inconsistency reports, removing buttons from expired requests, approver reminders) fail outright. These show up as Lambda errors and, if `aws_sns_topic_subscription_email` is set, as DLQ alerts.
 
 # Deployment and Usage
 
@@ -591,11 +619,10 @@ Those regions are not enabled by default. If you need to use a region that is no
 data "aws_ssoadmin_instances" "this" {}
 
 module "aws_sso_elevator" {
-  source                           = "github.com/fivexl/terraform-aws-sso-elevator.git"
   source  = "fivexl/sso-elevator/aws"
-  version = "2.0.2"
+  version = "5.0.0"
   # The Slack bot token and signing secret live in SSM; see "Slack secrets in SSM Parameter Store".
-  slack_channel_id      = local.slack_channel_id
+  slack_channel_id = local.slack_channel_id
 
   s3_logging = {
     target_bucket = module.naming_conventions.s3_access_logs_bucket_name
@@ -846,8 +873,10 @@ settings:
 | [random_string.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 | [aws_iam_policy_document.attribute_syncer](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.read_slack_secrets](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.revoker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.slack_handler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
 | [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
 | [aws_ssoadmin_instances.all](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssoadmin_instances) | data source |
 

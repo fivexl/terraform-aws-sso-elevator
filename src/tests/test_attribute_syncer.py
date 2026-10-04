@@ -571,5 +571,7 @@ def test_lambda_handler_reads_slack_bot_token_from_ssm_in_degrade_mode(monkeypat
     ):
         attribute_syncer.lambda_handler({}, None)
 
-    mock_get_secret.assert_called_once_with(attribute_syncer._ssm_client, "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=True)
+    mock_get_secret.assert_called_once_with(
+        attribute_syncer._ssm_client, attribute_syncer.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=True
+    )
     mock_web_client.assert_called_once_with(token="xoxb-from-ssm")
