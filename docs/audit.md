@@ -1,5 +1,6 @@
+# Audit
 
-# Manually create table
+## Manually create table
 
 Replace bucket_name, partition_prefix and you should be good to go
 
@@ -52,4 +53,17 @@ To add the new columns to a table created from an earlier version of this DDL:
 
 ```
 ALTER TABLE sso_elevator_table ADD COLUMNS (decision_reason string, error_message string)
+```
+
+## Query by date
+```
+SELECT *
+FROM sso_elevator_table
+WHERE timestamp >= '2023/05/01' AND timestamp <= '2024/05/12';
+```
+## Query everything
+```
+SELECT *
+FROM sso_elevator_table;
+
 ```
