@@ -22,7 +22,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ github.ref_name }}
           fetch-depth: 0
@@ -102,7 +102,7 @@ jobs:
 
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          syft-version: "v1.51.1"
+          syft-version: "v1.52.0"
 
       - name: Prepare non-publishing release notes
         run: echo "Signing preflight only" > "$RUNNER_TEMP/preflight-release-notes.md"
@@ -110,9 +110,9 @@ jobs:
       # Exercise the real signing and Apple notarization path, but stop before
       # creating a GitHub release or updating Homebrew. This catches pending
       # Apple agreements as well as bad certificates and API credentials.
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "v2.18.1"
+          version: "v2.18.2"
           args: release --clean --skip=publish,announce --release-notes ${{ runner.temp }}/preflight-release-notes.md --config cmd/elevator/.goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -195,7 +195,7 @@ jobs:
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ github.ref_name }}
           fetch-depth: 0
@@ -207,11 +207,11 @@ jobs:
 
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          syft-version: "v1.51.1"
+          syft-version: "v1.52.0"
 
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "v2.18.1"
+          version: "v2.18.2"
           args: release --clean --config cmd/elevator/.goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -242,7 +242,7 @@ jobs:
         checkout: [pinned-tag, documented-oneliner]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ matrix.checkout == 'pinned-tag' && format('refs/tags/{0}', github.ref_name) || 'main' }}
           persist-credentials: false
