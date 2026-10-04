@@ -241,7 +241,7 @@ def test_discard_buttons_event_expires_a_pending_request(revoker):
     slack_client = MagicMock()
     slack_client.conversations_history.return_value = {"messages": [{"ts": "1", "blocks": blocks}]}
 
-    with patch.object(revoker.schedule, "delete_schedule"):
+    with patch.object(revoker.schedule, "delete_schedule"), patch.object(revoker.s3, "log_operation"):
         revoker.handle_discard_buttons_event(
             event=events.DiscardButtonsEvent(**_discard_event()), slack_client=slack_client, scheduler_client=MagicMock()
         )
@@ -280,3 +280,96 @@ def test_approvers_renotification_skips_a_message_without_blocks(revoker):
 
     slack_client.chat_postMessage.assert_not_called()
     mock_next.assert_not_called()
+
+
+def _pending_request_message(revoker, group: bool) -> dict:  # noqa: ANN001
+    sh = revoker.slack_helpers
+    if group:
+        request = sh.RequestForGroupAccess(
+            group_id="g-1234", group_name="Admins", reason="need access", requester_slack_id="U_REQ", permission_duration=timedelta(hours=2)
+        )
+    else:
+        request = sh.RequestForAccess(
+            permission_set_name="Admin",
+            account_id="111111111111",
+            account_name="Prod",
+            reason="need access",
+            requester_slack_id="U_REQ",
+            permission_duration=timedelta(hours=2),
+            request_source="cli",
+            verified_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req",
+        )
+    _, blocks = sh.build_request_message(sh.RequestCard.for_request(request), sh.RequestState.pending())
+    return {"ts": "1", "blocks": blocks}
+
+
+def _expire(revoker, message: dict, slack_client: MagicMock) -> None:  # noqa: ANN001
+    event = revoker.DiscardButtonsEvent.model_validate(_discard_event())
+    with (
+        patch.object(revoker.slack_helpers, "get_message_from_timestamp", return_value=message),
+        patch.object(revoker.schedule, "delete_schedule"),
+    ):
+        revoker.handle_discard_buttons_event(event=event, slack_client=slack_client, scheduler_client=MagicMock())
+
+
+@pytest.mark.parametrize("group", [False, True])
+def test_expired_request_writes_one_declined_expired_entry(revoker, group):
+    slack_client = MagicMock()
+    slack_client.users_info.return_value = MagicMock(
+        data={"user": {"id": "U_REQ", "real_name": "Req", "profile": {"email": "req@example.com"}}}
+    )
+    with patch.object(revoker.s3, "log_operation") as mock_log_operation:
+        _expire(revoker, _pending_request_message(revoker, group), slack_client)
+
+    slack_client.chat_update.assert_called_once()
+    mock_log_operation.assert_called_once()
+    entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert (entry.operation_type, entry.decision_reason) == ("declined", "Expired")
+    assert (entry.approver_slack_id, entry.approver_email) == ("NA", "NA")
+    assert (entry.requester_slack_id, entry.requester_email) == ("U_REQ", "req@example.com")
+    assert entry.permission_duration == timedelta(hours=2)
+    if group:
+        assert (entry.audit_entry_type, entry.group_id, entry.group_name) == ("group", "g-1234", "Admins")
+    else:
+        assert (entry.audit_entry_type, entry.account_id, entry.role_name) == ("account", "111111111111", "Admin")
+        assert entry.request_source == "cli"
+        assert entry.verified_arn == "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req"
+
+
+def test_expired_request_audit_uses_na_email_when_requester_lookup_fails(revoker):
+    slack_client = MagicMock()
+    slack_client.users_info.side_effect = RuntimeError("user_not_found")
+    with patch.object(revoker.s3, "log_operation") as mock_log_operation:
+        _expire(revoker, _pending_request_message(revoker, group=False), slack_client)
+
+    assert mock_log_operation.call_args.kwargs["audit_entry"].requester_email == "NA"
+
+
+def test_expired_request_audit_failure_does_not_block_button_removal(revoker):
+    slack_client = MagicMock()
+    with patch.object(revoker.s3, "log_operation", side_effect=RuntimeError("s3 down")):
+        _expire(revoker, _pending_request_message(revoker, group=False), slack_client)
+
+    slack_client.chat_update.assert_called_once()
+
+
+def test_already_decided_request_writes_no_expired_entry(revoker):
+    message = _pending_request_message(revoker, group=False)
+    message["blocks"] = [b for b in message["blocks"] if b["block_id"] != "buttons"]
+    slack_client = MagicMock()
+    with patch.object(revoker.s3, "log_operation") as mock_log_operation:
+        _expire(revoker, message, slack_client)
+
+    slack_client.chat_update.assert_not_called()
+    mock_log_operation.assert_not_called()
+
+
+def test_pre_upgrade_request_writes_no_expired_entry(revoker):
+    """Its buttons carry no request to audit; they are only stripped."""
+    message = {"ts": "1", "text": "old", "blocks": [{"block_id": "buttons", "elements": [{"value": "approve"}]}]}
+    slack_client = MagicMock()
+    with patch.object(revoker.s3, "log_operation") as mock_log_operation:
+        _expire(revoker, message, slack_client)
+
+    slack_client.chat_update.assert_called_once()
+    mock_log_operation.assert_not_called()

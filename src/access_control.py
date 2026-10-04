@@ -348,6 +348,16 @@ def make_decision_on_approve_request(  # noqa: PLR0913
     )
 
 
+def _ends_request(decision: AccessRequestDecision | ApproveRequestDecision) -> bool:
+    # Only these reasons end the request; RequiresApproval still waits for a human.
+    # Button clicks never reach here with grant=False (Discard logs its own entry).
+    return isinstance(decision, AccessRequestDecision) and decision.reason in (
+        DecisionReason.NoStatements,
+        DecisionReason.NoApprovers,
+        DecisionReason.RequesterNotAllowed,
+    )
+
+
 def execute_decision(  # noqa: PLR0913
     decision: AccessRequestDecision | ApproveRequestDecision,
     permission_set_name: str,
@@ -367,58 +377,89 @@ def execute_decision(  # noqa: PLR0913
     channel_id: str,
     message_ts: str,
 ) -> list[RevokeEvent | GroupRevokeEvent] | None:
-    """Grants the access. Returns None when the decision grants nothing, else the
-    revoke events of earlier requests this grant replaced. Raises PostGrantError
-    when the assignment exists but recording it or scheduling its revocation failed."""
+    """Grants the access. Returns None when the decision grants nothing (auditing a
+    denial that ends the request as "declined"), else the revoke events of earlier
+    requests this grant replaced. Any failure is audited as "incomplete" and re-raised;
+    PostGrantError when the assignment exists but recording it or scheduling its
+    revocation failed."""
     logger.info("Executing decision")
     if not decision.grant:
-        logger.info("Access request denied")
+        if _ends_request(decision):
+            logger.info("Access request denied")
+            s3.log_operation_best_effort(
+                s3.AuditEntry(
+                    account_id=account_id,
+                    role_name=permission_set_name,
+                    reason=reason,
+                    requester_slack_id=requester.id,
+                    requester_email=requester.email,
+                    # No human decided; callers pass the requester as approver here.
+                    approver_slack_id="NA",
+                    approver_email="NA",
+                    operation_type="declined",
+                    permission_duration=permission_duration,
+                    sso_user_principal_id="NA",
+                    audit_entry_type="account",
+                    request_source=request_source,
+                    verified_arn=verified_arn,
+                    decision_reason=decision.reason.value,  # type: ignore # noqa: PGH003
+                ),
+            )
         return None
 
-    sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
-    permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
-    if request_source == "cli":
-        # Grant against the exact UserId the CLI's SigV4-verified session was
-        # actually checked against at submission time (cli_auth.extract_identity,
-        # cross-checked again by handle_cli_access_request's email round-trip),
-        # not a fresh, independent lookup by requester.email -- re-resolving
-        # here is a *second* identity resolution that could disagree with the
-        # one actually verified (a directory change between submit and
-        # approve, or a primary-email lookup that legitimately falls through
-        # to a different person via the secondary-domain fallback), silently
-        # granting to someone other than the verified caller. If
-        # verified_user_id no longer names a real Identity Store user,
-        # create_account_assignment_and_wait_for_result below fails outright
-        # rather than silently substituting a different, currently-resolvable
-        # user -- fail closed instead of granting to the wrong person.
-        # A "cli" request without one fails closed (#194 B6) rather than falling
-        # back to the email lookup the CLI path exists to avoid trusting.
-        if verified_user_id == "NA":
-            raise ValueError(
-                "CLI-sourced request has no verified UserId to grant against -- refusing to fall back to email-based resolution."
+    # Any failure from here on logs an "incomplete" entry. Once access is live, the
+    # entry names the failed step and carries the grant entry's request_id.
+    sso_user_principal_id = "NA"
+    request_id = "NA"
+    role_name = permission_set_name
+    secondary_domain_was_used = False
+    failed_step = ""
+    try:
+        sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
+        permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
+        role_name = permission_set.name
+        if request_source == "cli":
+            # Grant against the exact UserId the CLI's SigV4-verified session was
+            # actually checked against at submission time (cli_auth.extract_identity,
+            # cross-checked again by handle_cli_access_request's email round-trip),
+            # not a fresh, independent lookup by requester.email -- re-resolving
+            # here is a *second* identity resolution that could disagree with the
+            # one actually verified (a directory change between submit and
+            # approve, or a primary-email lookup that legitimately falls through
+            # to a different person via the secondary-domain fallback), silently
+            # granting to someone other than the verified caller. If
+            # verified_user_id no longer names a real Identity Store user,
+            # create_account_assignment_and_wait_for_result below fails outright
+            # rather than silently substituting a different, currently-resolvable
+            # user -- fail closed instead of granting to the wrong person.
+            # A "cli" request without one fails closed (#194 B6) rather than falling
+            # back to the email lookup the CLI path exists to avoid trusting.
+            if verified_user_id == "NA":
+                raise ValueError(
+                    "CLI-sourced request has no verified UserId to grant against -- refusing to fall back to email-based resolution."
+                )
+            sso_user_principal_id = verified_user_id
+        else:
+            sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
+                identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
             )
-        sso_user_principal_id = verified_user_id
-        secondary_domain_was_used = False
-    else:
-        sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-            identity_store_client=identitystore_client, identity_store_id=sso_instance.identity_store_id, email=requester.email, cfg=cfg
+
+        account_assignment = sso.UserAccountAssignment(
+            instance_arn=sso_instance.arn,
+            account_id=account_id,
+            permission_set_arn=permission_set.arn,
+            user_principal_id=sso_user_principal_id,
         )
 
-    account_assignment = sso.UserAccountAssignment(
-        instance_arn=sso_instance.arn,
-        account_id=account_id,
-        permission_set_arn=permission_set.arn,
-        user_principal_id=sso_user_principal_id,
-    )
+        logger.info("Creating account assignment", extra={"account_assignment": account_assignment})
 
-    logger.info("Creating account assignment", extra={"account_assignment": account_assignment})
+        account_assignment_status = sso.create_account_assignment_and_wait_for_result(
+            sso_client,
+            account_assignment,
+        )
+        request_id = account_assignment_status.request_id
 
-    account_assignment_status = sso.create_account_assignment_and_wait_for_result(
-        sso_client,
-        account_assignment,
-    )
-
-    try:
+        failed_step = "granted but grant audit write failed: "
         s3.log_operation(
             audit_entry=s3.AuditEntry(
                 account_id=account_id,
@@ -428,7 +469,7 @@ def execute_decision(  # noqa: PLR0913
                 requester_email=requester.email,
                 approver_slack_id=approver.id,
                 approver_email=approver.email,
-                request_id=account_assignment_status.request_id,
+                request_id=request_id,
                 operation_type="grant",
                 permission_duration=permission_duration,
                 sso_user_principal_id=sso_user_principal_id,
@@ -438,6 +479,8 @@ def execute_decision(  # noqa: PLR0913
                 verified_arn=verified_arn,
             ),
         )
+
+        failed_step = "granted but revoke scheduling failed: "
         return schedule.schedule_revoke_event(
             permission_duration=permission_duration,
             schedule_client=schedule_client,
@@ -447,10 +490,31 @@ def execute_decision(  # noqa: PLR0913
             channel_id=channel_id,
             message_ts=message_ts,
         )
-    except PostGrantError:
-        raise
     except Exception as e:
-        raise PostGrantError(str(e)) from e
+        s3.log_operation_best_effort(
+            s3.AuditEntry(
+                account_id=account_id,
+                role_name=role_name,
+                reason=reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                request_id=request_id,
+                operation_type="incomplete",
+                permission_duration=permission_duration,
+                sso_user_principal_id=sso_user_principal_id,
+                audit_entry_type="account",
+                secondary_domain_was_used=secondary_domain_was_used,
+                request_source=request_source,
+                verified_arn=verified_arn,
+                error_message=f"{failed_step}{e}",
+            )
+        )
+        # Once access is live the failure is a PostGrantError, which callers show differently.
+        if failed_step and not isinstance(e, PostGrantError):
+            raise PostGrantError(str(e)) from e
+        raise
 
 
 def execute_decision_on_group_request(  # noqa: PLR0913
@@ -467,36 +531,64 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     """Same contract as execute_decision, for group membership."""
     logger.info("Executing decision")
     if not decision.grant:
-        logger.info("Access request denied")
+        if _ends_request(decision):
+            logger.info("Access request denied")
+            s3.log_operation_best_effort(
+                s3.AuditEntry(
+                    group_name=group.name,
+                    group_id=group.id,
+                    reason=reason,
+                    requester_slack_id=requester.id,
+                    requester_email=requester.email,
+                    # No human decided; callers pass the requester as approver here.
+                    approver_slack_id="NA",
+                    approver_email="NA",
+                    operation_type="declined",
+                    permission_duration=permission_duration,
+                    sso_user_principal_id="NA",
+                    audit_entry_type="group",
+                    decision_reason=decision.reason.value,  # type: ignore # noqa: PGH003
+                ),
+            )
         return None
 
-    sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client=identitystore_client,
-        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
-        email=requester.email,
-        cfg=cfg,
-    )
-
-    if membership_id := sso.is_user_in_group(
-        identity_store_id=identity_store_id,
-        group_id=group.id,
-        sso_user_id=sso_user_principal_id,
-        identity_store_client=identitystore_client,
-    ):
-        logger.info(
-            "User is already in the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
-        )
-    else:
-        membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, identitystore_client)["MembershipId"]
-        logger.info(
-            "User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
-        )
-
+    # Same "incomplete" handling as execute_decision; membership_id plays request_id's role.
+    sso_user_principal_id = "NA"
+    membership_id = "NA"
+    secondary_domain_was_used = False
+    failed_step = ""
     try:
+        sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
+            identity_store_client=identitystore_client,
+            identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
+            email=requester.email,
+            cfg=cfg,
+        )
+
+        if membership_id := sso.is_user_in_group(
+            identity_store_id=identity_store_id,
+            group_id=group.id,
+            sso_user_id=sso_user_principal_id,
+            identity_store_client=identitystore_client,
+        ):
+            logger.info(
+                "User is already in the group",
+                extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id},
+            )
+        else:
+            membership_id = sso.add_user_to_a_group(group.id, sso_user_principal_id, identity_store_id, identitystore_client)[
+                "MembershipId"
+            ]
+            logger.info(
+                "User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
+            )
+
+        failed_step = "granted but grant audit write failed: "
         s3.log_operation(
             audit_entry=s3.AuditEntry(
                 group_name=group.name,
                 group_id=group.id,
+                group_membership_id=membership_id,
                 reason=reason,
                 requester_slack_id=requester.id,
                 requester_email=requester.email,
@@ -509,6 +601,8 @@ def execute_decision_on_group_request(  # noqa: PLR0913
                 secondary_domain_was_used=secondary_domain_was_used,
             ),
         )
+
+        failed_step = "granted but revoke scheduling failed: "
         return schedule.schedule_group_revoke_event(
             permission_duration=permission_duration,
             schedule_client=schedule_client,
@@ -524,7 +618,26 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             channel_id=channel_id,
             message_ts=message_ts,
         )
-    except PostGrantError:
-        raise
     except Exception as e:
-        raise PostGrantError(str(e)) from e
+        s3.log_operation_best_effort(
+            s3.AuditEntry(
+                group_name=group.name,
+                group_id=group.id,
+                group_membership_id=membership_id or "NA",
+                reason=reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="incomplete",
+                permission_duration=permission_duration,
+                sso_user_principal_id=sso_user_principal_id,
+                audit_entry_type="group",
+                secondary_domain_was_used=secondary_domain_was_used,
+                error_message=f"{failed_step}{e}",
+            )
+        )
+        # Once access is live the failure is a PostGrantError, which callers show differently.
+        if failed_step and not isinstance(e, PostGrantError):
+            raise PostGrantError(str(e)) from e
+        raise

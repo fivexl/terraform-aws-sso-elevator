@@ -1266,7 +1266,8 @@ def test_process_access_request_posts_pending_with_buttons_and_pings_approvers(m
     assert any(b["block_id"] == "buttons" for b in posted["blocks"])
     assert _thread_replies(client) == ["<@U_APP>: waiting for your approval"]
     mock_discard.assert_called_once()
-    mock_execute.assert_not_called()
+    # Called for every decision so a refusal can be audited; this one grants nothing.
+    assert mock_execute.call_args.kwargs["decision"] is decision
 
 
 def test_process_access_request_reports_not_succeeded_when_requires_approval_finds_no_approvers_in_slack(main_module):
@@ -1306,7 +1307,61 @@ def test_process_access_request_posts_refusals_as_failed(main_module, reason, st
     posted = client.chat_postMessage.call_args_list[0].kwargs
     assert next(b for b in posted["blocks"] if b["block_id"] == "status")["elements"][0]["text"] == status
     assert len(_thread_replies(client)) == 1
-    mock_execute.assert_not_called()
+    assert mock_execute.call_args.kwargs["decision"] is decision
+
+
+def _process_auditing(main_module, client, decision, approvers=None, log_error=None):  # noqa: ANN001, ANN202
+    """Runs process_access_request through the real execute_decision; returns the S3 audit mock."""
+    with (
+        patch.object(main_module.access_control, "make_decision_on_access_request", return_value=decision),
+        patch.object(main_module.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
+        patch.object(main_module.slack_helpers, "find_approvers_in_slack", return_value=approvers or ([], [])),
+        patch.object(main_module.schedule, "schedule_discard_buttons_event"),
+        patch.object(main_module.schedule, "schedule_approver_notification_event"),
+        patch.object(main_module.s3, "log_operation", side_effect=log_error) as mock_log_operation,
+    ):
+        requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
+        main_module.process_access_request(request=_request(main_module, account_name="aft"), requester=requester, client=client)
+    return mock_log_operation
+
+
+def test_process_access_request_audits_a_refusal_as_declined(main_module):
+    decision = _decision(main_module, main_module.access_control.DecisionReason.NoApprovers)
+
+    mock_log_operation = _process_auditing(main_module, _slack_client(), decision)
+
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert (audit_entry.operation_type, audit_entry.decision_reason) == ("declined", "NoApprovers")
+    assert (audit_entry.approver_slack_id, audit_entry.approver_email) == ("NA", "NA")
+
+
+def test_process_access_request_writes_one_declined_entry_when_requires_approval_finds_no_approvers_in_slack(main_module):
+    decision = _decision(
+        main_module, main_module.access_control.DecisionReason.RequiresApproval, approvers=frozenset(["approver@example.com"])
+    )
+
+    mock_log_operation = _process_auditing(main_module, _slack_client(), decision, approvers=([], ["approver@example.com"]))
+
+    mock_log_operation.assert_called_once()
+    entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    request = _request(main_module, account_name="aft")
+    assert (entry.operation_type, entry.decision_reason) == ("declined", "NoApproversFoundInSlack")
+    assert (entry.approver_slack_id, entry.approver_email) == ("NA", "NA")
+    assert (entry.audit_entry_type, entry.account_id, entry.role_name) == ("account", request.account_id, request.permission_set_name)
+    assert (entry.request_source, entry.verified_arn) == (request.request_source, request.verified_arn)
+    assert (entry.requester_slack_id, entry.requester_email) == ("U_REQ", "email@domen.com")
+
+
+def test_process_access_request_no_approvers_in_slack_audit_failure_keeps_the_slack_outcome(main_module):
+    client = _slack_client()
+    decision = _decision(
+        main_module, main_module.access_control.DecisionReason.RequiresApproval, approvers=frozenset(["approver@example.com"])
+    )
+
+    _process_auditing(main_module, client, decision, approvers=([], ["approver@example.com"]), log_error=RuntimeError("s3 down"))
+
+    assert client.chat_postMessage.call_args_list[0].kwargs["text"].startswith(":x: *Failed")
+    assert "None of the approvers" in _thread_replies(client)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1454,6 +1509,50 @@ def test_handle_button_click_discard_that_fails_to_show_tells_the_approver_not_t
 
     assert _thread_replies(client) == ["<@U_APPROVER> the discard did not go through, please try again."]
     assert not any(c.kwargs["channel"] == "U_REQ" for c in client.chat_postMessage.call_args_list)
+
+
+def test_handle_button_click_discard_logs_a_declined_audit_entry_after_removing_buttons(main_module):
+    client = _slack_client()
+    buttons_removed_before_audit = []
+    with patch.object(
+        main_module.s3, "log_operation", side_effect=lambda **_: buttons_removed_before_audit.append(client.chat_update.called)
+    ) as mock_log:
+        _click(main_module, _button_click_body(main_module, action="discard"), client)
+
+    assert buttons_removed_before_audit == [True]
+    audit_entry = mock_log.call_args.kwargs["audit_entry"]
+    assert (audit_entry.operation_type, audit_entry.decision_reason) == ("declined", "Discarded")
+    assert audit_entry.approver_slack_id == "U_APPROVER"
+    assert (audit_entry.account_id, audit_entry.role_name) == ("111111111111", "FullOrgAdmin")
+
+
+def test_handle_button_click_discard_audit_failure_still_shows_discarded(main_module):
+    client = _slack_client()
+    with patch.object(main_module.s3, "log_operation", side_effect=RuntimeError("s3 down")):
+        _click(main_module, _button_click_body(main_module, action="discard"), client)
+
+    assert client.chat_update.call_args.kwargs["text"].startswith(":wastebasket: *Discarded")
+    assert any(c.kwargs["channel"] == "U_REQ" for c in client.chat_postMessage.call_args_list)
+
+
+def test_handle_button_click_discard_writes_no_audit_entry_if_buttons_not_removed(main_module):
+    client = _slack_client()
+    client.chat_update.side_effect = RuntimeError("Slack is briefly unavailable")
+    with patch.object(main_module.s3, "log_operation") as mock_log:
+        _click(main_module, _button_click_body(main_module, action="discard"), client)
+
+    mock_log.assert_not_called()
+
+
+def test_handle_button_click_not_permitted_writes_no_audit_entry(main_module):
+    """A non-approver's click leaves the request live; only Slack's reply records it."""
+    client = _slack_client()
+    decision = main_module.access_control.ApproveRequestDecision(grant=False, permit=False, based_on_statements=frozenset())
+    with patch.object(main_module.s3, "log_operation") as mock_log_operation:
+        _click(main_module, _button_click_body(main_module), client, decision=decision)
+
+    assert any("can not approve" in (c.kwargs.get("text") or "") for c in client.chat_postMessage.call_args_list)
+    mock_log_operation.assert_not_called()
 
 
 def test_handle_button_click_on_a_pre_upgrade_message_asks_to_request_again(main_module):

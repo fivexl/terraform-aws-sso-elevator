@@ -44,6 +44,10 @@ def group_module():
     sys.modules.pop("group", None)
 
 
+# The unpatched function, for tests that need its audit writes rather than a stand-in.
+REAL_EXECUTE = access_control.execute_decision_on_group_request
+
+
 def _thread_replies(client: MagicMock) -> list[str]:
     return [c.kwargs["text"] for c in client.chat_postMessage.call_args_list if c.kwargs.get("thread_ts")]
 
@@ -106,6 +110,41 @@ def test_requires_approval_no_approvers_found(group_module, slack_client):
     assert not any(b["block_id"] == "buttons" for b in posted["blocks"])
     assert "None of the approvers" in _thread_replies(slack_client)[0]
     mocks.schedule.schedule_discard_buttons_event.assert_not_called()
+
+
+def test_requires_approval_no_approvers_found_writes_one_declined_entry(group_module, slack_client):
+    decision = _decision(access_control.DecisionReason.RequiresApproval, approvers=frozenset(["gone@example.com"]))
+
+    with patch.object(group_module.s3, "log_operation") as mock_log_operation:
+        _submit(group_module, slack_client, decision, approvers=([], ["gone@example.com"]), execute=REAL_EXECUTE)
+
+    mock_log_operation.assert_called_once()
+    entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert (entry.operation_type, entry.decision_reason) == ("declined", "NoApproversFoundInSlack")
+    assert (entry.approver_slack_id, entry.approver_email) == ("NA", "NA")
+    assert (entry.audit_entry_type, entry.group_id, entry.group_name) == ("group", GROUP.id, GROUP.name)
+    assert (entry.requester_slack_id, entry.requester_email) == (REQUESTER.id, REQUESTER.email)
+
+
+def test_requires_approval_no_approvers_found_audit_failure_keeps_the_slack_outcome(group_module, slack_client):
+    decision = _decision(access_control.DecisionReason.RequiresApproval, approvers=frozenset(["gone@example.com"]))
+
+    with patch.object(group_module.s3, "log_operation", side_effect=RuntimeError("s3 down")):
+        _submit(group_module, slack_client, decision, approvers=([], ["gone@example.com"]), execute=REAL_EXECUTE)
+
+    assert slack_client.chat_postMessage.call_args_list[0].kwargs["text"].startswith(":x: *Failed · group TestGroup")
+    assert "None of the approvers" in _thread_replies(slack_client)[0]
+
+
+def test_group_submission_audits_a_refusal_as_declined(group_module, slack_client):
+    decision = _decision(access_control.DecisionReason.RequesterNotAllowed)
+
+    with patch.object(group_module.s3, "log_operation") as mock_log_operation:
+        _submit(group_module, slack_client, decision, execute=REAL_EXECUTE)
+
+    audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert (audit_entry.operation_type, audit_entry.decision_reason) == ("declined", "RequesterNotAllowed")
+    assert (audit_entry.audit_entry_type, audit_entry.group_id) == ("group", GROUP.id)
 
 
 def test_group_self_approval_is_shown_as_auto_approved_after_the_grant(group_module, slack_client):
@@ -268,3 +307,42 @@ def test_group_button_click_discard_that_fails_to_show_tells_the_approver_not_th
 
     assert _thread_replies(slack_client) == ["<@U_APP1> the discard did not go through, please try again."]
     assert not any(c.kwargs["channel"] == REQUESTER.id for c in slack_client.chat_postMessage.call_args_list)
+
+
+def test_group_button_click_discard_logs_a_declined_audit_entry_after_removing_buttons(group_module, slack_client):
+    buttons_removed_before_audit = []
+    with patch.object(
+        group_module.s3, "log_operation", side_effect=lambda **_: buttons_removed_before_audit.append(slack_client.chat_update.called)
+    ) as mock_log:
+        _click(group_module, slack_client, _payload(group_module, entities.ApproverAction.Discard))
+
+    assert buttons_removed_before_audit == [True]
+    audit_entry = mock_log.call_args.kwargs["audit_entry"]
+    assert (audit_entry.operation_type, audit_entry.decision_reason) == ("declined", "Discarded")
+    assert (audit_entry.group_id, audit_entry.group_name) == (GROUP.id, GROUP.name)
+    assert audit_entry.approver_slack_id == APPROVER_1.id
+
+
+def test_group_button_click_discard_audit_failure_still_shows_discarded(group_module, slack_client):
+    with patch.object(group_module.s3, "log_operation", side_effect=RuntimeError("s3 down")):
+        _click(group_module, slack_client, _payload(group_module, entities.ApproverAction.Discard))
+
+    assert slack_client.chat_update.call_args.kwargs["text"].startswith(":wastebasket: *Discarded")
+
+
+def test_group_button_click_discard_writes_no_audit_entry_if_buttons_not_removed(group_module, slack_client):
+    slack_client.chat_update.side_effect = RuntimeError("Slack is briefly unavailable")
+    with patch.object(group_module.s3, "log_operation") as mock_log:
+        _click(group_module, slack_client, _payload(group_module, entities.ApproverAction.Discard))
+
+    mock_log.assert_not_called()
+
+
+def test_group_button_click_not_permitted_writes_no_audit_entry(group_module, slack_client):
+    """A non-approver's click leaves the request live; only Slack's reply records it."""
+    not_permitted = access_control.ApproveRequestDecision(grant=False, permit=False, based_on_statements=frozenset())
+    with patch.object(group_module.s3, "log_operation") as mock_log_operation:
+        _click(group_module, slack_client, _payload(group_module), decide=lambda **_: not_permitted)
+
+    assert any("can not approve" in (c.kwargs.get("text") or "") for c in slack_client.chat_postMessage.call_args_list)
+    mock_log_operation.assert_not_called()

@@ -606,6 +606,40 @@ def handle_discard_buttons_event(
     )
     slack_client.chat_update(channel=event.channel_id, ts=message["ts"], blocks=blocks, text=text)
     logger.info("Request expired", extra={"event": event})
+    _log_expired_request(request=request, slack_client=slack_client)
+
+
+def _log_expired_request(
+    request: slack_helpers.RequestForAccess | slack_helpers.RequestForGroupAccess, slack_client: slack_sdk.WebClient
+) -> None:
+    # Best-effort: the buttons are already gone, so an audit failure must not fail the event.
+    try:
+        requester_email = slack_helpers.get_user(slack_client, id=request.requester_slack_id).email
+    except Exception as e:
+        logger.exception(f"Failed to look up requester for expired request audit entry: {e}")
+        requester_email = "NA"
+    if isinstance(request, slack_helpers.RequestForGroupAccess):
+        target = {"group_id": request.group_id, "group_name": request.group_name or "NA", "audit_entry_type": "group"}
+    else:
+        target = {
+            "account_id": request.account_id,
+            "role_name": request.permission_set_name,
+            "audit_entry_type": "account",
+            "request_source": request.request_source,
+            "verified_arn": request.verified_arn,
+        }
+    s3.log_operation_best_effort(
+        s3.AuditEntry(
+            reason=request.reason,
+            requester_slack_id=request.requester_slack_id,
+            requester_email=requester_email,
+            operation_type="declined",
+            permission_duration=request.permission_duration,
+            sso_user_principal_id="NA",
+            decision_reason="Expired",
+            **target,
+        )
+    )
 
 
 def handle_approvers_renotification_event(
