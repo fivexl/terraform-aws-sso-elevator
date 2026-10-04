@@ -1,12 +1,30 @@
 # Audit
 
-## Manually create table
+Every grant, revocation, declined request and approved-but-failed request is written to the audit bucket as one JSON object per event, at `<s3_bucket_partition_prefix>/yyyy/MM/dd/<uuid>.json`. The bucket is `s3_name_of_the_existing_bucket` if set, otherwise one the module creates (`sso_elevator_bucket_id` output).
 
-Replace bucket_name, partition_prefix and you should be good to go
+Audit writes never block access expiry. While S3 is unavailable, entries go to the Lambda's CloudWatch logs instead (the log record carries the full entry), so an Athena table over the bucket misses them. See [accepted risks](accepted-risks.md#an-s3-outage-loses-audit-records-from-the-bucket).
 
-This DDL follows `src/s3.py`'s `AuditEntry` fields: `sync_operation`, `matched_attributes`, and `sso_user_email` come from the attribute-sync path, and `request_source`/`verified_arn` let a CLI-sourced grant be told apart from a Slack-sourced one in audit history. `matched_attributes` is declared `string` here as the least-wrong single type: `s3.py` serializes it as the literal string `"NA"` when absent, but as a nested JSON object of matched attribute names to values when present -- querying the populated case will need `json_extract`/similar rather than a plain column read.
+## Fields
 
-Besides `grant` and `revoke`, `operation_type` can be `declined` (the request ended without access: `decision_reason` holds a policy reason such as `NoApprovers`, or `Discarded`, or `Expired`) or `incomplete` (an approved request failed; `error_message` holds the error, prefixed with the failed step when access was already granted -- match it to its `grant` entry by `request_id` or `group_membership_id`). An `incomplete` entry whose `error_message` starts with `granted but grant audit write failed:` has no `grant` entry: the access was granted, and unless the message also names a failed revoke scheduling, it was scheduled for revocation as usual. While S3 is unavailable, entries are written to the Lambda's CloudWatch logs instead, so this table misses them. `version` is `2` from this schema on and null on older records.
+The columns below follow `AuditEntry` in `src/s3.py`. Fields that don't apply to an entry hold the string `"NA"`.
+
+`operation_type`:
+
+- `grant`, `revoke`: access given or taken away. `audit_entry_type` says whether it was an account assignment (`account`) or a group membership (`group`).
+- `declined`: the request ended without access. `decision_reason` holds a policy reason (such as `NoApprovers`, `NoStatements`, `RequesterNotAllowed` or `NoApproversFoundInSlack`), or `Discarded`, or `Expired`.
+- `incomplete`: an approved request failed. `error_message` holds the error, prefixed with the failed step when access was already granted; match it to its `grant` entry by `request_id` or `group_membership_id`. An `incomplete` entry whose `error_message` starts with `granted but grant audit write failed:` has no `grant` entry: the access was granted, and unless the message also names a failed revoke scheduling, it was scheduled for revocation as usual.
+- `sync_add`, `sync_remove`, `manual_detected`: [attribute sync](attribute-sync.md) changes. `sync_operation` is `attribute_sync`, and `matched_attributes` and `sso_user_email` are filled.
+
+Other fields worth knowing:
+
+- `request_source` is `slack` or `cli`; `verified_arn` is the STS-verified caller ARN of a CLI request.
+- `permission_duration` is in seconds.
+- `matched_attributes` is the string `"NA"` when absent but a JSON object when present, so the table declares it `string`; read the populated case with `json_extract`.
+- `version` is `2` from 5.0.0 on and null on older records.
+
+## Create the Athena table
+
+Replace `bucket_name` and `s3_bucket_partition_prefix` (both places), and set the start of `projection.timestamp.range` to the date of your first record.
 
 ```
 CREATE EXTERNAL TABLE IF NOT EXISTS sso_elevator_table (
@@ -49,21 +67,25 @@ TBLPROPERTIES (
   'storage.location.template'='s3://bucket_name/s3_bucket_partition_prefix/${timestamp}/');
 ```
 
-To add the new columns to a table created from an earlier version of this DDL:
+A table created from the 4.x DDL lacks the two 5.0.0 columns:
 
 ```
 ALTER TABLE sso_elevator_table ADD COLUMNS (decision_reason string, error_message string)
 ```
 
-## Query by date
+Releases before 2.0.0 could write keys with a double slash (`logs//2024/...`), which the table above does not read. [`fix_path.sh` in the 4.4.3 tree](https://github.com/fivexl/terraform-aws-sso-elevator/blob/4.4.3/athena_query/fix_path.sh) moves such objects to the single-slash path.
+
+## Queries
+
 ```
 SELECT *
 FROM sso_elevator_table
 WHERE timestamp >= '2023/05/01' AND timestamp <= '2024/05/12';
 ```
-## Query everything
-```
-SELECT *
-FROM sso_elevator_table;
 
+```
+SELECT time, requester_email, account_id, role_name, decision_reason, error_message
+FROM sso_elevator_table
+WHERE operation_type IN ('declined', 'incomplete')
+ORDER BY time DESC;
 ```

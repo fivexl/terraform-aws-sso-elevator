@@ -1,84 +1,103 @@
 # Configuration
 
-## Group Assignments Mode
-Starting from version 2.0, Terraform AWS SSO Elevator introduces support for group access. SSO elevator now can add users to a groups, to do so, you will need to use /group-access command, which, instead of showing the form for account assignments, will present a Slack form where the user can select a group they want access to, specify a reason, and define the duration for which access is required.
+Approval rules come from two inputs: `config` for account and permission-set requests, and `group_config` for group-membership requests. Each is a list of statements. The module writes both to `config/approval-config.json` in the config bucket, and the Lambdas load them from there.
 
-The basic logic for access, configuration, and Slack integration remains the same as before. To enable the new Group Assignments Mode, you need to provide the module with a new group_config Terraform variable:
+## Account statements (`config`)
+
+Each statement says what can be requested, who approves it, and optionally who may request it.
+
+- **ResourceType**: required. Use `"Account"`; it is the only type the Elevator acts on.
+- **Resource**: an account ID or a list of them. `"*"` matches every account.
+- **PermissionSet**: a permission-set name or a list of them. `"*"` matches every permission set.
+- **Approvers**: an email or a list of emails.
+- **AllowSelfApproval**: `true` lets a requester who is in this statement's `Approvers` get access without anyone approving. `false` is an explicit deny (see below). Unset by default.
+- **ApprovalIsNotRequired**: `true` grants access without approval. `false` is an explicit deny. Unset by default.
+- **AllowedGroups**: optional. An SSO group ID or a list of them. See [Restricting who can request access](#restricting-who-can-request-access).
+- **AllowedUsers**: optional. An email or a list of emails. See [Restricting who can request access](#restricting-who-can-request-access).
+
+A field that takes a list also accepts a single string.
+
 ```hcl
-group_config = [
-    {              
-      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "ApprovalIsNotRequired": true
-    },
-    {              
-      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "AllowSelfApproval" : true,
-    },
-    {
-      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-    },
+config = [
+  {
+    "ResourceType" : "Account",
+    "Resource" : "*",
+    "PermissionSet" : "ReadOnlyAccess",
+    "Approvers" : ["lead@example.com"],
+    "AllowSelfApproval" : true,
+  },
+  {
+    "ResourceType" : "Account",
+    "Resource" : ["111111111111", "222222222222"],
+    "PermissionSet" : ["AdministratorAccess", "PowerUserAccess"],
+    "Approvers" : ["cto@example.com", "lead@example.com"],
+  },
+  {
+    "ResourceType" : "Account",
+    "Resource" : "333333333333",
+    "PermissionSet" : "ReadOnlyAccess",
+    "ApprovalIsNotRequired" : true,
+  },
 ]
 ```
-There are two key differences compared to the standard Elevator configuration:
-- ResourceType is not required for group access configurations.
-- In the Resource field, you must provide group IDs instead of account IDs.
 
-Group statements also support the optional `AllowedGroups` and `AllowedUsers` requester restrictions — see [Restricting who can request access](#restricting-who-can-request-access).
+## Group statements (`group_config`)
 
-The Elevator will only work with groups specified in the configuration.
+Group requests add the requester to an IAM Identity Center group for a limited time. They are Slack-only (the `/group-access` shortcut, see [Slack](slack.md)); the CLI requests account access only.
 
-If you were using Terraform AWS SSO Elevator before version 2.0.0, you need to update your Slack app manifest by adding a new shortcut to enable this functionality:
-{
-    "name": "group-access",
-    "type": "global",
-    "callback_id": "request_for_group_membership",
-    "description": "Request access to SSO Group"
-}
-To disable this functionality, simply remove the shortcut from the manifest.
+A group statement takes the same fields as an account statement, with two differences: there is no `ResourceType` or `PermissionSet`, and `Resource` holds group IDs, not account IDs. The Elevator only offers groups listed in some statement's `Resource`.
 
-## Module configuration, and features
+```hcl
+group_config = [
+  {
+    "Resource" : ["99999999-8888-7777-6666-555555555555"], # ManagementAccountAdmins
+    "Approvers" : ["cto@example.com"],
+    "ApprovalIsNotRequired" : true,
+  },
+  {
+    "Resource" : ["11111111-2222-3333-4444-555555555555"], # ProdReadOnly
+    "Approvers" : ["lead@example.com"],
+    "AllowSelfApproval" : true,
+  },
+  {
+    "Resource" : ["44445555-3333-2222-1111-555557777777"], # ProdAdminAccess
+    "Approvers" : ["cto@example.com"],
+  },
+]
+```
 
-### Configuration structure
+Do not put a group managed by [attribute sync](attribute-sync.md) in `group_config`.
 
-The configuration is a list of dictionaries, where each dictionary represents a single configuration rule.
+## How a request is decided
 
-Each configuration rule specifies which resource(s) the rule applies to, which permission set(s) are being requested, who the approvers are, and any additional options for approving the request.
+For a request, the Elevator collects every statement that matches it (the account and permission set, or the group) and that the requester may use. Then:
 
-The fields in the configuration dictionary are:
+1. **Explicit deny.** If any of those statements sets `ApprovalIsNotRequired = false`, no statement can grant the request without approval. If any statement sets `AllowSelfApproval = false` and lists the requester in its `Approvers`, the requester cannot self-approve through any statement.
+2. **Automatic approval.** Otherwise access is granted at once if a statement sets `ApprovalIsNotRequired = true`, or sets `AllowSelfApproval = true` and lists the requester in its `Approvers`.
+3. **Approvers.** Otherwise the approvers are the union of `Approvers` across all those statements, minus the requester. A statement covering all accounts adds its approvers to every request, even where a narrower statement exists.
+4. **Nobody can approve.** If that set is empty, the request fails with "Nobody can approve this request." This is what happens when the requester is the only approver and self-approval is not allowed. If no statement matches, the request fails with "No statement in the configuration covers this request."
 
-- **ResourceType**: This field specifies the type of resource being requested, such as "Account." As of now, the only supported value is "Account."
-- **Resource**: This field defines the specific resource(s) being requested. It accepts either a single string or a list of strings. Setting this field to "*" allows the rule to match all resources associated with the specified `ResourceType`.
-- **PermissionSet**: Here, you indicate the permission set(s) being requested. This can be either a single string or a list of strings. If set to "*", the rule matches all permission sets available for the defined `Resource` and `ResourceType`.
-- **Approvers**: This field lists the potential approvers for the request. It accepts either a single string or a list of strings representing different approvers.
-- **AllowSelfApproval**: This field can be a boolean, indicating whether the requester, if present in the `Approvers` list, is permitted to approve their own request. It defaults to `None`.
-- **ApprovalIsNotRequired**: This field can also be a boolean, signifying whether the approval can be granted automatically, bypassing the approvers entirely. The default value is `None`.
-- **AllowedGroups**: Optional requester restriction. A single SSO group ID or a list of SSO group IDs. If set, only members of at least one of the listed groups may request access using this statement. See [Restricting who can request access](#restricting-who-can-request-access).
-- **AllowedUsers**: Optional requester restriction. A single email or a list of emails. If set, only the listed users may request access using this statement. See [Restricting who can request access](#restricting-who-can-request-access).
+Explicit deny only governs the automatic decision. When someone clicks Approve, the click counts if the clicker is in the `Approvers` of any matching statement, and, for a click on their own request, that statement sets `AllowSelfApproval = true`. So a requester denied self-approval by one statement can still approve their own request by clicking, if another matching statement lists them with `AllowSelfApproval = true`. Do not give one person both.
 
-#### Restricting who can request access
+The diagram below shows steps 1-4. It predates `AllowedGroups`/`AllowedUsers`: statements the requester may not use are dropped before its first step.
 
-By default, a statement says what can be requested and who approves it, but not who is allowed to request it — any user the Elevator can resolve in SSO can request any account/permission set (or group) that has a matching statement. The optional `AllowedGroups` and `AllowedUsers` fields restrict the requester side. They work the same way in both `config` (account statements) and `group_config` (group statements):
+![Diagram of processing a request](Diagram_of_processing_a_request.png)
 
-- If both fields are omitted or empty, the statement is unrestricted — same behavior as before.
-- If either field is set, the requester must be a member of at least one group listed in `AllowedGroups` **or** be listed by email in `AllowedUsers`. Matching either one is sufficient.
-- `AllowedGroups` entries are SSO group IDs (the same format as `Resource` in `group_config`). Group membership is resolved via the IAM Identity Center `ListGroupMembershipsForMember` API using the requester's SSO user.
-- `AllowedUsers` entries are matched against the requester's email case-insensitively, including the secondary fallback domain variants if `secondary_fallback_email_domains` is configured.
-- The restriction applies to the whole statement, including `ApprovalIsNotRequired` and `AllowSelfApproval` — an ineligible requester cannot use an auto-approved statement.
-- It is enforced at both request time and approval time, so an ineligible request can't be approved either.
-- If the requester cannot be resolved to an SSO user or group memberships can't be fetched, processing stops with an error and no access is granted.
-- If statements match the request but the requester is not eligible for any of them, the request is denied with a "not allowed to request" message.
-- The Slack request dialogs only show what the requester is eligible for: groups, accounts, and permission sets covered solely by statements the requester can't use are hidden from the select lists. If nothing is available, the dialog shows a "not allowed to request access" message instead of the form. (Note: account and permission-set lists are filtered independently, so a specific ineligible account/permission-set *combination* may still be selectable — it is denied on submission.)
+## Restricting who can request access
 
-Example — developers can request `ReadOnlyAccess` themselves, but only members of the infra group (or a specific user) can request `AdministratorAccess`:
+Without `AllowedGroups` or `AllowedUsers`, a statement says what can be requested and who approves it, but anyone the Elevator can resolve in IAM Identity Center may request it. The two fields restrict the requester, in both `config` and `group_config`:
+
+- If both are empty or omitted, the statement is unrestricted.
+- If either is set, the requester must be a member of a group in `AllowedGroups` **or** be listed in `AllowedUsers`. Either is enough.
+- `AllowedGroups` entries are group IDs, the same format as `Resource` in `group_config`.
+- `AllowedUsers` entries match the requester's email case-insensitively, including the variants built from `secondary_fallback_email_domains`.
+- The restriction covers the whole statement: a requester who may not use a statement gets nothing from its `ApprovalIsNotRequired` or `AllowSelfApproval`, and its approvers do not count.
+- It is checked when the request is made and again when it is approved.
+- If the requester cannot be resolved to an Identity Center user, or their group memberships cannot be read, the request stops with an error and nothing is granted.
+- If statements match the request but the requester may use none of them, the request fails with "not allowed to request this access".
+- The Slack request forms list only the groups, accounts and permission sets the requester may request; if there are none, the form shows a "not allowed" message instead. Accounts and permission sets are filtered separately, so a combination the requester may not request can still be selected; it is denied on submit.
+
+Example: anyone can request `ReadOnlyAccess`, but only the infra group, or the on-call user, can request `AdministratorAccess` or the `ProdAdmins` group:
 
 ```hcl
 config = [
@@ -93,7 +112,7 @@ config = [
     "Resource" : "*",
     "PermissionSet" : "AdministratorAccess",
     "Approvers" : ["cto@example.com"],
-    "AllowedGroups" : ["99999999-8888-7777-6666-555555555555"], # infra team SSO group
+    "AllowedGroups" : ["99999999-8888-7777-6666-555555555555"], # infra team
     "AllowedUsers" : ["oncall@example.com"],
   },
 ]
@@ -102,68 +121,31 @@ group_config = [
   {
     "Resource" : ["11111111-2222-3333-4444-555555555555"], # ProdAdmins
     "Approvers" : ["cto@example.com"],
-    "AllowedGroups" : ["99999999-8888-7777-6666-555555555555"], # infra team SSO group
+    "AllowedGroups" : ["99999999-8888-7777-6666-555555555555"], # infra team
     "AllowedUsers" : ["oncall@example.com"],
   },
 ]
 ```
 
-#### Explicit Deny
-In the system, an explicit denial in any statement overrides any approvals. For instance, if one statement designates an individual as an approver for all accounts, but another statement specifies that the same individual is not allowed to self-approve or to bypass the approval process for a particular account and permission set (by setting "allow_self_approval" and "approval_is_not_required" to `False`), then that individual will not be able to approve requests for that specific account, thereby enforcing a stricter control.
+## How requesters are matched to IAM Identity Center users
 
-#### Automatic Approval
-Requests will be approved automatically if either of the following conditions are met:
+A Slack request is matched by the requester's Slack email. A CLI request is matched by the identity the CLI proves, never by email fallback.
 
-- AllowSelfApproval is set to true and the requester is in the Approvers list.
-- ApprovalIsNotRequired is set to true.
+If two or more Identity Store users share an email case-insensitively, every request that resolves to that email fails with an "email collision" error until the duplicate is removed in the Identity Store.
 
-#### Aggregation of Rules
-The approval decision and final list of reviewers will be calculated dynamically based on the aggregate of all rules. If you have a rule that specifies that someone is an approver for all accounts, then that person will be automatically added to all requests, even if there are more detailed rules for specific accounts or permission sets.
+### Secondary domain fallback
 
-#### Single Approver
-If there is only one approver and AllowSelfApproval is not set to true, nobody will be able to approve the request.
+**Strongly discouraged: it can grant access to the wrong person.**
 
-#### Diagram of processing a request:
-![Diagram of processing a request](docs/Diagram_of_processing_a_request.png)
+When a Slack email's domain differs from the one in IAM Identity Center (Slack `john.doe@old.domain`, Identity Center `john.doe@new.domain`), `secondary_fallback_email_domains = ["@new.domain"]` makes the Elevator retry the lookup with the Slack local part and each listed domain, in order. Each entry starts with `@`.
 
-### Secondary Subdomain Fallback Feature:
-WARNING: 
-This feature is STRONGLY DISCOURAGED because it can introduce security risks.
+- The Slack email is always tried first.
+- It applies to Slack requesters only. Approvers must have the same email in Slack as in the configuration.
+- The request message in Slack shows a :warning: line when a requester was matched through a fallback domain.
+- If different people share a local part across domains, a request can resolve to the wrong user. Use it only when you cannot align the domains, and remove the entries once you have.
 
-SSO Elevator uses Slack email addresses to find users in AWS SSO. In some cases, the domain of a Slack user's email 
-(e.g., "john.doe@old.domain") differs from the domain defined in AWS SSO (e.g., "john.doe@new.domain"). By setting 
-these fallback domains, SSO Elevator will attempt to replace the original domain from Slack with each secondary domain 
-in order to locate a matching AWS SSO user. 
- 
-- This mechanism should only be used in rare or critical situations where you cannot align Slack and AWS SSO domains.
+## Direct messages to requesters
 
-Example:
-- Slack email: john.doe@old.domain
-- AWS SSO email: john.doe@new.domain
+Some teams keep only approvers in the Elevator channel, so requesters never see what happened to their request. With `send_dm_if_user_not_in_channel = true` (the default), the Elevator sends the request status and result as a direct message to a requester who is not in the channel.
 
-Without fallback domains, SSO Elevator cannot find the SSO user due to the domain mismatch. By setting 
-secondary_fallback_email_domains = ["@new.domain"], SSO Elevator will try to swap out "@old.domain" for "@new.domain"
-(and any other domain in the list) and attempt to locate "john.doe@new.domain" in AWS SSO.
-
-Security Risks & Recommendations:
-- If multiple SSO users share the same local-part (before the "@") across different domains, SSO Elevator may 
-  grant permissions to the wrong user.
-- Disable or remove entries in this variable as soon as you no longer need domain fallback functionality 
-  to restore a more secure configuration.
-
-IN SUMMARY:
-Use "secondary_fallback_email_domains" ONLY if absolutely necessary. It is best practice to maintain 
-consistent, verified email domains in Slack and AWS SSO. Remove these fallback entries as soon as you 
-resolve the underlying domain mismatch to minimize security exposure.
-
-SSO Elevator will update request message in channel with Warning, if fallback domains are in use.
-
-**Upgrade note (4.4.0+):** if two or more Identity Store users share the same email case-insensitively, every request from any of them now fails outright with a clear "email collision" error, instead of silently resolving to whichever of them happened to come first in Identity Store's own listing order. If your directory has such a collision, requests from the affected users will start failing on upgrade until it's resolved on the Identity Store side.
-
-Notes:
-- SSO Elevator always prioritizes the primary domain from Slack (the Slack user's email) when searching for a user in AWS SSO.
-- SSO Elevator adds a one-line :warning: to the request message in Slack if it uses a secondary fallback domain to find a user in AWS SSO.
-- The secondary domain feature works **ONLY** for the requester, approvers in the configuration must have the same email domain as in Slack.
-
-### Sending direct messages to users feature
-SSO Elevator uses slack channels to communicate with users. But there is a use case of SSO Elevator where only approvers are members of a channel, so no one except them can see who has access where. And when this is the case, requesters don't get any feedback about their requests. To solve this problem, SSO Elevator can send direct messages to users if they are not in the channel. To enable this feature, your SSO Elevator slack app should have the following permissions: ("channels:read", "groups:read", "im:write"). And `send_dm_if_user_not_in_channel` variable should be set to true. If you are updating from the previous version but for a time being you can't update slack app permissions, you can use `send_dm_if_user_not_in_channel` variable to disable this feature so it won't break your current setup.
+This needs the Slack scopes `channels:read`, `groups:read` and `im:write` (in the [manifest](slack.md#create-the-slack-app)). If the membership check fails, the Elevator treats the requester as outside the channel and sends the DM anyway; a failed DM is logged and does not affect the request. Set the variable to `false` if your Slack app lacks those scopes, to stop the failing calls.

@@ -70,16 +70,20 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
   updated.
 - **Why accepted.** Running both APIs side by side for a release would keep the HTTP API, which
   supports neither WAF nor resource policies, alive longer.
-- **Mitigation.** The README's "Upgrade to 5.0.0" lists the steps to run right after the apply.
+- **Mitigation.** [UPGRADE-5.0.md](../UPGRADE-5.0.md) does everything that doesn't need the new API
+  before the apply, and lists the steps to run right after it.
 
 ### Published 4.x versions keep the forgeable code
 
 - **What.** Each published Lambda version keeps its own code and stays invocable by version
   number. Versions from 4.x with the CLI route on still trust the identity in the event, so
-  anyone allowed `lambda:InvokeFunction` on them can forge a CLI request for another user.
+  anyone allowed `lambda:InvokeFunction` on them can forge a CLI request for another user. Every
+  4.x version also holds the Slack secrets in its environment variables.
 - **Why accepted.** Terraform does not delete previously published versions, so the module cannot
   remove them during the upgrade.
-- **Mitigation.** The README's "Upgrade to 5.0.0" has the step that deletes them.
+- **Mitigation.** [UPGRADE-5.0.md](../UPGRADE-5.0.md) makes deleting the requester's 4.x versions
+  and rotating both Slack secrets required steps after the apply. The revoker's nightly pruning
+  keeps the newest version below `live`, the last 4.x one, so it does not remove them all.
 
 ### An S3 outage loses audit records from the bucket
 

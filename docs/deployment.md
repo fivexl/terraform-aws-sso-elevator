@@ -1,110 +1,107 @@
-# Deployment and Usage
+# Deployment
 
-The deployment process is divided into two main parts: deploying the Terraform module, which sets up the necessary infrastructure and resources for the Lambdas to function, and creating a Slack App, which will be the interface through which users can interact with the Lambdas. Detailed instructions on how to perform both of these steps, along with the Slack App manifest, can be found below.
+Deploying SSO Elevator has two parts: the Terraform module, which creates the Lambdas, the API and the audit bucket, and a Slack app, the interface users request and approve access through. The Slack app, its manifest and the Slack secrets are covered in [Slack](slack.md); approval rules in [Configuration](configuration.md).
 
-## SSO Delegation
-AWS recommends delegating SSO administration to a separate “delegated SSO administrator account.” We also recommend creating a dedicated “sso-tooling” account to manage access across your entire organization. You can learn more about how to use SSO Elevator in the delegated SSO administrator account here: [SSO delegation](/docs/docs.md#sso-delegation)
+## SSO delegation
 
-## Build Process
-There are three ways to build an SSO elevator:
+Deploy the module in a delegated SSO administrator account rather than the management account. AWS recommends delegating IAM Identity Center administration, and it keeps day-to-day access out of the management account: with a separate account you can grant SSO administration without building a role in the management account that limits itself to SSO. The module works in either account.
 
-Using pre-created images pulled from ECR (Default)
-Using Docker build to build images locally (provide the variable use_pre_created_image = false)
-There is also an option to host ECR yourself by providing the following variables:
+To delegate, create an account (we recommend a dedicated "sso-tooling" account) and register it as the IAM Identity Center delegated administrator, as described in the [AWS documentation](https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin-how-to-register.html), or with this Terraform in the management account:
+
 ```hcl
-ecr_repo_name = "example_repo_name"
-ecr_owner_account_id = "<example_account_id>"
+resource "aws_organizations_delegated_administrator" "sso" {
+  account_id        = "<DELEGATED_ACCOUNT_ID>"
+  service_principal = "sso.amazonaws.com"
+}
 ```
 
-GitHub CI of this repository pre-builds the requester and revoker lambda Docker images on every release and push them to FivexL's private ECR. Users can use these pre-built Docker images to build lambdas.
+That is the only prerequisite for running the module in the delegated administrator account.
 
-## Terraform deployment example
+**The delegated administrator cannot manage access to the management account.** Permission sets provisioned to the management account can only be managed from the management account; using one from the delegated account fails with "Access Denied". So an elevator deployed in the delegated account cannot grant account-level access to the management account. To grant temporary access to it anyway:
 
-```terraform
+1. In the management account, create a `ManagementAccountAccess` group and permission set with the permissions you need.
+2. From the management account, assign that group and permission set to the management account.
+3. Request membership of `ManagementAccountAccess` through SSO Elevator's `group-access` Slack shortcut. The elevator only changes group membership, so it never touches the management account's permission set.
 
+## Lambda images
+
+The module can get its Lambda code three ways:
+
+- **Pre-built images (default).** Pulled from FivexL's ECR in the deployment region: `<ecr_owner_account_id>.dkr.ecr.<region>.amazonaws.com/<ecr_repo_name>:requester-<ecr_repo_tag>`, plus `revoker-` and (with attribute sync on) `attribute-syncer-` images.
+- **Your own ECR.** Set `ecr_owner_account_id` and `ecr_repo_name` to a repository you host, holding images with the same tag names. It must be in the region you deploy to; in another account, its repository policy must let Lambda in the deployment account pull.
+- **Built locally.** `use_pre_created_image = false` packages the source as zip files, building them in Docker on the machine running Terraform, so Docker must be available there.
+
+Lambda only runs container images from private ECR in the same region: not from public ECR, other registries or a pull-through cache. That is why the pre-built images are replicated per region.
+
+Pre-built images exist in these 17 regions:
+
+- `eu-central-1` (source)
+- `ap-northeast-1`, `ap-northeast-2`, `ap-northeast-3`, `ap-south-1`, `ap-southeast-1`, `ap-southeast-2`
+- `ca-central-1`
+- `eu-north-1`, `eu-west-1`, `eu-west-2`, `eu-west-3`
+- `sa-east-1`
+- `us-east-1`, `us-east-2`, `us-west-1`, `us-west-2`
+
+In any other region, set `use_pre_created_image = false`, host the images yourself, or [open an issue](https://github.com/fivexl/terraform-aws-sso-elevator/issues) asking for the region.
+
+The pre-built images are built for `x86_64` only. With `lambda_architecture = "arm64"`, build locally or host your own `arm64` images.
+
+Image tags:
+
+- `X.Y.Z`, one per release. The module's `ecr_repo_tag` default is the matching release.
+- `main`, the latest merge to `main`. It moves with every merge.
+- `pr-<N>-<sha>`, one per push to a pull request from this repository.
+
+`main` and `pr-<N>-<sha>` images are for testing and expire once superseded. Set `ecr_repo_tag` to one of them to try an unreleased change.
+
+## Terraform example
+
+```hcl
 data "aws_ssoadmin_instances" "this" {}
 
 module "aws_sso_elevator" {
   source  = "fivexl/sso-elevator/aws"
   version = "5.0.0"
-  # The Slack bot token and signing secret live in SSM; see "Slack secrets in SSM Parameter Store".
-  slack_channel_id = local.slack_channel_id
 
+  slack_channel_id = "C0123456789"
+  sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
+
+  # The module creates the audit bucket, which needs an access-logging target.
+  # Set s3_name_of_the_existing_bucket instead to use your own bucket.
   s3_logging = {
-    target_bucket = module.naming_conventions.s3_access_logs_bucket_name
-    target_prefix = "sso-elevator-logs/"
+    target_bucket = "my-s3-access-logs-bucket"
+    target_prefix = "sso-elevator/"
   }
-
-  s3_bucket_partition_prefix = "sso-elevator-logs"
-
+  # Object lock defaults to GOVERNANCE mode, 2 years (s3_object_lock_configuration).
   s3_object_lock = true
-  s3_object_lock_configuration = {
-    rule = {
-      default_retention = {
-        mode  = "GOVERNANCE"
-        years = 3
-      }
-    }
-  }
-  # The default object lock configuration is as follows:
-  # {
-  #  rule = {
-  #   default_retention = {
-  #      mode  = "GOVERNANCE"
-  #      years = 2
-  #    }
-  #  }
-  #}
-  # You can specify a different configuration here:
-  s3_object_lock_configuration = {
-    rule = {
-      default_retention = {
-        mode  = "GOVERNANCE"
-        years = 1
-      }
-    }
-  }
-
-  # s3_name_of_the_existing_bucket = "sso_elevator_audit_logs_bucket-<some_sha>"
-  # If you want to use your own bucket for storing SSO Elevator audit logs (logs about access requests), use the `s3_name_of_the_existing_bucket` variable.
-  # If `s3_name_of_the_existing_bucket` is left empty, the module creates a new bucket name based on `s3_bucket_name_for_audit_entry`.
-  # In that case, remember to specify `s3_logging` with at least the `target_bucket` key to enable access logging, otherwise, module deployment will fail.
-  s3_logging = {
-    target_bucket = "some_access_logging_bucket"
-    target_prefix = "some_prefix_for_access_logs"
-  }
 
   config = [
-    # This could be a config for dev/stage account where developers can self-serve
-    # permissions
-    # Allows Bob and Alice to approve requests for all
-    # PermissionSets in accounts dev_account_id and stage_account_id as
-    # well as approve its own requests
-    # You have to specify at AllowSelfApproval: true or specify two approvers
-    # so you do not lock out approver
+    # Dev and stage: developers self-serve any permission set. Self-approval or
+    # two approvers, so an approver cannot lock themselves out.
     {
       "ResourceType" : "Account",
-      "Resource" : ["dev_account_id", "stage_account_id"],
+      "Resource" : ["111111111111", "222222222222"],
       "PermissionSet" : "*",
       "Approvers" : ["bob@corp.com", "alice@corp.com"],
       "AllowSelfApproval" : true,
     },
-    # This could be an option for a financial person
-    # allows self approval for Billing PermissionSet
-    # for account_id for user finances@corp.com
+    # Production: read-only for anyone, approved automatically.
     {
       "ResourceType" : "Account",
-      "Resource" : "account_id",
-      "PermissionSet" : "Billing",
-      "Approvers" : "finances@corp.com",
-      "AllowSelfApproval" : true,
+      "Resource" : ["333333333333"],
+      "PermissionSet" : "ReadOnly",
+      "ApprovalIsNotRequired" : true,
     },
-    # Your typical CTO - can approve all accounts and all permissions
-    # as well as his/hers own requests to avoid lock out
-    # Careful withi Resource * since it will cause revocation of all
-    # non-module-created user-level permission set assignments in all
-    # accounts, add this one later when you are done with single account
-    # testing
+    # Production admin needs someone else's approval.
+    {
+      "ResourceType" : "Account",
+      "Resource" : ["333333333333"],
+      "PermissionSet" : "AdministratorAccess",
+      "Approvers" : ["manager@corp.com", "ciso@corp.com"],
+    },
+    # "Resource": "*" makes the revoker remove every user-level permission set
+    # assignment the module did not create, in every account. Add it after
+    # testing with a single account.
     {
       "ResourceType" : "Account",
       "Resource" : "*",
@@ -112,55 +109,15 @@ module "aws_sso_elevator" {
       "Approvers" : "cto@corp.com",
       "AllowSelfApproval" : true,
     },
-    # Read only config for production accounts so developers
-    # can check prod when needed
-    {
-      "ResourceType" : "Account",
-      "Resource" : ["prod_account_id", "prod_account_id2"],
-      "PermissionSet" : "ReadOnly",
-      "AllowSelfApproval" : true,
-    },
-    # Prod access
-    {
-      "ResourceType" : "Account",
-      "Resource" : ["prod_account_id", "prod_account_id2"],
-      "PermissionSet" : "AdministratorAccess",
-      "Approvers" : ["manager@corp.com", "ciso@corp.com"],
-      "ApprovalIsNotRequired" : false,
-      "AllowSelfApproval" : false,
-    },
-    # example of list being used for permissions sets
-    {
-      "ResourceType" : "Account",
-      "Resource" : "account_id",
-      "PermissionSet" : ["ReadOnlyPlus", "AdministratorAccess"],
-      "Approvers" : ["ciso@corp.com"], 
-      "AllowSelfApproval" : true,
-    },
-
   ]
-group_config = [
-    {              
-      "Resource" : ["99999999-8888-7777-6666-555555555555"], #ManagementAccountAdmins
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-      "ApprovalIsNotRequired": true
-    },
-    {              
-      "Resource" : ["11111111-2222-3333-4444-555555555555"], #prod read only
-      "Approvers" : [
-        "email@gmail.com"
-      ]
+
+  group_config = [
+    {
+      "Resource" : ["11111111-2222-3333-4444-555555555555"], # Identity Store group id
+      "Approvers" : ["cto@corp.com"],
       "AllowSelfApproval" : true,
     },
-    {
-      "Resource" : ["44445555-3333-2222-1111-555557777777"], #ProdAdminAccess
-      "Approvers" : [
-        "email@gmail.com"
-      ]
-    },
-]
+  ]
 }
 
 output "requester_api_endpoint_url" {
@@ -168,34 +125,4 @@ output "requester_api_endpoint_url" {
 }
 ```
 
-## SSO Delegation
-
-The main reason to delegate SSO to another account, is to reduce a need to access management account to the minimum as well as separation of concerns. With a separate SSO management account you can granualary give access to sso management only without creating overcomplex role in the management account that would limit access in the management account to SSO only.
-
-Although the module can be deployed in either the management account or the delegated SSO administrator account, we recommend deploying it in the delegated SSO administrator account.
-
-To do this, create a new AWS account (if you don’t already have one) and and delegate SSO administration to it. For more details on this process, refer to the [AWS documentation](https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin-how-to-register.html).
-
-Alternatively, you can use this Terraform snippet in your management account to delegate SSO permissions to the new account:
-
-```hcl
-resource "aws_organizations_delegated_administrator" "sso" {
-  account_id        = <<DELEGATED_ACCOUNT_ID>>
-  service_principal = "sso.amazonaws.com"
-}
-```
-This is only pre-requisite for the module to work in the delegated SSO administrator account. After this step, you can proceed with the module deployment.
-
-**Important Note:**
-
-The delegated SSO administrator account **cannot** be used to manage access to the management account. Specifically, any permission set created and managed by the management account can’t be used by the SSO tooling account. (If you create a permission set in the Management account and try to use it in the SSO account, you’ll get an “Access Denied” error.)
-
-This limitation ensures that the management account always manages access to itself, while the delegated SSO administrator account manages access to every other account in the organization. As a result, you won’t be able to use an `account_level` SSO elevator to manage access to the management account if the elevator is deployed in the delegated SSO administrator account.
-
-However, there is still a way to provide **temporary** access to the management account through SSO Elevator:
-
-1. Go to the management account and create a `ManagementAccountAccess` group and permission set (with required permissions).
-2. From the management account, assign the `ManagementAccountAccess` group and permission set to the management account.
-3. Use SSO Elevator to `/group_access` request access to this `ManagementAccountAccess` group, which will add you to the group and grant you access to the management account. (this way you don't directly use the permission set, so you don't hit the limitation and get access to the management account)
-
-With this approach, you can reduce how often you use the management account and how many resources you deploy there, while still being able to manage the entire organization and temporarily access the management account.
+After the first apply, write the Slack secrets to SSM ([Slack](slack.md)) and put `requester_api_endpoint_url` in the Slack app manifest as the request URL.

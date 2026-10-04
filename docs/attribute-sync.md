@@ -1,201 +1,123 @@
 # Attribute-Based Group Sync
 
-Starting from version 3.0, SSO Elevator introduces automatic user-to-group synchronization based on IAM Identity Center user attributes. This feature allows you to automatically add users to groups based on their organizational attributes (e.g., department, job title, cost center) without manual intervention.
+Attribute sync keeps IAM Identity Center group membership in line with user attributes (department, title, cost center and so on). It adds members for good, unlike `group_config`, which grants time-limited membership on request.
 
-## How It Works
+## How it works
 
 ```mermaid
 sequenceDiagram
     EventBridge->>Lambda (attribute-syncer): Triggers on schedule (e.g., hourly)
-    Lambda (attribute-syncer)->>Identity Store: Query all users with attributes
-    Lambda (attribute-syncer)->>Identity Store: Query managed group memberships
-    Lambda (attribute-syncer)->>Lambda (attribute-syncer): Evaluate users against mapping rules
-    Lambda (attribute-syncer)->>Identity Store: Add users matching rules to groups
-    Lambda (attribute-syncer)->>Identity Store: Detect manual assignments
+    Lambda (attribute-syncer)->>Identity Store: List groups, resolve managed group names to IDs
+    Lambda (attribute-syncer)->>Identity Store: Read all users with their attributes
+    Lambda (attribute-syncer)->>Identity Store: Read managed group memberships
+    Lambda (attribute-syncer)->>Identity Store: Add matching users; remove non-matching ones (policy "remove")
     Lambda (attribute-syncer)->>S3 Bucket: Write audit entries
     Lambda (attribute-syncer)->>Slack: Send notifications
 ```
 
-The attribute syncer Lambda runs on a configurable schedule and:
-1. Reads attribute mapping rules from configuration
-2. Queries all users and their attributes from the Identity Store
-3. Evaluates users against mapping rules (exact string matching with AND logic)
-4. Adds users to groups when they match rules
-5. Detects manually-added users who don't match any rules
-6. Optionally removes manual assignments based on policy
-7. Logs all operations to the audit bucket
-8. Sends Slack notifications for important events
+On each run, for every group in `attribute_sync_managed_groups`:
+
+- A user who matches a rule for the group and is not a member is added.
+- A member who matches no rule for the group is a *manual assignment*. With policy `remove` (the default) they are removed; with `warn` they stay and are reported.
+
+Groups not listed in `attribute_sync_managed_groups` are never read or changed.
 
 ## Configuration
 
-To enable attribute-based group sync, add the following to your Terraform configuration:
-
 ```hcl
 module "aws_sso_elevator" {
   # ... existing configuration ...
 
-  # Enable the feature
-  attribute_sync_enabled = true
+  attribute_sync_enabled        = true
+  attribute_sync_managed_groups = ["Engineering", "Finance", "DevOps"]
 
-  # List of groups to manage (by name)
-  attribute_sync_managed_groups = [
-    "Engineering",
-    "Finance",
-    "DevOps",
-  ]
-
-  # Attribute mapping rules
   attribute_sync_rules = [
     {
       group_name = "Engineering"
-      attributes = {
-        department   = "Engineering"
-        employeeType = "FullTime"
-      }
-    },
-    {
-      group_name = "Finance"
-      attributes = {
-        department = "Finance"
-      }
-    },
-    {
-      group_name = "DevOps"
       attributes = {
         department = "Engineering"
-        jobTitle   = "DevOps Engineer"
+        userType   = "Employee"
       }
-    },
-  ]
-
-  # Policy for handling manual assignments: "warn" or "remove"
-  attribute_sync_manual_assignment_policy = "warn"
-
-  # How often to run the sync
-  attribute_sync_schedule = "rate(1 hour)"
-}
-```
-
-## Configuration Options
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `attribute_sync_enabled` | Enable/disable the feature | `false` |
-| `attribute_sync_managed_groups` | List of group names to manage | `[]` |
-| `attribute_sync_rules` | Attribute mapping rules | `[]` |
-| `attribute_sync_manual_assignment_policy` | Policy for manual assignments: `warn` or `remove` | `"warn"` |
-| `attribute_sync_schedule` | Schedule expression (e.g., `rate(1 hour)`) | `"rate(1 hour)"` |
-| `attribute_sync_lambda_memory` | Lambda memory in MB | `512` |
-| `attribute_sync_lambda_timeout` | Lambda timeout in seconds | `300` |
-
-## Attribute Mapping Rules
-
-Each rule specifies:
-- **group_name**: The name of the group to add users to (must be in `attribute_sync_managed_groups`)
-- **attributes**: A map of attribute conditions that must ALL match (AND logic)
-
-Supported attributes include any SCIM attributes in your Identity Store:
-- `department`
-- `employeeType`
-- `costCenter`
-- `jobTitle`
-- Custom attributes
-
-## Manual Assignment Policy
-
-When the syncer detects users in managed groups who don't match any rules:
-
-- **warn** (default): Logs a warning and sends a Slack notification, but does not remove the user
-- **remove**: Automatically removes the user from the group and sends a notification
-
-## Audit Logging
-
-All sync operations are logged to the same S3 audit bucket used by SSO Elevator:
-- `sync_add`: User added to group based on attribute match
-- `sync_remove`: User removed from group (no longer matches rules)
-- `manual_detected`: Manual assignment detected (user doesn't match rules)
-
-## Slack Notifications
-
-The syncer sends notifications for:
-- Users added to groups
-- Manual assignments detected
-- Manual assignments removed (when policy is `remove`)
-- Sync errors
-
-## Migration Guide for Existing Deployments
-
-If you're upgrading from a previous version of SSO Elevator:
-
-**Phase 1: Deploy with feature disabled (default)**
-```hcl
-# No changes needed - feature is disabled by default
-module "aws_sso_elevator" {
-  source  = "fivexl/sso-elevator/aws"
-  version = "3.0.0"
-  # ... existing configuration ...
-}
-```
-
-**Phase 2: Configure and enable**
-```hcl
-module "aws_sso_elevator" {
-  source  = "fivexl/sso-elevator/aws"
-  version = "3.0.0"
-  # ... existing configuration ...
-
-  attribute_sync_enabled = true
-  attribute_sync_managed_groups = ["Engineering", "Finance"]
-  attribute_sync_rules = [
-    {
-      group_name = "Engineering"
-      attributes = { department = "Engineering" }
     },
     {
       group_name = "Finance"
       attributes = { department = "Finance" }
     },
+    {
+      group_name = "DevOps"
+      attributes = {
+        department = "Engineering"
+        title      = "DevOps Engineer"
+      }
+    },
   ]
-  # Start with "warn" to review manual assignments
-  attribute_sync_manual_assignment_policy = "warn"
+
+  attribute_sync_manual_assignment_policy = "warn" # default "remove"
+  attribute_sync_schedule                 = "rate(1 hour)"
 }
 ```
 
-**Phase 3: Monitor and adjust**
-- Review Slack notifications for manual assignments
-- Adjust mapping rules as needed
-- Once confident, change policy from `warn` to `remove` if desired
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `attribute_sync_enabled` | Create the attribute-syncer Lambda and its schedule | `false` |
+| `attribute_sync_managed_groups` | Group display names the syncer manages | `[]` |
+| `attribute_sync_rules` | Mapping rules, see below | `[]` |
+| `attribute_sync_manual_assignment_policy` | `warn` or `remove` | `"remove"` |
+| `attribute_sync_schedule` | EventBridge schedule expression | `"rate(1 hour)"` |
+| `attribute_sync_lambda_memory` | Lambda memory in MB | `512` |
+| `attribute_sync_lambda_timeout` | Lambda timeout in seconds | `300` |
+| `attribute_syncer_lambda_name` | Lambda function name | `"attribute-syncer"` |
+| `attribute_sync_event_rule_name` | EventBridge rule name | `"sso-elevator-attribute-sync"` |
+| `identity_store_id` | Required when you set `sso_instance_arn`; discovered otherwise | `""` |
 
-## Rollback Strategy
+When `attribute_sync_enabled = true`, `terraform apply` fails if `attribute_sync_managed_groups` or `attribute_sync_rules` is empty, if a rule names a group missing from `attribute_sync_managed_groups`, or if `sso_instance_arn` is set without `identity_store_id`. The check runs as a `local-exec` during apply, not during plan.
 
-If issues arise after enabling attribute sync:
+## Mapping rules
 
-**Immediate rollback** - Set `attribute_sync_enabled = false` and apply:
-```hcl
-attribute_sync_enabled = false
-```
-This will:
-- Stop scheduled syncs immediately
-- Preserve existing group memberships (no users removed)
-- Keep all audit logs in S3
+Each rule has:
 
-**Complete removal** - Remove all attribute sync configuration:
-- The Lambda function and EventBridge rule will be deleted
-- Existing group memberships remain unchanged
-- Audit logs remain in S3 for compliance
+- **group_name**: a group display name, listed in `attribute_sync_managed_groups`.
+- **attributes**: conditions that must all match (AND).
 
-## Important Considerations
+Several rules for the same group are alternatives (OR): matching any one of them is enough. Attribute names and values are compared case-insensitively. A rule with no attributes matches nobody.
 
-1. **Managed Groups Only**: The syncer only operates on groups explicitly listed in `attribute_sync_managed_groups`. All other groups are completely ignored.
+Attribute names the syncer reads from each Identity Store user:
 
-2. **Group Names**: Configuration uses human-readable group names. The Lambda resolves names to IDs at runtime.
+- `displayName`, `nickName`, `title`, `userType`, `locale`, `timezone`, `preferredLanguage`, `profileUrl`
+- `givenName`, `familyName`, `middleName`, `honorificPrefix`, `honorificSuffix`
+- Enterprise attributes: `department`, `costCenter`, `organization`, `division`, `employeeNumber`
+- External IDs, as `externalId_<issuer>`
 
-3. **Attribute Matching**: Uses exact string matching. Attribute values must match exactly (case-sensitive).
+A condition on any other name never matches. For example, use `title`, not `jobTitle`, and `userType`, not `employeeType`.
 
-4. **AND Logic**: When multiple attributes are specified in a rule, ALL must match for the user to be added.
+A managed group name that does not exist in the Identity Store is logged as an error and its rules are skipped.
 
-5. **Caching**: The syncer uses the same caching mechanism as SSO Elevator to minimize API calls.
+## Rolling it out
 
-6. **Error Handling**: If an error occurs processing one group or user, the syncer continues with others and reports errors in the summary notification.
+Under the default `remove` policy, the first run removes every current member of a managed group who does not match its rules, including people you added by hand. To see what would happen first:
 
-7. **No Overlap with group_config**: Groups in `attribute_sync_managed_groups` must NOT also appear in `group_config`. The attribute syncer adds users permanently based on attributes, while `group_config` is for JIT (just-in-time) access with scheduled revocation. If the same group is in both, the revoker will see attribute-synced users as "inconsistent assignments" and warn about them. Terraform will fail with a validation error if overlap is detected.
+1. Enable with `attribute_sync_manual_assignment_policy = "warn"`.
+2. Read the Slack notifications and audit entries for manual assignments; fix the rules or the users' attributes.
+3. Switch to `remove`.
+
+Under `warn`, a user who stops matching (for example, changes department) stays in the group, and is reported on every run until removed by hand.
+
+To turn the feature off, set `attribute_sync_enabled = false` and apply. The Lambda and its schedule are deleted; group memberships and audit entries stay as they are.
+
+## Audit entries
+
+Each action is written to the audit bucket with one of these operation types:
+
+- `sync_add`: user added because they match a rule.
+- `sync_remove`: member removed because they match no rule (policy `remove`).
+- `manual_detected`: member matches no rule and was left in place (policy `warn`), written on every run.
+
+## Slack notifications
+
+The syncer posts to `slack_channel_id`: one message per user added, per manual assignment detected, and per manual assignment removed, plus a summary and any errors at the end of a run that changed something or hit an error. Runs with no changes post nothing.
+
+An error on one user or group does not stop the run; it is counted and reported in the summary.
+
+## Do not overlap with `group_config`
+
+A managed group must not also appear in `group_config`. The revoker treats every member of a `group_config` group that it has no scheduled revocation for as an inconsistent assignment: it reports it in Slack and removes it on its scheduled revocation run. The syncer then adds the user back on its next run, and the two keep undoing each other. The module does not catch this: its overlap check compares `group_config` resources (group IDs) with managed group names, so it never matches.

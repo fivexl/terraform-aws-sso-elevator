@@ -12,7 +12,7 @@ output, scenario, result.
 
 - An AWS Organization with IAM Identity Center, a Slack app and a test channel.
 - Two deployments, because a delegated administrator cannot manage access to the
-  management account ([SSO delegation](docs.md#sso-delegation)):
+  management account ([SSO delegation](deployment.md#sso-delegation)):
   - **tooling**: the module in the delegated administrator account (the CLI route is on by
     default);
   - **management**: the module in the management account, approval statements scoped
@@ -30,13 +30,13 @@ output, scenario, result.
 1. **Fresh install.** Apply into an account without the module.
    - Expect: both SSM parameters hold `REPLACE_ME`, and an access-requester invoke fails at
      init (with SnapStart, at restore) with an error naming the parameter.
-   - Write the real secrets (README "Fresh install"). Without a redeploy, the next request
-     succeeds.
-2. **Upgrade from the previous major.** Follow the README upgrade section step by step on a
-   deployment running the previous release.
+   - Write the real secrets ("Fresh install" in [slack.md](slack.md)). Without a redeploy, the
+     next request succeeds.
+2. **Upgrade from the previous major.** Follow the release's upgrade guide (for 5.0.0,
+   [UPGRADE-5.0.md](../UPGRADE-5.0.md)) step by step on a deployment running the previous release.
    - Expect: the secret hashes match before and after; the Lambda environment holds parameter
      names, not values. Whether Slack keeps working throughout depends on the release: see its
-     upgrade section (5.0.0 has downtime).
+     upgrade guide (5.0.0 has downtime).
 3. **No drift.** Run `terraform plan -detailed-exitcode` right after each apply.
    - Expect: exit code 0.
 
@@ -66,7 +66,7 @@ output, scenario, result.
 11. **Attribute syncer**: invoke with `{}`.
     - Expect: `success: true`, `error_count: 0`, no warnings.
 12. **Placeholder secret on a running deployment**: save both values, write `REPLACE_ME`
-    to both, force new containers on the `live` alias (README "Rotating a secret"), then:
+    to both, force new containers on the `live` alias ("Rotating a secret" in [slack.md](slack.md)), then:
     - invoke the access-requester: expect init (or SnapStart restore) failure;
     - invoke the attribute syncer: expect success with an error logged for the Slack token.
 
@@ -84,9 +84,10 @@ Upgrade and install:
       before or while the `live` alias is created. Then toggle `use_pre_created_image`: the
       apply replaces the requester function cleanly, with no dependency cycle or
       "function in use" error.
-- [ ] Fresh install, then upgrade a 4.4.x deployment by following README "Upgrade to 5.0.0".
-      Expect: Slack and the CLI work again once steps 7–9 are done; old versions deleted by
-      step 10.
+- [ ] Fresh install, then upgrade a 4.4.x deployment by following [UPGRADE-5.0.md](../UPGRADE-5.0.md)
+      verbatim, with `ecr_repo_tag` on a 5.x image (`main` or `pr-<N>-<sha>`) until the release PR
+      bumps its default. Expect: Slack and the CLI work again once the Slack, CLI and cross-account steps
+      after the apply are done; the 4.x requester versions are gone after the version-deletion step.
 - [ ] Slack: the access shortcut opens the modal, submitting it posts the request, and Approve
       and Deny both work (lazy listeners invoked through the `live` alias).
 - [ ] A POST to `requester_api_endpoint_url` without Slack headers gets `400` and the Lambda's

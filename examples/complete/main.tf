@@ -16,7 +16,7 @@ module "aws_sso_elevator" {
   aws_sns_topic_subscription_email = "email@gmail.com"
 
   # The module creates the Slack secret parameters with a placeholder; set the real
-  # values with `aws ssm put-parameter --overwrite` (see the README).
+  # values with `aws ssm put-parameter --overwrite` (see docs/slack.md).
   slack_channel_id                               = "***********"
   schedule_expression                            = "cron(0 23 * * ? *)" # revoke access schedule expression
   schedule_expression_for_check_on_inconsistency = "rate(1 hour)"

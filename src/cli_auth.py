@@ -1,7 +1,7 @@
 """Identity checks for the CLI access-request path.
 
 cli_proof establishes the caller's ARN through STS; this module decides whether that identity may
-act. Trust model and its limits: README "CLI tool".
+act. Trust model and its limits: docs/cli.md "Trust model".
 """
 
 import json
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 _ASSUMED_ROLE_ARN_RE = re.compile(r"arn:aws:sts::\d{12}:assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)")
 
-# IAM reserves this role-name prefix for IAM Identity Center in every account (README "CLI tool").
+# IAM reserves this role-name prefix for IAM Identity Center in every account (docs/cli.md "Trust model").
 SSO_ROLE_NAME_PREFIX = "AWSReservedSSO_"
 
 

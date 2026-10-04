@@ -37,13 +37,13 @@ variable "aws_sns_topic_subscription_email" {
 }
 
 variable "slack_bot_token_ssm_parameter_name" {
-  description = "Name of the SSM SecureString parameter holding the Slack bot token, read by every Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see README)."
+  description = "Name of the SSM SecureString parameter holding the Slack bot token, read by every Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/slack.md)."
   type        = string
   default     = "/sso-elevator/slack-bot-token"
 }
 
 variable "slack_signing_secret_ssm_parameter_name" {
-  description = "Name of the SSM SecureString parameter holding the Slack signing secret, read by the access-requester Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see README)."
+  description = "Name of the SSM SecureString parameter holding the Slack signing secret, read by the access-requester Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/slack.md)."
   type        = string
   default     = "/sso-elevator/slack-signing-secret"
 }
@@ -356,7 +356,7 @@ variable "lambda_memory_size" {
 }
 
 variable "snap_start" {
-  description = "Enable Lambda SnapStart on the requester Lambda (see README \"SnapStart\"). Set false where Lambda doesn't offer SnapStart for this runtime or package type, since apply fails there: at the time of writing, container images in Asia Pacific (New Zealand) and Asia Pacific (Taipei)."
+  description = "Enable Lambda SnapStart on the requester Lambda (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/api-gateway.md#snapstart). Set false where Lambda doesn't offer SnapStart for this runtime and package type, since apply fails there. At the time of writing that includes container images in Asia Pacific (New Zealand) and Asia Pacific (Taipei); the pre-built images are not published there anyway, so it matters for images you host yourself (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/deployment.md#lambda-images)."
   type        = bool
   default     = true
 }
@@ -405,7 +405,7 @@ Example:
     group_name = "Engineering"
     attributes = {
       department = "Engineering"
-      employeeType = "FullTime"
+      userType = "Employee"
     }
   }
 ]
@@ -469,7 +469,7 @@ variable "identity_store_id" {
 # ==========================================
 
 variable "enable_access_requester_cli" {
-  description = "If true, adds a POST /access-requester-cli route to the requester REST API so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Only principals in this AWS Organization can call it. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization for the principal running Terraform, plus more Organizations read permissions in the management account or a delegated administrator (see the README CLI tool section). Set to false if you only use Slack."
+  description = "If true, adds a POST /access-requester-cli route to the requester REST API so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Only principals in this AWS Organization can call it. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization for the principal running Terraform, plus more Organizations read permissions in the management account or a delegated administrator (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/cli.md#requirements). Set to false if you only use Slack."
   type        = bool
   default     = true
 }

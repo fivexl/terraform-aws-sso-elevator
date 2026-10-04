@@ -6,9 +6,9 @@ Submit a temporary AWS access request without Slack.
 
 The normal SSO Elevator flow happens entirely in Slack: you post a request, an approver clicks Approve, and the module grants a temporary permission set. That works well for a person, but it's awkward for a script, a CI job, or an AI coding agent that can't click a button — they need a command that submits the same request and reports a clear result via its exit code (0 on success, non-zero otherwise) and human-readable output on stdout/stderr. There's no `--json` / structured-output mode yet, so a caller that needs to parse the result programmatically (rather than just check the exit code) has to parse this prose output itself. `elevator` signs the request with your own local AWS credentials and posts it directly to the module's `POST /access-requester-cli` route, with a proof of your identity (see [How your identity is proved](#how-your-identity-is-proved)). The request then goes through the same approval pipeline as a Slack request: same approvers, same self-approval rules, same audit log.
 
-You must call from an account in the module's AWS Organization. Outside the module's own account, your permission set also needs `execute-api:Invoke` on the module's `requester_api_execution_arn_cli` output.
+You must call from an account in the module's AWS Organization. Outside the module's own account, your permission set also needs `execute-api:Invoke` on the module's `requester_api_execution_arn_cli` output ([example statement](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/cli.md#requirements)).
 
-You must sign with an IAM Identity Center (SSO) session, for example after `aws sso login`. IAM users, other roles, and CI/OIDC roles are rejected, so a CI job needs a real SSO session too. Your Identity Store user's primary email must belong to a Slack user in the workspace. See the main [README's CLI section](../../README.md#cli-tool) for details.
+You must sign with an IAM Identity Center (SSO) session, for example after `aws sso login`. IAM users, other roles, and CI/OIDC roles are rejected, so a CI job needs a real SSO session too. Your Identity Store user's primary email must belong to a Slack user in the workspace. The operator side, including the full requirements and trust model, is in [docs/cli.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/cli.md).
 
 ## Install
 
@@ -89,7 +89,7 @@ elevator configure --endpoint https://elevator.example.com/access-requester-cli 
 
 Credentials and region come from the standard AWS SDK chain — `AWS_PROFILE`, `AWS_REGION`, an active SSO session, etc. — the same way any AWS CLI command resolves them. `elevator` doesn't have its own profile setting; there's nothing extra to configure for auth beyond a normal AWS environment.
 
-**Upgrading to 5.0.0.** 5.0.0 moved the module to a new API, so the old endpoint is gone. Follow the CLI step of [Upgrade to 5.0.0](../../README.md#upgrade-to-500) in the main README.
+**Upgrading to 5.0.0.** 5.0.0 moved the module to a new API, so the old endpoint is gone and older CLIs are rejected. Install CLI 5.0.0 or later and configure the new endpoint; see [UPGRADE-5.0.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/UPGRADE-5.0.md).
 
 ## Use
 

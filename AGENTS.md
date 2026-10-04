@@ -1,4 +1,4 @@
-# Kiro Steering Rules
+# Agent instructions
 
 ## Code Quality & Philosophy
 
@@ -41,9 +41,7 @@ When adding new configuration parameters:
 ### Mocking Strategy
 - Mock all external dependencies including:
   - AWS services
-  - Valkey
   - Slack Bolt
-  - Strands Agents
 
 ## Version Control
 
@@ -60,12 +58,11 @@ When adding new configuration parameters:
   ```
 
 ### Branching
-- start a new branch of main for every vibe request
-- stay on the same branch when working on specs or have vibe requests started from the spec branch
+- Start a new branch from `main` for every change
 
 ### Commit Workflow
 - Commit all changes at the end of every task
-- Commit title format: `[spec/fix/feature/refactoring] task name`
+- Commit title format: `[fix/feature/refactoring] task name`
 - Commit message: Include detailed task summary
 - Always sign commits
 
@@ -76,6 +73,7 @@ When adding new configuration parameters:
   leading `v`, or prerelease tags.
 - Prepare releases on `main` and keep `vars.tf`'s `ecr_repo_tag`, generated
   README documentation, and the intended tag on the same version.
+- Add the version's `CHANGELOG.md` entry in the release PR.
 - Pushing the tag is the only release trigger. GitHub Actions creates the
   release and generated notes; do not create a GitHub Release manually.
 - Never create, move, delete, or push a release tag without the user's explicit
@@ -84,6 +82,20 @@ When adding new configuration parameters:
 - macOS releases must remain signed and notarized by Apple Team ID
   `T962D4K3Y7`. Never make signing conditional or allow missing secrets to
   degrade into an unsigned release.
+- The maintainer procedure is in `docs/releasing.md`.
+
+## Docs
+
+- Never rename or delete a `docs/` page or an `UPGRADE-*.md` file: Terraform
+  Registry pages for old tags link to them on `main`. Replace a moved page with
+  a stub that links to the new place.
+- `README.md` and `cmd/elevator/README.md` link to other repo files with
+  absolute `https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/...`
+  URLs, because the Registry and pkg.go.dev don't rewrite relative links.
+  Links between `docs/` pages are relative.
+- Don't edit the README between `<!-- BEGIN_TF_DOCS -->` and
+  `<!-- END_TF_DOCS -->`; pre-commit regenerates it from `vars.tf` and
+  `outputs.tf`.
 
 ## Dependency updates
 

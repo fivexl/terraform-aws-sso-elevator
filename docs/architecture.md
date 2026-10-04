@@ -1,327 +1,43 @@
-# AWS Accounts and Permission Sets Caching Implementation
+# Architecture
 
-## Overview
+## Components
 
-This implementation adds caching for AWS accounts and permission sets using S3 to improve resilience during AWS service outages. The cache uses a parallel API/cache call strategy with automatic cache updates when data changes.
+- **access-requester** Lambda, behind one REST API ([api-gateway.md](api-gateway.md)). It serves Slack and the [CLI](cli.md), decides on requests, grants access and schedules its removal.
+- **access-revoker** Lambda. It removes access when a schedule fires, sweeps for assignments nobody scheduled, and handles request expiry and approver reminders.
+- **attribute-syncer** Lambda, only with `attribute_sync_enabled = true` ([attribute-sync.md](attribute-sync.md)).
+- **EventBridge Scheduler** one-time schedules (group `schedule_group_name`): one per grant to revoke it, plus per pending request a reminder for approvers and an expiry that removes the Approve/Discard buttons after `request_expiration_hours`.
+- **EventBridge rules** that start the revoker on `schedule_expression` (revocation sweep, default nightly at 23:00 UTC) and `schedule_expression_for_check_on_inconsistency` (warning only, default every 2 hours).
+- **Config bucket** (`config_s3_bucket_name` output): the approval rules (`config/approval-config.json`, written by Terraform) and the requester's cache. Approval rules live here rather than in Lambda environment variables because those are capped at 4 KB in total, which large rule sets exceed.
+- **Audit bucket** ([audit.md](audit.md)).
+- **SSM parameters** holding the Slack bot token and signing secret ([slack.md](slack.md)).
 
-## Caching Strategy
+## Request flow
 
-### Parallel API and Cache Calls
+1. **Intake.** In Slack, the requester opens the `access` or `group-access` shortcut and submits the form; Slack posts it to `POST /access-requester`, and the Lambda checks Slack's signature. With the CLI, `elevator` signs the request with the caller's SSO session and posts it to `POST /access-requester-cli`; the Lambda proves the caller's identity through STS and maps it to an Identity Store user and then a Slack user. The CLI requests account access only, not group membership.
+2. **Decision.** The approval rules decide: deny (no matching statement, requester not allowed, or no approvers), grant at once (approval not required, or self-approval), or ask for approval. See [configuration.md](configuration.md) and the [decision diagram](Diagram_of_processing_a_request.png). Every request, from either path, is posted to `slack_channel_id`, so approvers see CLI requests in the same place.
+3. **Approval.** An approver clicks Approve or Discard. Until then the revoker reminds approvers with growing intervals (`approver_renotification_*`), and after `request_expiration_hours` it removes the buttons and records the request as `Expired`.
+4. **Grant.** The requester creates a user-level account assignment (or adds the user to the group), writes a `grant` audit entry and creates a one-time schedule for the revocation. A new grant for the same assignment replaces the earlier schedule, extending the access.
+5. **Revocation.** When the schedule fires, the revoker deletes the assignment (or membership), writes a `revoke` audit entry and updates Slack.
+6. **Sweep.** The nightly revoker run deletes every user-level assignment, in the accounts and permission sets the rules name, that has no pending revocation schedule, and removes every member of a configured group (`group_config`) who has no pending revocation schedule. The 2-hourly check only warns in Slack about them.
 
-The implementation uses a resilient caching strategy:
+The sweep is the safety net for everything else: an assignment made by hand, a grant whose revocation could not be scheduled, or a scheduled revocation that failed (the one-time schedule deletes itself after firing, and the revoker's async invoke is not retried). In each case access ends at the next sweep at the latest.
 
-1. **Parallel Execution**: Both AWS API and S3 cache are called simultaneously using ThreadPoolExecutor
-2. **API Success Path**: 
-   - If API call succeeds, compare the result with cached data
-   - If data differs, update the cache automatically
-   - Return the fresh API data
-3. **API Failure Path**:
-   - If API call fails but cache has data, return cached data as fallback
-   - Log warning about using cached data
-4. **Both Fail Path**:
-   - If both API and cache fail, raise an exception
+## Outage behaviour
 
-### Benefits
+The requester calls Organizations, IAM Identity Center and the Identity Store on every request. To keep working through throttling or a short outage of those APIs, it caches the account list, the permission set list and the Identity Store user list in the config bucket (`cache_enabled`, on by default):
 
-- **No TTL Management**: Cache is kept indefinitely and updated automatically when data changes
-- **Maximum Resilience**: Always tries API first, falls back to cache on failure
-- **Automatic Updates**: Cache stays fresh without manual intervention
-- **Parallel Performance**: API and cache calls don't block each other
+- Each lookup calls the API and reads the cache in parallel. The API answer wins whenever there is one; the cache is rewritten when the answer differs.
+- If the API fails, the cached copy is used and a warning is logged. If both fail, the request fails.
+- The cache never expires: a stale list is better than none during an outage, and every successful call refreshes it.
+- An empty API answer never overwrites a non-empty cache; an empty account or user list is more likely an API fault than the truth.
+- A cache read that takes longer than 5 seconds is abandoned, so a slow S3 never delays a request whose API call already returned.
+- Cache failures never fail a request; they are logged as warnings (`Failed to get cached ...`, `Failed to cache ...`).
 
-## Implementation Details
+The revoker and attribute-syncer never use the cache: removing access must work from current data, not a snapshot.
 
-### Infrastructure Changes
+Other dependencies, and what an outage of each does:
 
-1. **S3 Bucket** (`s3.tf`):
-   - Uses the same `fivexl/account-baseline/aws//modules/s3_baseline` module as the audit bucket
-   - Bucket name: Configurable via `config_bucket_name` variable (default: `sso-elevator-config`)
-   - Cache structure:
-     - `accounts.json` - stores all accounts
-     - `permission_sets/<arn_hash>.json` - stores permission sets per SSO instance
-   - No TTL metadata - cache is kept indefinitely
-   - **Security Features**:
-     - Server-side encryption enabled (AES256 by default, KMS optional via `config_bucket_kms_key_arn`)
-     - Public access blocked (via s3_baseline module)
-     - Versioning enabled
-     - Lifecycle policy to clean up old versions after 7 days
-   - **Note**: The bucket is always created (not conditional) as it's intended for future config storage even when caching is disabled
-
-2. **Variables** (`vars.tf`):
-   - `config_bucket_name`: Name of the S3 bucket (default: `sso-elevator-config`)
-   - `cache_enabled`: Enable/disable caching (default: `true`)
-   - `config_bucket_kms_key_arn`: Optional ARN of a customer-managed KMS key for encryption (default: null)
-   - Variables are passed to Lambda functions as environment variables
-
-3. **IAM Permissions**:
-   - S3 permissions added to the requester Lambda function:
-     - `s3:GetObject`
-     - `s3:PutObject`
-     - `s3:ListBucket`
-   - Note: The revoker Lambda does NOT use cache and does not have these permissions
-
-4. **Outputs** (`outputs.tf`):
-   - `config_s3_bucket_name`: The name of the config S3 bucket
-   - `config_s3_bucket_arn`: The ARN of the config S3 bucket
-
-### Application Changes
-
-1. **Updated Cache Module** (`src/cache.py`):
-   - `CacheConfig`: Configuration class for cache settings (no TTL field)
-   - `get_cached_accounts()`: Retrieve cached accounts from S3
-   - `set_cached_accounts()`: Store accounts in S3 cache
-   - `get_cached_permission_sets()`: Retrieve cached permission sets
-   - `set_cached_permission_sets()`: Store permission sets in cache
-   - `with_cache_resilience()`: New function implementing parallel API/cache strategy with automatic updates
-
-2. **Updated Organizations Module** (`src/organizations.py`):
-   - `list_accounts_with_cache()`: Lists accounts with cache resilience
-   - `get_accounts_from_config_with_cache()`: Gets filtered accounts with cache resilience
-   - Uses parallel API/cache calls with automatic cache updates
-
-3. **Updated SSO Module** (`src/sso.py`):
-   - `list_permission_sets_with_cache()`: Lists permission sets with cache resilience
-   - `get_permission_sets_from_config_with_cache()`: Gets filtered permission sets with cache resilience
-   - `get_account_assignment_information_with_cache()`: Combined function for both cached data
-   - Uses parallel API/cache calls with automatic cache updates
-
-4. **Updated Config** (`src/config.py`):
-   - `config_bucket_name`: S3 bucket name (default: `sso-elevator-config`)
-   - `cache_enabled`: Boolean flag to enable/disable caching (default: `True`)
-   - Removed `cache_ttl_minutes` field
-
-5. **Updated Lambda Handlers**:
-   - `src/main.py`: Updated to use S3 cache for accounts and permission sets
-   - `src/revoker.py`: Does NOT use cache - always fetches fresh data from AWS APIs for accuracy
-
-## Cache Behavior
-
-### Cache Key Structure
-
-The cache uses S3 object keys:
-
-1. **Accounts Cache**:
-   - Key: `accounts.json`
-   - Stores all accounts in a single JSON file
-
-2. **Permission Sets Cache**:
-   - Key: `permission_sets/<arn_hash>.json`
-   - Stores all permission sets for a specific SSO instance
-   - ARN is hashed (colons and slashes replaced with underscores) for safe file naming
-
-### Cache Lifecycle
-
-1. **First Request**: 
-   - API and cache called in parallel
-   - Cache miss (no data)
-   - API succeeds → Store in cache → Return API data
-
-2. **Subsequent Requests (Data Unchanged)**:
-   - API and cache called in parallel
-   - Both succeed
-   - Data matches → No cache update → Return API data
-
-3. **Subsequent Requests (Data Changed)**:
-   - API and cache called in parallel
-   - Both succeed
-   - Data differs → Update cache → Return API data
-
-4. **API Unavailable**:
-   - API and cache called in parallel
-   - API fails, cache succeeds
-   - Return cached data (logged as fallback)
-
-5. **Cache Unavailable**:
-   - API and cache called in parallel
-   - Cache fails, API succeeds
-   - Store in cache → Return API data
-
-### Error Handling
-
-**The cache is designed to be fail-safe:**
-
-- All cache operations are wrapped in try-except blocks
-- **Cache failures NEVER prevent the application from functioning**
-- Warnings are logged when cache operations fail
-- S3 unavailability automatically triggers fallback to direct AWS API calls
-- Application works normally if:
-  - S3 bucket doesn't exist
-  - Bucket name is misconfigured
-  - IAM permissions are missing
-  - S3 service is down
-  
-**Behavior on errors:**
-- **Cache read errors**: Log warning, continue with API data only
-- **Cache write errors**: Log warning, return API data without caching
-- **API errors with cache available**: Log warning, return cached data
-- **Both fail**: Raise exception (application cannot function)
-
-## Configuration
-
-### Default Configuration
-
-Caching is **enabled by default**:
-
-```hcl
-module "aws_sso_elevator" {
-  source = "path/to/module"
-  
-  # Other configuration...
-  
-  # These are the defaults (no need to specify):
-  # cache_enabled          = true
-  # config_bucket_name     = "sso-elevator-config"
-  # config_bucket_kms_key_arn = null  # Uses AES256 encryption
-}
-```
-
-### Disabling Cache
-
-To disable caching (S3 bucket will still be created for future config storage):
-
-```hcl
-module "aws_sso_elevator" {
-  source = "path/to/module"
-  
-  # Other configuration...
-  
-  cache_enabled = false  # Disable caching (bucket still created for future use)
-}
-```
-
-### Custom Bucket Name
-
-To use a custom S3 bucket name:
-
-```hcl
-module "aws_sso_elevator" {
-  source = "path/to/module"
-  
-  # Other configuration...
-  
-  config_bucket_name = "my-custom-sso-elevator-config"
-}
-```
-
-### Custom KMS Key for Encryption
-
-To use a customer-managed KMS key instead of AES256:
-
-```hcl
-module "aws_sso_elevator" {
-  source = "path/to/module"
-  
-  # Other configuration...
-  
-  config_bucket_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
-}
-```
-
-## Monitoring
-
-### CloudWatch Logs
-
-Cache operations are logged with the following patterns:
-
-- `"Retrieved X accounts from cache"`: Accounts retrieved from cache
-- `"Cache miss for accounts"`: No cached accounts found
-- `"Successfully fetched accounts from API"`: API call succeeded
-- `"API call failed for accounts"`: API call failed
-- `"API data differs from cache"`: Cache will be updated
-- `"API data matches cache"`: No cache update needed
-- `"API failed for accounts, using cached data as fallback"`: Using cache due to API failure
-- `"Failed to get cached accounts"`: Error reading from cache
-- `"Failed to cache accounts"`: Error writing to cache
-
-### S3 Metrics
-
-Monitor these CloudWatch metrics for the cache bucket:
-
-- `NumberOfObjects`: Number of cached items
-- `BucketSizeBytes`: Total cache size
-- `AllRequests`: Cache read/write activity
-
-## Security Considerations
-
-1. **Data Sensitivity**: Cache contains account IDs, names, and permission set information
-2. **Encryption**: 
-   - Server-side encryption is **enabled by default** using AES256
-   - Optional customer-managed KMS key support via `cache_kms_key_arn` variable
-   - Encryption at rest is always active
-3. **Access Control**: IAM permissions limit cache access to Lambda functions only
-4. **Public Access**: All public access is blocked by default
-5. **Versioning**: Enabled to protect against accidental overwrites
-6. **No Expiration**: Cache is kept indefinitely and updated automatically when data changes
-
-## Performance Impact
-
-- **Parallel Calls**: API and cache calls execute simultaneously (~50-100ms for cache)
-- **Cache Hit + API Success**: Same latency as API-only (cache runs in parallel)
-- **API Failure with Cache**: ~50-100ms (S3 GetObject latency)
-- **Cost**: S3 charges apply (~$0.005 per 1,000 GET requests, ~$0.005 per 1,000 PUT requests)
-
-## Backward Compatibility
-
-- Existing deployments will need to update their Terraform configuration
-- The variable `cache_ttl_minutes` has been removed and replaced with `cache_enabled`
-- Cache behavior has changed from TTL-based to automatic update-based
-- No data migration is needed as the cache will refresh automatically
-
-## Migration from TTL-Based Cache
-
-If you're migrating from the TTL-based cache:
-
-1. Update your Terraform configuration to remove `cache_ttl_minutes` and use `cache_enabled` instead
-2. Apply the Terraform changes
-3. The cache will continue to work with the new strategy
-4. No manual intervention needed
-
-## Testing Recommendations
-
-### Integration Testing
-
-1. **Test Normal Operation**: Submit access request → Verify both API and cache are called
-2. **Test Cache Update**: Change AWS data → Submit request → Verify cache is updated
-3. **Test API Fallback**: Temporarily block API access → Verify cached data is used
-4. **Test Cache Disabled**: Set `cache_enabled = false` → Verify normal operation (no S3 calls)
-5. **Test Missing Permissions**: Temporarily remove S3 IAM permissions → Verify graceful fallback to API
-
-## Troubleshooting
-
-### "Failed to get cached accounts" warnings
-
-**Important:** These warnings do not break functionality. The application will continue to work using API data.
-
-Common causes:
-- S3 bucket doesn't exist (check Terraform deployment)
-- Wrong bucket name (verify `config_bucket_name` matches between Terraform and Lambda environment variables)
-- Lambda IAM permissions missing S3 read access
-
-**How to diagnose:**
-1. Check CloudWatch Logs for the full error message
-2. Verify the bucket exists: `aws s3 ls s3://sso-elevator-config-<random-suffix>`
-3. Confirm bucket name environment variable: Check Lambda configuration `CONFIG_BUCKET_NAME`
-4. Verify IAM permissions include `s3:GetObject`, `s3:ListBucket`
-
-### "Failed to cache accounts" warnings
-
-**Important:** These warnings do not break functionality. The application will continue to work with API data.
-
-Common causes:
-- S3 bucket doesn't exist
-- Wrong bucket name configuration
-- Lambda IAM permissions missing S3 write access
-
-**How to diagnose:**
-1. Check CloudWatch Logs for detailed error messages
-2. Verify IAM permissions include `s3:PutObject`
-
-### "API failed, using cached data as fallback"
-
-This is expected behavior when AWS APIs are unavailable. The application is working correctly by using cached data.
-
-### Cache not updating
-
-If you notice the cache isn't updating when AWS data changes:
-1. Check CloudWatch Logs for cache write errors
-2. Verify S3 permissions include `s3:PutObject`
-3. Check if data comparison is working correctly (logs will show "API data differs from cache")
+- **Config bucket, at cold start.** The requester and revoker read the approval rules when they start (or, with SnapStart, after each restore). If the read fails, the Lambda fails to start rather than run with no rules. Warm environments keep working.
+- **SSM or Slack, at requester cold start.** The requester reads both Slack secrets and calls Slack's `auth.test` before serving anything, so CLI requests fail too while Slack is unreachable for a cold start. The revoker and attribute-syncer read the bot token per invocation and carry on without Slack if it fails: access is still removed.
+- **Audit bucket.** Audit writes never block a grant's scheduling or a revocation; lost entries go to the Lambda's CloudWatch logs. See [audit.md](audit.md) and [accepted risks](accepted-risks.md#an-s3-outage-loses-audit-records-from-the-bucket).
+- **EventBridge Scheduler.** If the revocation schedule cannot be created after the grant, the request is reported as failed in Slack, an `incomplete` audit entry names the failed step, and the nightly sweep removes the access.
