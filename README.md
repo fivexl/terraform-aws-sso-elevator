@@ -346,11 +346,11 @@ The same behavior applies to group-level assignments: if you specify a group in 
 
 # Upgrade from 5.0.x
 
-[SnapStart](#snapstart) is on by default (`snap_start = true`), so the first Slack click after idle no longer times out.
+[SnapStart](#snapstart) is on by default (`snap_start = true`).
 
-1. Check that Lambda offers SnapStart for Python 3.14 in your region, for your package type (zip, or the container image when `use_pre_created_image = true`). Where it doesn't, set `snap_start = false`: the apply fails rather than falling back.
-2. Run `terraform apply`. It publishes a SnapStart version of the requester and moves `live` to it, which takes a few minutes longer than before while Lambda takes the snapshot.
-3. The revoker now deletes old requester versions in its nightly run, keeping the version `live` points to and one Active version below it for rollback. Its role gets `lambda:ListVersionsByFunction` and `lambda:GetAlias` on the requester, and `lambda:GetFunctionConfiguration` and `lambda:DeleteFunction` on its versions only. Versions published by 5.0.x go on the first nightly run.
+1. Where Lambda doesn't offer SnapStart for your region and package type, set `snap_start = false` (see `snap_start` in [Inputs](#inputs)).
+2. Run `terraform apply`. It publishes a SnapStart version of the requester and moves `live` to it; this apply takes a few extra minutes while Lambda takes the snapshot.
+3. The revoker's first nightly run deletes the requester versions published by 5.0.x (see [SnapStart](#snapstart)).
 
 # Upgrade to 5.0.0
 
@@ -529,13 +529,13 @@ Each apply that changes the Lambda publishes a new version and moves `live` to i
 Stage access logs are off by default. `api_gateway_access_logs_enabled = true` creates a log group and turns them on. REST API logging needs the account-wide API Gateway CloudWatch Logs role (`aws_api_gateway_account`) to be set already, or the apply fails. The module does not set it, because other APIs in the account may depend on its current value.
 
 ## SnapStart
-Slack drops a request the Lambda hasn't answered within 3 seconds, and a cold start of the requester (imports, approval config from S3, both Slack secrets, Slack's `auth.test`) used to take most of that. With `snap_start = true` (the default) Lambda takes a snapshot of the initialized requester when Terraform publishes a version, and new execution environments start from it.
+Slack drops a request the Lambda hasn't answered within 3 seconds, and a cold start of the requester spends most of that on imports, the approval config from S3, both Slack secrets and Slack's `auth.test`. With `snap_start = true` (the default) Lambda takes a snapshot of the initialized requester when Terraform publishes a version, and new execution environments start from it.
 
-The snapshot holds no approval config and no Slack secrets. They are read after each restore, in a SnapStart restore hook, so a restored environment is never staler than a cold-started one. If the hook can't read them, Lambda fails the restore and the request errors; it never serves the snapshot's empty config.
+The snapshot holds no approval rules and no Slack secrets. A SnapStart restore hook reads them after each restore, so a restored environment is never staler than a cold-started one. The hook's reads time out within seconds to fit Lambda's restore timeout; if one fails, Lambda fails the restore and the request errors rather than run with the snapshot's empty rules.
 
-Lambda bills SnapStart for Python per cached version and per restore. Each apply that changes the requester publishes a version, so the revoker's nightly run (`schedule_expression`) deletes all but the version `live` points to and one Active version below it, kept for rollback. Versions above `live` are left alone, since one may be mid-publish.
+Lambda bills SnapStart for Python per cached version and per restore. Each apply that changes the requester publishes a version, so the revoker's nightly run (`schedule_expression`) deletes all but the version `live` points to and one Active version below it, kept for rollback. Versions above `live` are left alone, since one may be mid-publish. Pruning runs whatever `snap_start` is set to.
 
-Set `snap_start = false` where Lambda doesn't offer SnapStart for the runtime or package type, or to turn it off for any other reason; the requester then reads everything at cold start, as before.
+With `snap_start = false` the requester reads everything at cold start.
 
 ## AWS WAF
 Optional, off by default. Two modes, which cannot be combined (plan fails if both are set):
@@ -1064,7 +1064,7 @@ settings:
 | <a name="input_slack_bot_token_ssm_parameter_name"></a> [slack\_bot\_token\_ssm\_parameter\_name](#input\_slack\_bot\_token\_ssm\_parameter\_name) | Name of the SSM SecureString parameter holding the Slack bot token, read by every Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see README). | `string` | `"/sso-elevator/slack-bot-token"` | no |
 | <a name="input_slack_channel_id"></a> [slack\_channel\_id](#input\_slack\_channel\_id) | value for the Slack channel ID | `string` | n/a | yes |
 | <a name="input_slack_signing_secret_ssm_parameter_name"></a> [slack\_signing\_secret\_ssm\_parameter\_name](#input\_slack\_signing\_secret\_ssm\_parameter\_name) | Name of the SSM SecureString parameter holding the Slack signing secret, read by the access-requester Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see README). | `string` | `"/sso-elevator/slack-signing-secret"` | no |
-| <a name="input_snap_start"></a> [snap\_start](#input\_snap\_start) | Enable Lambda SnapStart on the requester Lambda, so the first Slack click after idle answers within Slack's 3-second deadline. Applies to both the container image and the zip deployment. Lambda bills snapshot cache per published version; the revoker's nightly run deletes all but the live version and one rollback version. Set false where Lambda doesn't offer SnapStart for this runtime or package type: at the time of writing, container images in Asia Pacific (New Zealand) and Asia Pacific (Taipei). Apply fails rather than degrades there. | `bool` | `true` | no |
+| <a name="input_snap_start"></a> [snap\_start](#input\_snap\_start) | Enable Lambda SnapStart on the requester Lambda (see README "SnapStart"). Set false where Lambda doesn't offer SnapStart for this runtime or package type, since apply fails there: at the time of writing, container images in Asia Pacific (New Zealand) and Asia Pacific (Taipei). | `bool` | `true` | no |
 | <a name="input_sso_instance_arn"></a> [sso\_instance\_arn](#input\_sso\_instance\_arn) | value for the SSO instance ARN | `string` | `""` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | A map of tags to assign to resources. | `map(string)` | `{}` | no |
 | <a name="input_use_pre_created_image"></a> [use\_pre\_created\_image](#input\_use\_pre\_created\_image) | If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code. | `bool` | `true` | no |

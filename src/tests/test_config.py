@@ -265,6 +265,21 @@ def test_config_with_s3_loaded_configuration(mock_s3_client, monkeypatch):
     mock_s3_client.get_object.assert_called_once()
 
 
+@pytest.mark.parametrize(("initialization_type", "boto_config"), [("snap-start", config.FAST_FAIL_BOTO_CONFIG), ("on-demand", None)])
+def test_config_s3_read_fails_fast_only_under_snap_start(mock_s3_client, monkeypatch, initialization_type, boto_config):
+    import boto3
+
+    client_kwargs = []
+    monkeypatch.setattr(boto3, "client", lambda service, **kwargs: client_kwargs.append((service, kwargs)) or mock_s3_client)
+    monkeypatch.setenv("AWS_LAMBDA_INITIALIZATION_TYPE", initialization_type)
+    config_dict = valid_config_dict(secondary_fallback_email_domains_as_json=False, permission_duration_list_override_as_json=False)
+    config_dict["config_s3_key"] = "config/approval-config.json"
+
+    config.Config(**config_dict)
+
+    assert client_kwargs == [("s3", {"config": boto_config})]
+
+
 def test_config_statement_parsing_with_s3(mock_s3_client, monkeypatch):
     """Verify statement parsing still works correctly with S3-loaded data."""
     import boto3

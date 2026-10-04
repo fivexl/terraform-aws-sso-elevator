@@ -487,9 +487,10 @@ def test_prune_skips_conflicting_and_missing_versions(revoker):
     assert _deleted(client) == [3, 2, 1]
 
 
-def test_prune_is_off_without_a_requester_name(revoker):
+@pytest.mark.parametrize(("function_name", "alias_name"), [("", "live"), ("requester", "")])
+def test_prune_is_off_without_a_requester_name_or_alias(revoker, function_name, alias_name):
     client = MagicMock()
-    revoker.prune_requester_versions(client, "", "live")
+    revoker.prune_requester_versions(client, function_name, alias_name)
     client.get_alias.assert_not_called()
 
 

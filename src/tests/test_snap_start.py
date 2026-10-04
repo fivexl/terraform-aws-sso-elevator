@@ -23,7 +23,7 @@ GROUP_ID = "11111111-2222-3333-4444-555555555555"  # conftest's group statement,
 AUTH_TEST = {"ok": True, "team_id": "T1", "user_id": "UBOT", "bot_id": "B1", "team": "t", "user": "bot", "url": "https://x.slack.com/"}
 RESTORED_S3_CONFIG = {
     "statements": [],
-    "group_statements": [{"Resource": [GROUP_ID], "Approvers": ["other@domen.com"]}],
+    "group_statements": [{"Resource": [GROUP_ID], "Approvers": ["email@domen.com"]}],
 }
 
 
@@ -43,7 +43,7 @@ def snap_start(monkeypatch):
         patch("boto3.client", return_value=aws_client),
         patch("sso.describe_sso_instance", return_value=MagicMock(identity_store_id="d-1234")),
         patch.object(config, "load_approval_config_from_s3", side_effect=AssertionError("S3 read during snapshot init")) as load_s3,
-        patch("slack_sdk.WebClient.auth_test", side_effect=AssertionError("Slack call during snapshot init")) as auth_test,
+        patch("slack_sdk.WebClient.auth_test", autospec=True, side_effect=AssertionError("Slack call during snapshot init")) as auth_test,
         patch("snapshot_restore_py.register_after_restore", side_effect=hooks.append),
     ):
         for name in CFG_HOLDERS:
@@ -121,11 +121,33 @@ def test_restore_hook_loads_config_secrets_and_bot_identity_into_shared_objects(
     assert (result.bot_token, result.bot_user_id) == ("xoxb-restored", "UBOT")
 
 
-def test_group_approval_permitted_at_snapshot_time_is_denied_after_rule_change(snap_start):
+def test_snapshot_init_ignores_env_statements(snap_start):
+    # conftest sets STATEMENTS and GROUP_STATEMENTS; the snapshot must not capture them either.
+    from_env = config.Config(config_s3_key="")
+    assert from_env.statements and from_env.group_statements
+    assert snap_start.main.cfg.statements == frozenset()
+    assert snap_start.main.cfg.group_statements == frozenset()
+
+
+def test_group_approval_permitted_under_old_rules_is_denied_after_restore_with_changed_rules(snap_start):
     group = sys.modules["group"]
-    assert _group_approval_permitted(group)  # the rules the snapshot was taken with
-    _restore(snap_start)  # the S3 config now names a different approver
+    assert not _group_approval_permitted(group)  # the snapshot permits nothing
+    _restore(snap_start)
+    assert _group_approval_permitted(group)
+    snap_start.load_s3.return_value = {"statements": [], "group_statements": [{"Resource": [GROUP_ID], "Approvers": ["other@domen.com"]}]}
+    snap_start.hooks[0]()  # a later restore, after the S3 config named a different approver
     assert not _group_approval_permitted(group)
+
+
+def test_restore_hook_reads_with_short_timeouts(snap_start, monkeypatch):
+    main = snap_start.main
+    s3_client_kwargs = []
+    monkeypatch.setattr("boto3.client", lambda service, **kwargs: s3_client_kwargs.append((service, kwargs)) or snap_start.ssm)
+    _restore(snap_start)
+
+    assert s3_client_kwargs == [("s3", {"config": config.FAST_FAIL_BOTO_CONFIG})]
+    assert ((("ssm",), {"config": config.FAST_FAIL_BOTO_CONFIG})) in main.session.client.call_args_list
+    assert snap_start.auth_test.call_args.args[0].timeout == 3  # noqa: PLR2004
 
 
 @pytest.mark.parametrize(
@@ -162,6 +184,13 @@ def test_bolt_uses_secrets_loaded_after_restore(snap_start):
     assert main.app.dispatch(_signed_shortcut("secret-stale")).status == 401
     assert main.app.dispatch(_signed_shortcut("secret-restored")).status == 200
     assert seen == [("xoxb-restored", "UBOT")]
+
+
+def test_request_without_timestamp_header_is_rejected(snap_start):
+    _restore(snap_start)
+    request = _signed_shortcut("secret-restored")
+    del request.headers["x-slack-request-timestamp"]
+    assert snap_start.main.app.dispatch(request).status == 401
 
 
 def test_ssl_check_needs_no_signature(snap_start):

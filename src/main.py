@@ -37,11 +37,9 @@ org_client = session.client("organizations")
 sso_client = session.client("sso-admin")
 identity_store_client = session.client("identitystore")
 s3_client = session.client("s3")
-ssm_client = session.client("ssm", config=config.FAST_FAIL_BOTO_CONFIG)
+ssm_client = session.client("ssm")
 
 cfg = config.get_config()
-
-SLACK_AUTH_TEST_TIMEOUT_SECONDS = 3
 
 
 @dataclass
@@ -59,7 +57,8 @@ slack_auth = SlackAuth()
 
 def verify_slack_signature(req: BoltRequest, resp: BoltResponse, next: Callable) -> BoltResponse:  # noqa: A002, ARG001
     """Bolt's own request verification with the signing secret read at load_slack_auth, not at App()."""
-    timestamp = req.headers.get("x-slack-request-timestamp", [""])[0]
+    # "0", as Bolt's own RequestVerification defaults it: "" would crash int() inside is_valid.
+    timestamp = req.headers.get("x-slack-request-timestamp", ["0"])[0]
     signature = req.headers.get("x-slack-signature", [""])[0]
     if slack_auth.signing_secret and SignatureVerifier(slack_auth.signing_secret).is_valid(req.raw_body, timestamp, signature):
         return next()
@@ -86,11 +85,14 @@ app = App(
 )
 
 
-def load_slack_auth() -> None:
-    """Read both Slack secrets and the bot identity. Raises rather than serving stale or missing ones."""
-    bot_token = config.get_slack_secret(ssm_client, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=False)
-    signing_secret = config.get_slack_secret(ssm_client, config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=False)
-    auth_test = WebClient(token=bot_token, timeout=SLACK_AUTH_TEST_TIMEOUT_SECONDS).auth_test().data
+def load_slack_auth(*, fail_fast: bool) -> None:
+    """Read both Slack secrets and the bot identity. Raises rather than serving stale or missing ones.
+    fail_fast: short timeouts for the restore hook (see config.FAST_FAIL_BOTO_CONFIG)."""
+    ssm = session.client("ssm", config=config.FAST_FAIL_BOTO_CONFIG) if fail_fast else ssm_client
+    bot_token = config.get_slack_secret(ssm, config.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=False)
+    signing_secret = config.get_slack_secret(ssm, config.SLACK_SIGNING_SECRET_PARAMETER_ENV, degrade_on_failure=False)
+    web_client = WebClient(token=bot_token, timeout=3) if fail_fast else WebClient(token=bot_token)
+    auth_test = web_client.auth_test().data
     slack_auth.bot_token, slack_auth.signing_secret, slack_auth.auth_test = bot_token, signing_secret, auth_test
     # The CLI path calls app.client directly, outside Bolt's authorize.
     app.client.token = bot_token
@@ -100,7 +102,7 @@ def restore_after_snapshot() -> None:
     """SnapStart after-restore hook: an exception makes Lambda fail the restore, so a request is
     never served with the snapshot's empty config or secrets."""
     config.refresh_config()
-    load_slack_auth()
+    load_slack_auth(fail_fast=True)
 
 
 if config.is_snap_start_init():
@@ -108,7 +110,7 @@ if config.is_snap_start_init():
 
     register_after_restore(restore_after_snapshot)
 else:
-    load_slack_auth()
+    load_slack_auth(fail_fast=False)
 
 
 # Must match api_resource_path_cli in locals.tf.

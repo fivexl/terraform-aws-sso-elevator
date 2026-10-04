@@ -69,7 +69,7 @@ def main_module():
         patch("boto3._get_default_session") as mock_default_session,
         patch("sso.describe_sso_instance", return_value=MagicMock(identity_store_id="d-1234")),
         patch("slack_bolt.App") as mock_app_cls,
-        patch("slack_sdk.WebClient.auth_test", return_value=MagicMock(data={"ok": True, "bot_id": "B1", "user_id": "UBOT"})),
+        patch("slack_sdk.WebClient.auth_test", autospec=True, return_value=MagicMock(data={"ok": True, "bot_id": "B1", "user_id": "UBOT"})),
     ):
         shared_client = MagicMock()
 
@@ -143,9 +143,13 @@ def test_slack_app_gets_its_secrets_from_ssm(main_module):
     get_parameter_calls = main_module.ssm_client.get_parameter.call_args_list
     assert call(Name="/test/slack-bot-token", WithDecryption=True) in get_parameter_calls
     assert call(Name="/test/slack-signing-secret", WithDecryption=True) in get_parameter_calls
-    # Without SnapStart the secrets load at import, as before; the CLI path's client gets the token too.
     assert main_module.slack_auth.auth_test is not None
-    assert main_module.app.client.token == main_module.slack_auth.bot_token
+
+
+def test_slack_auth_without_snap_start_keeps_default_timeouts(main_module):
+    assert call("ssm") in main_module.session.client.call_args_list
+    assert all("config" not in kwargs for _, kwargs in main_module.session.client.call_args_list)
+    assert main_module.WebClient.auth_test.call_args.args[0].timeout == main_module.WebClient().timeout
 
 
 @pytest.mark.parametrize(
