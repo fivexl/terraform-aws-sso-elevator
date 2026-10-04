@@ -64,11 +64,11 @@ def test_extract_identity_accepts_caller_from_another_account(mock_find_email_by
 
 
 @pytest.mark.parametrize("partition", ["aws-us-gov", "aws-cn"])
-def test_extract_identity_accepts_other_partitions(partition, mock_find_email_by_username):
-    mock_find_email_by_username.return_value = ("requester@example.com", "u-1")
+def test_extract_identity_rejects_other_partitions(partition, mock_find_email_by_username):
     arn = EMAIL_ARN.replace("arn:aws:", f"arn:{partition}:")
 
-    assert extract_identity(arn) == ("requester@example.com", "u-1", {"Users": []})
+    assert extract_identity(arn) is None
+    mock_find_email_by_username.assert_not_called()
 
 
 def test_extract_identity_accepts_ad_style_username_with_no_at_sign(mock_find_email_by_username):
@@ -80,6 +80,12 @@ def test_extract_identity_accepts_ad_style_username_with_no_at_sign(mock_find_em
 
 def test_extract_identity_rejects_session_name_matching_no_user():
     assert extract_identity(UNMATCHED_SESSION_ARN) is None
+
+
+def test_extract_identity_rejects_username_shared_by_two_users(mock_find_email_by_username):
+    mock_find_email_by_username.side_effect = cli_auth.errors.AmbiguousSSOUser("duplicate")
+
+    assert extract_identity(EMAIL_ARN) is None
 
 
 @pytest.mark.parametrize("arn", [NON_SSO_ROLE_ARN, LOOKALIKE_PREFIX_ARN, NOT_ASSUMED_ROLE_ARN, ""])

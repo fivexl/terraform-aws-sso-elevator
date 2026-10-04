@@ -28,7 +28,7 @@ locals {
   # Must match main.py's CLI_ACCESS_REQUEST_PATH.
   api_resource_path_cli = "/access-requester-cli"
 
-  create_cli_rest_api = var.create_api_gateway && var.enable_access_requester_cli
+  create_cli_rest_api = var.enable_access_requester_cli
 
   # Attribute sync configuration
   attribute_sync_event_rule_name = var.attribute_sync_event_rule_name

@@ -1,4 +1,3 @@
-import base64
 import json
 import re
 from datetime import timedelta
@@ -101,19 +100,13 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             )
             return cli_auth.GENERIC_REJECTION
 
-        logger.info("Authorizer IAM userArn", extra={"user_arn": user_arn})
+        logger.info("CLI caller userArn", extra={"user_arn": user_arn})
 
         # Validate the body before extract_identity: its Identity Store scan is the most expensive
         # call here, and any signer could otherwise drive it with garbage payloads.
         try:
-            # The CLI REST API sets no binary_media_types, so API Gateway
-            # sends isBase64Encoded false and this branch shouldn't trigger.
-            # Honoring the flag keeps an encoded body from reading as bad JSON.
-            raw_body = event.get("body") or "{}"
-            if event.get("isBase64Encoded"):
-                raw_body = base64.b64decode(raw_body).decode("utf-8")
-            body = json.loads(raw_body)
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            body = json.loads(event.get("body") or "{}")
+        except json.JSONDecodeError:
             return {
                 "statusCode": 400,
                 "headers": {"content-type": "application/json"},

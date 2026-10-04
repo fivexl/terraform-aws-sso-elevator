@@ -460,47 +460,6 @@ def test_handle_cli_access_request_rejects_malformed_body_without_resolving_iden
     assert result["statusCode"] == 400
 
 
-def test_handle_cli_access_request_decodes_a_base64_encoded_body(main_module):
-    """The CLI REST API sets no binary_media_types, so API Gateway sends isBase64Encoded false.
-    If the flag is set anyway, the body is decoded before JSON parsing."""
-    import base64
-
-    raw_json = json.dumps({"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
-    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
-    event["body"] = base64.b64encode(raw_json.encode("utf-8")).decode("ascii")
-    event["isBase64Encoded"] = True
-
-    with patch.object(
-        main_module.cli_auth, "extract_identity", side_effect=RuntimeError("stop-here-deliberately")
-    ) as mock_extract_identity:
-        result = main_module.handle_cli_access_request(event)
-
-    # Reaching extract_identity at all proves the base64 body decoded into
-    # valid JSON that passed the account/permission_set/reason checks --
-    # a body that was never decoded would have failed JSON parsing first
-    # and never gotten this far. (The RuntimeError above is deliberately
-    # unrelated to base64/JSON, just a way to stop execution right at that
-    # point without needing to mock everything downstream of it too; it
-    # surfaces as the generic 500 handler's response, not a decode failure.)
-    mock_extract_identity.assert_called_once()
-    assert result["statusCode"] == 500  # noqa: PLR2004
-
-
-def test_handle_cli_access_request_rejects_undecodable_base64_body(main_module):
-    """Companion to the test above: isBase64Encoded=True with a body that
-    isn't valid base64 at all must still be rejected as a clean 400, not an
-    unhandled exception."""
-    event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
-    event["body"] = "not valid base64!!!"
-    event["isBase64Encoded"] = True
-
-    with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
-        result = main_module.handle_cli_access_request(event)
-
-    mock_extract_identity.assert_not_called()
-    assert result["statusCode"] == 400  # noqa: PLR2004
-
-
 def test_handle_cli_access_request_rejects_oversized_reason(main_module):
     """Slack's section-block text fields cap at 2000 chars; an oversized
     reason used to reach chat_postMessage unbounded, get rejected with
@@ -944,6 +903,28 @@ def test_handle_cli_access_request_rejects_verified_identity_with_no_slack_accou
             "get_user_by_email",
             side_effect=slack_sdk.errors.SlackApiError("users_not_found", {"ok": False, "error": "users_not_found"}),
         ),
+        patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result == main_module.cli_auth.GENERIC_REJECTION
+    mock_post_message.assert_not_called()
+
+
+def test_handle_cli_access_request_rejects_duplicate_username_generically(main_module):
+    """Two Identity Store users sharing the session's UserName get the generic rejection, not a 500."""
+    duplicate_users = {
+        "Users": [
+            {"UserId": "u-1", "UserName": "req@example.com", "Emails": [{"Value": "a@example.com", "Primary": True}]},
+            {"UserId": "u-2", "UserName": "req@example.com", "Emails": [{"Value": "b@example.com", "Primary": True}]},
+        ]
+    }
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "FullOrgAdmin", "reason": "debugging", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
+    )
+    with (
+        patch.object(main_module.cli_auth.sso, "list_users_with_cache", return_value=duplicate_users),
         patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
     ):
         result = main_module.handle_cli_access_request(event)

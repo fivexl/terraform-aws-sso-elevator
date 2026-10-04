@@ -11,16 +11,16 @@ from typing import TYPE_CHECKING
 import botocore.exceptions
 
 import config
+import errors
 import sso
+
+logger = config.get_logger(service="cli_auth")
 
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
     from mypy_boto3_s3 import S3Client
 
-# Matches all three real AWS partitions (aws, aws-cn, aws-us-gov) -- a
-# hardcoded "aws" would reject every request outside the standard partition
-# with the same generic message a genuinely invalid ARN gets.
-_ASSUMED_ROLE_ARN_RE = re.compile(r"arn:(?:aws|aws-cn|aws-us-gov):sts::\d{12}:assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)")
+_ASSUMED_ROLE_ARN_RE = re.compile(r"arn:aws:sts::\d{12}:assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)")
 
 # IAM reserves this role-name prefix for IAM Identity Center in every account (README "CLI tool").
 SSO_ROLE_NAME_PREFIX = "AWSReservedSSO_"
@@ -67,7 +67,13 @@ def extract_identity(
         raise
     except botocore.exceptions.BotoCoreError as e:
         raise TransientIdentityStoreError from e
-    found = sso.find_email_by_username(list_of_users, match["session_name"])
+    try:
+        found = sso.find_email_by_username(list_of_users, match["session_name"])
+    except errors.AmbiguousSSOUser:
+        logger.warning(
+            "Rejected CLI request: session name matches more than one Identity Store user", extra={"session_name": match["session_name"]}
+        )
+        return None
     if found is None:
         return None
     email, user_id = found

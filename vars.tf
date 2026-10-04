@@ -469,7 +469,12 @@ variable "identity_store_id" {
 # ==========================================
 
 variable "enable_access_requester_cli" {
-  description = "If true (and create_api_gateway is also true), creates a separate REST API with a POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Off by default so upgrading an existing deployment doesn't silently add a new AWS_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it."
+  description = "If true, creates a separate REST API with a POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Requires create_api_gateway = true. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Off by default so upgrading an existing deployment doesn't silently add a new AWS_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it."
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.enable_access_requester_cli || var.create_api_gateway
+    error_message = "enable_access_requester_cli = true requires create_api_gateway = true."
+  }
 }
