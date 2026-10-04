@@ -10,7 +10,7 @@ import s3
 import schedule
 import sso
 from entities import BaseModel
-from errors import PostGrantError
+from errors import AuditWriteError, PostGrantError
 from events import GroupRevokeEvent, RevokeEvent
 from statement import GroupStatement, Statement, get_affected_group_statements, get_affected_statements, requester_allowed
 
@@ -379,9 +379,9 @@ def execute_decision(  # noqa: PLR0913
 ) -> list[RevokeEvent | GroupRevokeEvent] | None:
     """Grants the access. Returns None when the decision grants nothing (auditing a
     denial that ends the request as "declined"), else the revoke events of earlier
-    requests this grant replaced. Any failure is audited as "incomplete" and re-raised;
-    PostGrantError when the assignment exists but recording it or scheduling its
-    revocation failed."""
+    requests this grant replaced. Any failure is audited as "incomplete" and re-raised:
+    PostGrantError when the assignment exists but scheduling its revocation failed,
+    AuditWriteError when it is scheduled but the grant audit write failed."""
     logger.info("Executing decision")
     if not decision.grant:
         if _ends_request(decision):
@@ -414,6 +414,30 @@ def execute_decision(  # noqa: PLR0913
     role_name = permission_set_name
     secondary_domain_was_used = False
     failed_step = ""
+    audit_error = None
+
+    def log_incomplete(error_message: str) -> None:
+        s3.log_operation_best_effort(
+            s3.AuditEntry(
+                account_id=account_id,
+                role_name=role_name,
+                reason=reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                request_id=request_id,
+                operation_type="incomplete",
+                permission_duration=permission_duration,
+                sso_user_principal_id=sso_user_principal_id,
+                audit_entry_type="account",
+                secondary_domain_was_used=secondary_domain_was_used,
+                request_source=request_source,
+                verified_arn=verified_arn,
+                error_message=error_message,
+            )
+        )
+
     try:
         sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
         permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
@@ -459,9 +483,9 @@ def execute_decision(  # noqa: PLR0913
         )
         request_id = account_assignment_status.request_id
 
-        failed_step = "granted but grant audit write failed: "
-        s3.log_operation(
-            audit_entry=s3.AuditEntry(
+        # A failed audit write must not cost the revocation schedule (#238); CloudWatch keeps the entry.
+        audit_error = s3.log_operation_best_effort(
+            s3.AuditEntry(
                 account_id=account_id,
                 role_name=permission_set.name,
                 reason=reason,
@@ -480,8 +504,8 @@ def execute_decision(  # noqa: PLR0913
             ),
         )
 
-        failed_step = "granted but revoke scheduling failed: "
-        return schedule.schedule_revoke_event(
+        failed_step = _scheduling_failed_step(audit_error)
+        replaced = schedule.schedule_revoke_event(
             permission_duration=permission_duration,
             schedule_client=schedule_client,
             approver=approver,
@@ -494,30 +518,26 @@ def execute_decision(  # noqa: PLR0913
         if sso.is_grant_conflict(e):
             # A racing click's grant owns this request and writes its own audit entry (#212).
             raise
-        s3.log_operation_best_effort(
-            s3.AuditEntry(
-                account_id=account_id,
-                role_name=role_name,
-                reason=reason,
-                requester_slack_id=requester.id,
-                requester_email=requester.email,
-                approver_slack_id=approver.id,
-                approver_email=approver.email,
-                request_id=request_id,
-                operation_type="incomplete",
-                permission_duration=permission_duration,
-                sso_user_principal_id=sso_user_principal_id,
-                audit_entry_type="account",
-                secondary_domain_was_used=secondary_domain_was_used,
-                request_source=request_source,
-                verified_arn=verified_arn,
-                error_message=f"{failed_step}{e}",
-            )
-        )
-        # Once access is live the failure is a PostGrantError, which callers show differently.
-        if failed_step and not isinstance(e, PostGrantError):
-            raise PostGrantError(str(e)) from e
+        log_incomplete(f"{failed_step}{e}")
+        if failed_step and (audit_error or not isinstance(e, PostGrantError)):
+            raise _post_grant_error(e, audit_error) from e
         raise
+    if audit_error:
+        log_incomplete(f"granted but grant audit write failed: {audit_error}")
+        raise AuditWriteError(str(audit_error), replaced) from audit_error
+    return replaced
+
+
+def _scheduling_failed_step(audit_error: Exception | None) -> str:
+    if audit_error:
+        return f"granted but grant audit write failed: {audit_error}; revoke scheduling failed: "
+    return "granted but revoke scheduling failed: "
+
+
+def _post_grant_error(e: Exception, audit_error: Exception | None) -> PostGrantError:
+    # Once access is live the failure is a PostGrantError, which callers show differently.
+    also = f"; the grant audit record could not be written either: {audit_error}" if audit_error else ""
+    return PostGrantError(f"{e}{also}", getattr(e, "replaced", None))
 
 
 def execute_decision_on_group_request(  # noqa: PLR0913
@@ -560,6 +580,28 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     membership_id = "NA"
     secondary_domain_was_used = False
     failed_step = ""
+    audit_error = None
+
+    def log_incomplete(error_message: str) -> None:
+        s3.log_operation_best_effort(
+            s3.AuditEntry(
+                group_name=group.name,
+                group_id=group.id,
+                group_membership_id=membership_id or "NA",
+                reason=reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="incomplete",
+                permission_duration=permission_duration,
+                sso_user_principal_id=sso_user_principal_id,
+                audit_entry_type="group",
+                secondary_domain_was_used=secondary_domain_was_used,
+                error_message=error_message,
+            )
+        )
+
     try:
         sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
             identity_store_client=identitystore_client,
@@ -586,9 +628,8 @@ def execute_decision_on_group_request(  # noqa: PLR0913
                 "User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
             )
 
-        failed_step = "granted but grant audit write failed: "
-        s3.log_operation(
-            audit_entry=s3.AuditEntry(
+        audit_error = s3.log_operation_best_effort(
+            s3.AuditEntry(
                 group_name=group.name,
                 group_id=group.id,
                 group_membership_id=membership_id,
@@ -605,8 +646,8 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             ),
         )
 
-        failed_step = "granted but revoke scheduling failed: "
-        return schedule.schedule_group_revoke_event(
+        failed_step = _scheduling_failed_step(audit_error)
+        replaced = schedule.schedule_group_revoke_event(
             permission_duration=permission_duration,
             schedule_client=schedule_client,
             approver=approver,
@@ -624,25 +665,11 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     except Exception as e:
         if sso.is_grant_conflict(e):
             raise  # As in execute_decision: the racing click audits its own grant.
-        s3.log_operation_best_effort(
-            s3.AuditEntry(
-                group_name=group.name,
-                group_id=group.id,
-                group_membership_id=membership_id or "NA",
-                reason=reason,
-                requester_slack_id=requester.id,
-                requester_email=requester.email,
-                approver_slack_id=approver.id,
-                approver_email=approver.email,
-                operation_type="incomplete",
-                permission_duration=permission_duration,
-                sso_user_principal_id=sso_user_principal_id,
-                audit_entry_type="group",
-                secondary_domain_was_used=secondary_domain_was_used,
-                error_message=f"{failed_step}{e}",
-            )
-        )
-        # Once access is live the failure is a PostGrantError, which callers show differently.
-        if failed_step and not isinstance(e, PostGrantError):
-            raise PostGrantError(str(e)) from e
+        log_incomplete(f"{failed_step}{e}")
+        if failed_step and (audit_error or not isinstance(e, PostGrantError)):
+            raise _post_grant_error(e, audit_error) from e
         raise
+    if audit_error:
+        log_incomplete(f"granted but grant audit write failed: {audit_error}")
+        raise AuditWriteError(str(audit_error), replaced) from audit_error
+    return replaced

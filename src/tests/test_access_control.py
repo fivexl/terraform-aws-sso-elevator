@@ -2,7 +2,7 @@ import datetime
 import json
 from contextlib import ExitStack
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import botocore.exceptions
 import pytest
@@ -1580,21 +1580,6 @@ def test_execute_decision_logs_grant_then_incomplete_when_revoke_scheduling_fail
     assert entries[1].error_message == "granted but revoke scheduling failed: scheduler throttled"
 
 
-def test_execute_decision_reraises_grant_audit_failure_even_if_incomplete_write_fails(execute_decision_info, account_grant_mocks):
-    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
-    account_grant_mocks["log_operation"].side_effect = [RuntimeError("s3 down on grant"), RuntimeError("s3 down on incomplete")]
-
-    with pytest.raises(access_control.PostGrantError, match="s3 down on grant"):
-        execute_decision(decision=decision, **execute_decision_info)
-
-    entries = [c.kwargs["audit_entry"] for c in account_grant_mocks["log_operation"].call_args_list]
-    assert [e.operation_type for e in entries] == ["grant", "incomplete"]
-    assert entries[1].request_id == "req-1"
-    assert entries[1].error_message == "granted but grant audit write failed: s3 down on grant"
-    # Scheduling despite a failed grant audit write is deferred to issue #238.
-    account_grant_mocks["schedule_revoke_event"].assert_not_called()
-
-
 @pytest.mark.parametrize("denial_reason", TERMINAL_DENIAL_REASONS)
 def test_execute_decision_on_group_request_logs_declined_entry_for_terminal_denial_reasons(denial_reason):
     """Group mirror of the account auto-deny test."""
@@ -1664,18 +1649,87 @@ def test_execute_decision_on_group_request_logs_grant_then_incomplete_when_revok
     assert entries[1].error_message == "granted but revoke scheduling failed: scheduler throttled"
 
 
-def test_execute_decision_on_group_request_reraises_grant_audit_failure_even_if_incomplete_write_fails(group_grant_mocks):
+@pytest.fixture(params=["account", "group"])
+def grant_path(request, execute_decision_info):
+    """Account or group grant: its audit and schedule mocks, and a function that runs it."""
     decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
-    group_grant_mocks["log_operation"].side_effect = [RuntimeError("s3 down on grant"), RuntimeError("s3 down on incomplete")]
+    if request.param == "account":
+        mocks = request.getfixturevalue("account_grant_mocks")
+        return SimpleNamespace(
+            log=mocks["log_operation"],
+            schedule=mocks["schedule_revoke_event"],
+            run=lambda: execute_decision(decision=decision, **execute_decision_info),
+        )
+    mocks = request.getfixturevalue("group_grant_mocks")
+    return SimpleNamespace(log=mocks["log_operation"], schedule=mocks["schedule_group_revoke_event"], run=lambda: _execute_group(decision))
 
-    with pytest.raises(access_control.PostGrantError, match="s3 down on grant"):
-        _execute_group(decision)
 
-    entries = [c.kwargs["audit_entry"] for c in group_grant_mocks["log_operation"].call_args_list]
+@pytest.mark.parametrize("incomplete_write_fails", [False, True])
+def test_grant_audit_failure_still_schedules_the_revocation(grant_path, incomplete_write_fails):
+    """#238: an S3 failure costs the audit record, never the expiry; the grant stays (fail-open)."""
+    old_event = object()
+    grant_path.schedule.return_value = [old_event]
+    grant_path.log.side_effect = [RuntimeError("s3 down on grant"), RuntimeError("s3 down") if incomplete_write_fails else None]
+    calls = MagicMock()
+    calls.attach_mock(grant_path.log, "audit")
+    calls.attach_mock(grant_path.schedule, "schedule")
+
+    with (
+        patch.object(access_control.sso, "delete_account_assignment_and_wait_for_result") as mock_delete_assignment,
+        patch.object(access_control.sso, "remove_user_from_group") as mock_remove_from_group,
+        pytest.raises(access_control.AuditWriteError) as raised,
+    ):
+        grant_path.run()
+
+    assert not isinstance(raised.value, access_control.PostGrantError)
+    assert str(raised.value) == "s3 down on grant"
+    assert raised.value.replaced == [old_event]
+    assert [c[0] for c in calls.mock_calls] == ["audit", "schedule", "audit"]
+    entries = [c.kwargs["audit_entry"] for c in grant_path.log.call_args_list]
     assert [e.operation_type for e in entries] == ["grant", "incomplete"]
-    assert entries[1].group_membership_id == "m-1"
     assert entries[1].error_message == "granted but grant audit write failed: s3 down on grant"
-    group_grant_mocks["schedule_group_revoke_event"].assert_not_called()
+    mock_delete_assignment.assert_not_called()
+    mock_remove_from_group.assert_not_called()
+
+
+def test_grant_audit_and_scheduling_failures_report_one_post_grant_error_naming_both(grant_path):
+    old_event = object()
+    grant_path.log.side_effect = [RuntimeError("s3 down on grant"), None]
+    grant_path.schedule.side_effect = access_control.PostGrantError("scheduler throttled", [old_event])
+
+    with pytest.raises(access_control.PostGrantError) as raised:
+        grant_path.run()
+
+    assert str(raised.value) == "scheduler throttled; the grant audit record could not be written either: s3 down on grant"
+    assert raised.value.replaced == [old_event]
+    entries = [c.kwargs["audit_entry"] for c in grant_path.log.call_args_list]
+    assert [e.operation_type for e in entries] == ["grant", "incomplete"]
+    both = "granted but grant audit write failed: s3 down on grant; revoke scheduling failed: scheduler throttled"
+    assert entries[1].error_message == both
+
+
+def test_audit_s3_client_is_bounded_well_inside_the_lambda_timeout():
+    client_config = access_control.s3.s3.meta.config
+    assert (client_config.connect_timeout, client_config.read_timeout) == (2, 3)
+    assert client_config.retries == {"mode": "standard", "total_max_attempts": 2}
+
+
+def test_best_effort_audit_failure_logs_the_full_entry():
+    """CloudWatch is the only record of an entry S3 rejected."""
+    entry = access_control.s3.AuditEntry(
+        reason="r", operation_type="revoke", permission_duration="NA", sso_user_principal_id="u-1", audit_entry_type="account"
+    )
+    with (
+        patch.object(access_control.s3, "log_operation", side_effect=RuntimeError("s3 down")),
+        patch.object(access_control.s3, "logger") as mock_logger,
+    ):
+        error = access_control.s3.log_operation_best_effort(entry)
+
+    assert str(error) == "s3 down"
+    logged = mock_logger.exception.call_args.kwargs["extra"]["audit_entry"]
+    assert logged["sso_user_principal_id"] == "u-1"
+    assert logged["operation_type"] == "revoke"
+    assert "timestamp" in logged
 
 
 def test_log_operation_serializes_schema_version_and_new_fields():

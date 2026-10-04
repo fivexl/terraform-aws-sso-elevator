@@ -67,6 +67,7 @@ def test_account_revocation_loop_continues_after_slack_failure(revoker):
             org_client=MagicMock(),
             slack_client=slack_client,
             identitystore_client=MagicMock(),
+            sweep_audit=revoker.SweepAudit(),
         )
 
     assert [c.args[1].account_id for c in mock_delete.call_args_list] == ["111111111111", "222222222222"]
@@ -89,15 +90,131 @@ def test_group_revocation_loop_continues_after_slack_failure(revoker):
         patch.object(revoker.slack_helpers, "create_slack_mention_by_principal_id", return_value="@u"),
     ):
         revoker.handle_sso_elevator_group_scheduled_revocation(
-            identity_store_client=MagicMock(),
+            identitystore_client=MagicMock(),
             sso_client=MagicMock(),
             scheduler_client=MagicMock(),
             cfg=MagicMock(post_update_to_slack=True),
             slack_client=slack_client,
+            sweep_audit=revoker.SweepAudit(),
         )
 
     assert [c.args[1] for c in mock_remove.call_args_list] == ["m-1", "m-2"]
     assert slack_client.chat_postMessage.call_count == 2
+
+
+def test_group_sweep_uses_the_identitystore_client_it_is_passed(revoker):
+    """#224: the parameter used to be named apart from the module global, which silently won."""
+    assignment = sso.GroupAssignment(group_name="g", group_id="g-1", user_principal_id="u", membership_id="m-1", identity_store_id="d-1")
+    passed_client = MagicMock()
+    with (
+        patch.object(revoker, "identitystore_client", MagicMock()) as global_client,
+        patch.object(revoker.sso, "describe_sso_instance", return_value=MagicMock(identity_store_id="d-1")),
+        patch.object(revoker.schedule, "get_scheduled_events", return_value=[]),
+        patch.object(revoker.sso, "get_group_assignments", return_value=[assignment]) as mock_enumerate,
+        patch.object(revoker.s3, "log_operation"),
+        patch.object(revoker, "slack_notify_user_on_group_access_revoke") as mock_notify,
+    ):
+        revoker.handle_sso_elevator_group_scheduled_revocation(
+            identitystore_client=passed_client,
+            sso_client=MagicMock(),
+            scheduler_client=MagicMock(),
+            cfg=MagicMock(post_update_to_slack=True),
+            slack_client=MagicMock(),
+            sweep_audit=revoker.SweepAudit(),
+        )
+
+    assert mock_enumerate.call_args.args[1] is passed_client
+    passed_client.delete_group_membership.assert_called_once_with(IdentityStoreId="d-1", MembershipId="m-1")
+    assert mock_notify.call_args.kwargs["identitystore_client"] is passed_client
+    assert global_client.mock_calls == []
+
+
+def _sweep(revoker, log_operation, slack_client=None):  # noqa: ANN001, ANN202
+    """Runs one SSOElevatorScheduledRevocation invocation over two group and two account assignments."""
+    groups = [
+        sso.GroupAssignment(group_name="g", group_id="g-1", user_principal_id="u", membership_id=m, identity_store_id="d-1")
+        for m in ("m-1", "m-2")
+    ]
+    accounts = [
+        sso.AccountAssignment(account_id=account_id, permission_set_arn="ps", principal_id="u", principal_type="USER")
+        for account_id in ("111111111111", "222222222222")
+    ]
+    with (
+        patch.object(revoker.config, "get_slack_secret", return_value="xoxb"),
+        patch.object(revoker.slack_sdk, "WebClient", return_value=slack_client or MagicMock()),
+        patch.object(revoker.sso, "describe_sso_instance", return_value=MagicMock(identity_store_id="d-1", arn="arn:instance")),
+        patch.object(revoker.schedule, "get_scheduled_events", return_value=[]),
+        patch.object(revoker.sso, "get_group_assignments", return_value=groups),
+        patch.object(revoker.sso, "get_account_assignment_information", return_value=accounts),
+        patch.object(revoker.sso, "remove_user_from_group") as mock_remove,
+        patch.object(revoker.sso, "delete_account_assignment_and_wait_for_result") as mock_delete,
+        patch.object(revoker.sso, "describe_permission_set"),
+        patch.object(revoker.s3, "log_operation", log_operation),
+        patch.object(revoker, "cfg", MagicMock(post_update_to_slack=False)),
+        patch.object(revoker, "logger") as mock_logger,
+    ):
+        revoker.lambda_handler({"action": "sso_elevator_scheduled_revocation"}, None)
+    return MagicMock(remove=mock_remove, delete=mock_delete, logger=mock_logger)
+
+
+def test_sweep_stops_writing_to_s3_after_the_first_audit_failure_and_still_revokes_everything(revoker):
+    """#238: one failed write, then the rest of the run (group then account pass) logs its entries instead."""
+    log_operation = MagicMock(side_effect=RuntimeError("s3 down"))
+
+    mocks = _sweep(revoker, log_operation)
+
+    assert [c.args[1] for c in mocks.remove.call_args_list] == ["m-1", "m-2"]
+    assert [c.args[1].account_id for c in mocks.delete.call_args_list] == ["111111111111", "222222222222"]
+    assert log_operation.call_count == 1
+    skipped = [c.kwargs["extra"]["audit_entry"] for c in mocks.logger.warning.call_args_list if "audit_entry" in c.kwargs.get("extra", {})]
+    assert [(e["audit_entry_type"], e["operation_type"]) for e in skipped] == [
+        ("group", "revoke"),
+        ("account", "revoke"),
+        ("account", "revoke"),
+    ]
+
+    # The breaker lasts one invocation: the next sweep tries S3 again.
+    log_operation.reset_mock(side_effect=True)
+    _sweep(revoker, log_operation)
+    assert log_operation.call_count == 4  # noqa: PLR2004
+
+
+def test_sweep_stops_writing_to_s3_after_a_slow_write(revoker):
+    """A write that succeeds but is slow trips the breaker too, so slow S3 cannot starve the account pass."""
+    log_operation = MagicMock()
+
+    with patch.object(revoker, "monotonic", side_effect=[0.0, 2.0]):
+        mocks = _sweep(revoker, log_operation)
+
+    assert log_operation.call_count == 1
+    assert [c.args[1].account_id for c in mocks.delete.call_args_list] == ["111111111111", "222222222222"]
+
+
+def test_sweep_still_raises_a_real_removal_failure(revoker):
+    """Only the audit write is guarded: a failed removal must not read as done."""
+    with (
+        patch.object(revoker.sso, "describe_sso_instance", return_value=MagicMock(identity_store_id="d-1")),
+        patch.object(revoker.schedule, "get_scheduled_events", return_value=[]),
+        patch.object(
+            revoker.sso,
+            "get_group_assignments",
+            return_value=[
+                sso.GroupAssignment(group_name="g", group_id="g-1", user_principal_id="u", membership_id="m-1", identity_store_id="d-1")
+            ],
+        ),
+        patch.object(revoker.sso, "remove_user_from_group", side_effect=RuntimeError("AccessDenied")),
+        patch.object(revoker.s3, "log_operation") as mock_log,
+        pytest.raises(RuntimeError, match="AccessDenied"),
+    ):
+        revoker.handle_sso_elevator_group_scheduled_revocation(
+            identitystore_client=MagicMock(),
+            sso_client=MagicMock(),
+            scheduler_client=MagicMock(),
+            cfg=MagicMock(post_update_to_slack=False),
+            slack_client=MagicMock(),
+            sweep_audit=revoker.SweepAudit(),
+        )
+    mock_log.assert_not_called()
 
 
 def _users():  # noqa: ANN202
@@ -144,12 +261,12 @@ APPROVED_MESSAGE = {
 }
 
 
-def _revoke_account(revoker, slack_client, revoke_event, post_update_to_slack=True):  # noqa: ANN001, ANN202
+def _revoke_account(revoker, slack_client, revoke_event, post_update_to_slack=True, audit_error=None):  # noqa: ANN001, ANN202
     with (
         patch.object(revoker.sso, "delete_account_assignment_and_wait_for_result", return_value=MagicMock(request_id="r")),
         patch.object(revoker.sso, "describe_permission_set", return_value=MagicMock()) as mock_ps,
-        patch.object(revoker.s3, "log_operation"),
-        patch.object(revoker.schedule, "delete_schedule"),
+        patch.object(revoker.s3, "log_operation", side_effect=audit_error),
+        patch.object(revoker.schedule, "delete_schedule") as mock_delete_schedule,
         patch.object(revoker.organizations, "describe_account", return_value=entities.aws.Account(id="222222222222", name="aft")),
     ):
         mock_ps.return_value.name = "ReadOnly"
@@ -161,14 +278,18 @@ def _revoke_account(revoker, slack_client, revoke_event, post_update_to_slack=Tr
             org_client=MagicMock(),
             slack_client=slack_client,
         )
+    return mock_delete_schedule
 
 
-def test_scheduled_revocation_ends_its_request_message_and_replies_in_thread(revoker):
+# #238: access is already gone when the audit write fails, so the rest of the revocation still runs.
+@pytest.mark.parametrize("audit_error", [None, RuntimeError("s3 down")])
+def test_scheduled_revocation_ends_its_request_message_and_replies_in_thread(revoker, audit_error):
     slack_client = MagicMock()
     slack_client.conversations_history.return_value = {"messages": [APPROVED_MESSAGE]}
 
-    _revoke_account(revoker, slack_client, _revoke_event(), post_update_to_slack=False)
+    mock_delete_schedule = _revoke_account(revoker, slack_client, _revoke_event(), post_update_to_slack=False, audit_error=audit_error)
 
+    mock_delete_schedule.assert_called_once_with(ANY, "s")
     update = slack_client.chat_update.call_args.kwargs
     assert update["ts"] == "100.1"
     assert update["text"] == ":lock: *Ended · ReadOnly → aft #222222222222 for* <@U_REQ>"
@@ -207,13 +328,14 @@ def test_scheduled_revocation_never_fails_on_slack_errors(revoker):
     _revoke_account(revoker, slack_client, _revoke_event())  # must not raise
 
 
-def test_scheduled_group_revocation_ends_its_request_message(revoker):
+@pytest.mark.parametrize("audit_error", [None, RuntimeError("s3 down")])
+def test_scheduled_group_revocation_ends_its_request_message(revoker, audit_error):
     slack_client = MagicMock()
     slack_client.conversations_history.return_value = {"messages": [APPROVED_MESSAGE]}
     with (
         patch.object(revoker.sso, "remove_user_from_group"),
-        patch.object(revoker.s3, "log_operation"),
-        patch.object(revoker.schedule, "delete_schedule"),
+        patch.object(revoker.s3, "log_operation", side_effect=audit_error),
+        patch.object(revoker.schedule, "delete_schedule") as mock_delete_schedule,
     ):
         revoker.handle_scheduled_group_assignment_deletion(
             group_revoke_event=_group_revoke_event(),
@@ -223,6 +345,7 @@ def test_scheduled_group_revocation_ends_its_request_message(revoker):
             identitystore_client=MagicMock(),
         )
 
+    mock_delete_schedule.assert_called_once_with(ANY, "s")
     assert slack_client.chat_update.call_args.kwargs["text"] == ":lock: *Ended · group admins for* <@U_REQ>"
     slack_client.chat_postMessage.assert_called_once_with(channel="C1", thread_ts="100.1", text="Access ended: removed from group admins")
 

@@ -86,6 +86,8 @@ The module deploys two AWS Lambda functions: access-requester and access-revoker
 
 For auditing purposes, information about all access grants and revocations, as well as declined requests and approved requests that failed partway (incomplete), is stored in S3. See [documentation here](athena_query/) to find out how to configure AWS Athena to query audit logs.
 
+Audit writes never block access expiry: if S3 fails or is slow, grants are still scheduled for revocation and revocations still complete, and the lost entries go to the Lambda's CloudWatch logs instead. See [accepted risks](docs/accepted-risks.md#an-s3-outage-loses-audit-records-from-the-bucket).
+
 Additionally, the Access-Revoker continuously reconciles the revocation schedule with all user-level permission set assignments and issues warnings if it detects assignments without a revocation schedule (presumably created by someone manually). By default, the Access-Revoker will automatically revoke all unknown user-level permission set assignments daily. However, you can configure it to operate more or less frequently.
 
 ## Group Assignments Mode

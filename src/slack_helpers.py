@@ -28,7 +28,7 @@ import config
 import entities
 import sso
 from entities import BaseModel
-from errors import PostGrantError, ShownOnRequest
+from errors import AuditWriteError, PostGrantError, ShownOnRequest
 
 # ruff: noqa: ANN102, PGH003
 
@@ -529,11 +529,16 @@ def report_grant_outcome(  # noqa: PLR0913
     """Shows how a grant ended on its request message, in the thread and by DM.
     Raises ShownOnRequest for a failed grant once the request shows it."""
     requester = card.requester_slack_id
-    if error is None:
+    if error is None or isinstance(error, AuditWriteError):
+        # The revocation is scheduled either way; a missing audit record is only flagged in the thread.
         ends_at = datetime.datetime.now(timezone.utc) + duration
         update_request_message(client, channel_id, ts, card, RequestState.approved(decided_by, ends_at, auto))
+        text = f"<@{requester}> access granted, ends at {slack_time(ends_at)}"
+        if error is not None:
+            text += f", but the audit record could not be written: {error}"
+            replaced = error.replaced
         # Sent even when the update failed, so a stale card is never the only signal.
-        post_thread_reply(client, channel_id, ts, f"<@{requester}> access granted, ends at {slack_time(ends_at)}")
+        post_thread_reply(client, channel_id, ts, text)
         if dm_requester:
             send_dm(client, requester, f"Access granted: {card.subject}, ends at {slack_time(ends_at)}.")
         mark_requests_extended(client, replaced, card.subject, channel_id, ts)

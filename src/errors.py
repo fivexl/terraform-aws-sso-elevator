@@ -30,12 +30,21 @@ class AmbiguousSSOUser(ConfigurationError):
 
 
 class PostGrantError(Exception):
-    """Access was granted, but recording it or scheduling its revocation failed.
-    replaced: revoke events of earlier requests whose schedules were already deleted."""
+    """Access was granted, but scheduling its revocation failed; the message also names a failed grant
+    audit write, if any. replaced: revoke events of earlier requests whose schedules were already deleted."""
 
     def __init__(self, message: str, replaced: list | None = None) -> None:  # noqa: ANN101
         super().__init__(message)
         self.replaced = replaced or []
+
+
+class AuditWriteError(Exception):
+    """Access was granted and its revocation scheduled, but the grant audit record could not be written.
+    replaced: revoke events of earlier requests this grant replaced."""
+
+    def __init__(self, message: str, replaced: list) -> None:  # noqa: ANN101
+        super().__init__(message)
+        self.replaced = replaced
 
 
 class ShownOnRequest(Exception):
