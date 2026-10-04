@@ -46,7 +46,7 @@ app = App(
 )
 
 
-# Must match api_resource_path_cli in locals.tf (the CLI REST API's resource path).
+# Must match api_resource_path_cli in locals.tf.
 CLI_ACCESS_REQUEST_PATH = "/access-requester-cli"
 
 
@@ -66,17 +66,9 @@ def _cli_response(status: int, message: str) -> dict:
 
 
 def _transient_aws_error_response() -> dict:
-    # Shared by every AWS call handle_cli_access_request makes that can fail
-    # for a reason saying nothing about whether the request itself is valid
-    # (throttling, a 5xx, a connectivity blip) -- a 503 tells the caller
-    # this is worth retrying, instead of either GENERIC_REJECTION's "your
-    # credentials are invalid" or the blanket handler's 500-plus-Slack-post
-    # for what's just AWS being temporarily unavailable.
-    return {
-        "statusCode": 503,
-        "headers": {"content-type": "application/json"},
-        "body": json.dumps({"message": "Could not verify your request right now due to a transient AWS error. Please try again."}),
-    }
+    # For AWS failures that say nothing about the request (throttling, a 5xx, a blip):
+    # a 503 tells the caller to retry, unlike GENERIC_REJECTION or the blanket 500.
+    return _cli_response(503, "Could not verify your request right now due to a transient AWS error. Please try again.")
 
 
 def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
@@ -97,9 +89,10 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         if not cfg.cli_expected_api_id:
             logger.info("Rejected CLI request: the CLI route is not enabled")
             return cli_auth.GENERIC_REJECTION
+        if event.get("isBase64Encoded"):
+            logger.info("Rejected CLI request: the body is not a version 1 proof envelope")
+            return _cli_response(400, UPGRADE_ELEVATOR_MESSAGE)
         try:
-            if event.get("isBase64Encoded"):
-                raise cli_proof.UpgradeRequired
             envelope = cli_proof.parse_envelope(
                 event.get("body"), expected_api_id=cfg.cli_expected_api_id, region=os.environ.get("AWS_REGION", "")
             )
@@ -124,18 +117,10 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         reason = body.get("reason", "")
         reason = reason if isinstance(reason, str) else ""
         if not account_id or not permission_set_name or not reason:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "account, permission_set, and reason are all required and must be non-empty."}),
-            }
+            return _cli_response(400, "account, permission_set, and reason are all required and must be non-empty.")
         # Cheap first cut; the full size check needs the account name, so it runs once that is known.
         if len(reason) > slack_helpers.REASON_MAX_LENGTH:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": f"{slack_helpers.REASON_TOO_LONG}."}),
-            }
+            return _cli_response(400, f"{slack_helpers.REASON_TOO_LONG}.")
 
         # A strict, length-bounded digit-string match rather than a bare
         # int(...) call -- Python's int() silently truncates a JSON *number*
@@ -169,18 +154,11 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         minutes = int(duration_value) if isinstance(duration_value, str) and re.fullmatch(r"[0-9]{1,7}", duration_value) else 0
         max_allowed_minutes = _max_allowed_minutes(cfg)
         if minutes <= 0 or minutes > max_allowed_minutes:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps(
-                    {
-                        "message": (
-                            f"duration must be a positive integer number of minutes, no greater than "
-                            f"{max_allowed_minutes} (this deployment's configured maximum)."
-                        )
-                    }
-                ),
-            }
+            return _cli_response(
+                400,
+                f"duration must be a positive integer number of minutes, no greater than "
+                f"{max_allowed_minutes} (this deployment's configured maximum).",
+            )
 
         # The STS call and the Identity Store scan are the costliest steps, so every check on the
         # payload itself runs first.
@@ -257,19 +235,14 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             return _transient_aws_error_response()
         # One shared message for both checks, not a distinct one naming
         # which field was wrong (#194 B8): any authenticated SSO caller can
-        # already reach this point (this route's AWS_IAM authorizer proves
-        # signing capability, not that the signer is one this deployment's
-        # policy actually intends to allow), so telling "account" and
+        # already reach this point (any SSO user in the organization who
+        # passes the STS proof reaches this point), so telling "account" and
         # "permission_set" apart here would let one walk the account ID and
         # permission-set name spaces separately, confirming each real value
         # one field at a time instead of needing a whole matching pair
         # before learning anything.
         if account_id not in real_account_ids or permission_set_name not in real_permission_sets:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "account and permission_set must both be ones this deployment is configured for."}),
-            }
+            return _cli_response(400, "account and permission_set must both be ones this deployment is configured for.")
         # No check that the caller already holds this assignment: elevation grants access the
         # caller lacks, so such a check would reject every genuine request.
         try:
@@ -351,11 +324,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             )
         )
         if rejection := slack_helpers.request_rejection(request):
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": f"{rejection}."}),
-            }
+            return _cli_response(400, f"{rejection}.")
 
         decision, succeeded = process_access_request(request=request, requester=requester, client=app.client)
 
@@ -375,11 +344,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
     except ShownOnRequest as e:
         # The request's own Slack message and thread already show this failure.
         logger.exception(f"CLI access request failed after it was posted: {e}")
-        return {
-            "statusCode": 500,
-            "headers": {"content-type": "application/json"},
-            "body": json.dumps({"message": "Access could not be granted. Details are in the request's Slack thread."}),
-        }
+        return _cli_response(500, "Access could not be granted. Details are in the request's Slack thread.")
     except Exception as e:
         logger.exception(f"Error handling CLI access request: {e}")
         # Guarded separately from the logger.exception above (found live by
@@ -397,11 +362,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             )
         except Exception:
             logger.exception("Failed to post the CLI access request error notification to Slack")
-        return {
-            "statusCode": 500,
-            "headers": {"content-type": "application/json"},
-            "body": json.dumps({"message": "An unexpected error occurred while processing the request."}),
-        }
+        return _cli_response(500, "An unexpected error occurred while processing the request.")
 
 
 def _max_allowed_minutes(cfg: config.Config) -> int:

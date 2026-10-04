@@ -367,7 +367,7 @@ func TestSendWithConnectRetryRetriesAfterADialFailure(t *testing.T) {
 	}
 }
 
-func TestResolveEndpoint(t *testing.T) {
+func TestFirstSet(t *testing.T) {
 	cases := []struct {
 		name                                      string
 		flagEndpoint, envEndpoint, configEndpoint string
@@ -380,9 +380,9 @@ func TestResolveEndpoint(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := resolveEndpoint(c.flagEndpoint, c.envEndpoint, c.configEndpoint)
+			got := firstSet(c.flagEndpoint, c.envEndpoint, c.configEndpoint)
 			if got != c.want {
-				t.Errorf("resolveEndpoint(%q, %q, %q) = %q, want %q", c.flagEndpoint, c.envEndpoint, c.configEndpoint, got, c.want)
+				t.Errorf("firstSet(%q, %q, %q) = %q, want %q", c.flagEndpoint, c.envEndpoint, c.configEndpoint, got, c.want)
 			}
 		})
 	}

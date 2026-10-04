@@ -66,7 +66,7 @@ func resolveAPIID(endpoint, flagAPIID, envAPIID, configAPIID string) (string, er
 	if m := executeAPIHostRE.FindStringSubmatch(strings.ToLower(u.Hostname())); m != nil {
 		return m[1], nil
 	}
-	apiID := resolveEndpoint(flagAPIID, envAPIID, configAPIID)
+	apiID := firstSet(flagAPIID, envAPIID, configAPIID)
 	if apiID == "" {
 		return "", fmt.Errorf("endpoint %q is not an execute-api URL, so the REST API id must be configured: run `elevator configure --api-id ID` (Terraform output requester_api_id), pass --api-id, or set ELEVATOR_API_ID", endpoint)
 	}

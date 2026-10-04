@@ -6,6 +6,8 @@ act. Trust model and its limits: README "CLI tool".
 
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import botocore.exceptions
@@ -46,19 +48,29 @@ GENERIC_REJECTION = {
 }
 
 
-def caller_account_in_organization(org_client: "OrganizationsClient", account_id: str) -> bool:
-    """Whether account_id belongs to this deployment's organization. STS vouches for any AWS
-    account, so a session from another organization must stop here. Fails closed."""
+@contextmanager
+def _transient_as_retryable() -> Iterator[None]:
+    """Turn a throttle, 5xx or connectivity failure into TransientAWSError; other ClientErrors propagate."""
     try:
-        org_client.describe_account(AccountId=account_id)
+        yield
     except botocore.exceptions.ClientError as e:
-        if e.response.get("Error", {}).get("Code") == "AccountNotFoundException":
-            return False
         if sso.is_transient_aws_error(e):
             raise TransientAWSError from e
         raise
     except botocore.exceptions.BotoCoreError as e:
         raise TransientAWSError from e
+
+
+def caller_account_in_organization(org_client: "OrganizationsClient", account_id: str) -> bool:
+    """Whether account_id belongs to this deployment's organization. STS vouches for any AWS
+    account, so a session from another organization must stop here. Fails closed."""
+    with _transient_as_retryable():
+        try:
+            org_client.describe_account(AccountId=account_id)
+        except botocore.exceptions.ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "AccountNotFoundException":
+                return False
+            raise
     return True
 
 
@@ -73,17 +85,9 @@ def extract_identity(
     if not match or not match["role_name"].startswith(SSO_ROLE_NAME_PREFIX):
         return None
 
-    # A cold cache (or caching disabled) re-raises the raw error. A throttle, 5xx or
-    # connectivity failure says nothing about the caller, so it becomes a retryable 503.
-    # Other ClientErrors (e.g. a missing identitystore:ListUsers permission) propagate.
-    try:
+    # A cold cache (or caching disabled) re-raises the raw error.
+    with _transient_as_retryable():
         list_of_users = sso.list_users_with_cache(identity_store_client, identity_store_id, s3_client, cfg)
-    except botocore.exceptions.ClientError as e:
-        if sso.is_transient_aws_error(e):
-            raise TransientAWSError from e
-        raise
-    except botocore.exceptions.BotoCoreError as e:
-        raise TransientAWSError from e
     try:
         found = sso.find_email_by_username(list_of_users, match["session_name"])
     except errors.AmbiguousSSOUser:

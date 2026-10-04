@@ -114,7 +114,7 @@ class CallerIdentity:
     account: str
 
 
-def sts_host(region: str) -> str:
+def _sts_host(region: str) -> str:
     return f"sts.{region}.amazonaws.com"
 
 
@@ -142,7 +142,7 @@ def parse_envelope(body: object, *, expected_api_id: str, region: str, now: date
         raise ProofRejected("payload hash does not match the signed hash")
     if not _NONCE_RE.fullmatch(headers[NONCE_HEADER]):
         raise ProofRejected("nonce is not 32 lowercase hex characters")
-    host = sts_host(region)
+    host = _sts_host(region)
     if headers.get("host", host) != host:
         raise ProofRejected("host header does not match the STS host")
     query = _parse_url(url, host)

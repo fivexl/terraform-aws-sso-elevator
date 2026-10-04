@@ -66,7 +66,7 @@ output, scenario, result.
 11. **Attribute syncer**: invoke with `{}`.
     - Expect: `success: true`, `error_count: 0`, no warnings.
 12. **Placeholder secret on a running deployment**: save both values, write `REPLACE_ME`
-    to both, force new containers (`update-function-configuration --description ...`), then:
+    to both, force new containers on the `live` alias (README "Rotating a secret"), then:
     - invoke the access-requester: expect init failure;
     - invoke the attribute syncer: expect success with an error logged for the Slack token.
 
@@ -100,7 +100,10 @@ CLI:
 - [ ] A direct `aws lambda invoke` with a CLI-shaped event naming another user is rejected,
       with the CLI route on and with it off.
 - [ ] `enable_access_requester_cli` on, then off, then on: each apply is followed by a clean
-      `terraform plan -detailed-exitcode`.
+      `terraform plan -detailed-exitcode`. After turning it off, the stage may still route
+      `POST /access-requester-cli` until the next redeploy; expect `403` or `500`, with the Lambda
+      rejecting it for lack of `CLI_EXPECTED_API_ID`.
+      `terraform apply -replace=aws_api_gateway_deployment.requester` removes the route.
 
 WAF:
 

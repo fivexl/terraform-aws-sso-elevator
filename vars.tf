@@ -463,7 +463,7 @@ variable "identity_store_id" {
 # ==========================================
 
 variable "enable_access_requester_cli" {
-  description = "If true, adds a POST /access-requester-cli route to the requester REST API so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Only principals in this AWS Organization can call it. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Set to false if you only use Slack."
+  description = "If true, adds a POST /access-requester-cli route to the requester REST API so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Only principals in this AWS Organization can call it. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization for the principal running Terraform, plus more Organizations read permissions in the management account or a delegated administrator (see the README CLI tool section). Set to false if you only use Slack."
   type        = bool
   default     = true
 }

@@ -44,7 +44,10 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
   can send it again. The replay repeats the identical request: account, permission set, duration
   and reason cannot change. It can post a duplicate approval message and audit entry, and an
   auto-approved request can be granted again with a later expiry. The nonce in the proof is
-  random but not stored, so it does not stop a replay.
+  random but not stored, so it does not stop a replay. STS itself accepts a presigned
+  GetCallerIdentity for about 15 minutes regardless of `X-Amz-Expires`, so a leaked body is a
+  bearer token at any third-party GetCallerIdentity verifier that does not require its own
+  signed audience header.
 - **Why accepted.** Stopping replays needs a nonce store, a stateful resource, against an attack
   that needs the exact body from inside a TLS session and only repeats the caller's own request.
 - **Mitigation.** The short window. The body travels only over TLS, and the Lambda never logs the

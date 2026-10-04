@@ -156,7 +156,7 @@ func TestLoadConfigReturnsZeroValueWhenFileDoesNotExist(t *testing.T) {
 // TestLoadConfigReturnsAnErrorForMalformedJSON is a regression test (#194
 // test gap): loadConfig's malformed-JSON path was previously untested --
 // the one case where a corrupt ~/.elevator/config.json fatals a request,
-// and only when neither --endpoint nor ELEVATOR_ENDPOINT is set (resolveEndpoint's
+// and only when neither --endpoint nor ELEVATOR_ENDPOINT is set (firstSet's
 // precedence means a caller who always passes --endpoint never touches this
 // path at all). A corrupt file must be reported as an error, not silently
 // treated the same as a missing one (which loadConfig deliberately does

@@ -85,11 +85,11 @@ Use the module's `requester_api_endpoint_url_cli` output as the endpoint.
 elevator configure --endpoint https://elevator.example.com/access-requester-cli --api-id abcde12345
 ```
 
-`configure --endpoint` clears a saved API id, because that id belonged to the old endpoint; `configure --api-id` alone keeps the saved endpoint. The region is not saved: with a custom domain, set `--region` or `AWS_REGION` to the deployment's region, or the proof is signed for the wrong region and rejected with `403`.
+`configure --endpoint` clears a saved API id, because that id belonged to the old endpoint; `configure --api-id` alone keeps the saved endpoint. A configured API id is ignored when the endpoint is an `execute-api` URL, which already names the API. The region is not saved: with a custom domain, the signing region comes from `--region`, `AWS_REGION` or your profile's region, and must be the deployment's region. Otherwise API Gateway's `AWS_IAM` check rejects the request with `403` ("Credential should be scoped to a valid region").
 
 Credentials and region come from the standard AWS SDK chain — `AWS_PROFILE`, `AWS_REGION`, an active SSO session, etc. — the same way any AWS CLI command resolves them. `elevator` doesn't have its own profile setting; there's nothing extra to configure for auth beyond a normal AWS environment.
 
-**Upgrading to 5.0.0.** 5.0.0 moved the module to a new API, so the old endpoint is gone. Upgrade `elevator` to 5.0.0, then re-run `elevator configure --endpoint` with the new `requester_api_endpoint_url_cli` value, and update `ELEVATOR_ENDPOINT` wherever you set it. A 5.0.0 deployment answers older CLIs with `400` and "requires elevator CLI 5.0.0 or newer".
+**Upgrading to 5.0.0.** 5.0.0 moved the module to a new API, so the old endpoint is gone. Follow the CLI step of [Upgrade to 5.0.0](../../README.md#upgrade-to-500) in the main README.
 
 ## Use
 

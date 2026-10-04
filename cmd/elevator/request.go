@@ -113,18 +113,17 @@ func validateReason(s string) error {
 	return nil
 }
 
-// resolveEndpoint picks the API endpoint by precedence, highest first:
-// --endpoint flag, ELEVATOR_ENDPOINT env var (for scripts/automation that
-// can't run the interactive `configure` step), then the saved config file.
-// Returns "" if none of the three provide one.
-func resolveEndpoint(flagEndpoint, envEndpoint, configEndpoint string) string {
-	if flagEndpoint != "" {
-		return flagEndpoint
+// firstSet returns the first non-empty value in precedence order: flag,
+// env var (for scripts that can't run the interactive `configure` step), then
+// the saved config file. Used for both the endpoint and the API id; "" if none is set.
+func firstSet(flagValue, envValue, configValue string) string {
+	if flagValue != "" {
+		return flagValue
 	}
-	if envEndpoint != "" {
-		return envEndpoint
+	if envValue != "" {
+		return envValue
 	}
-	return configEndpoint
+	return configValue
 }
 
 // requestTimeout bounds a single attempt. The REST API's default integration
@@ -199,7 +198,7 @@ func runRequest(args []string) {
 	}
 
 	// The config file is only read when neither --endpoint nor
-	// ELEVATOR_ENDPOINT supplied a value -- resolveEndpoint's precedence is
+	// ELEVATOR_ENDPOINT supplied a value -- firstSet's precedence is
 	// flag > env > saved config, so a corrupt or unreadable
 	// ~/.elevator/config.json must not fatal a request that never needed it.
 	envEndpoint := os.Getenv("ELEVATOR_ENDPOINT")
@@ -211,7 +210,7 @@ func runRequest(args []string) {
 			log.Fatalf("load config: %v", err)
 		}
 	}
-	endpoint := resolveEndpoint(*endpointFlag, envEndpoint, saved.Endpoint)
+	endpoint := firstSet(*endpointFlag, envEndpoint, saved.Endpoint)
 	if endpoint == "" {
 		log.Fatal("no --endpoint given, ELEVATOR_ENDPOINT not set, and none saved — run `elevator configure --endpoint URL` once, pass --endpoint, or set ELEVATOR_ENDPOINT")
 	}

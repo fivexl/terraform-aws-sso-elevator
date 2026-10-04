@@ -356,7 +356,7 @@ Before the apply:
    - `create_lambda_url`: the Lambda Function URL and the `lambda_function_url` output are gone. `create_lambda_url` defaulted to `true`, so a deployment that never set it still had a Function URL; anything pointing at it stops working.
    - `cli_sso_role_name_prefix`.
    - `event_brige_check_on_inconsistency_rule_name` and `event_brige_scheduled_revocation_rule_name`: renamed to `event_bridge_*`.
-3. The CLI route is now on by default. Its resource policy is built from the organization id, so the principal running Terraform needs `organizations:DescribeOrganization`, `organizations:ListAccounts`, `organizations:ListRoots` and `organizations:ListAWSServiceAccessForOrganization`, and the account must belong to an AWS Organization. If you only use Slack, set `enable_access_requester_cli = false` instead.
+3. The CLI route is now on by default. Its resource policy is built from the organization id, so the principal running Terraform needs Organizations read permissions (see [CLI tool](#cli-tool)), and the account must belong to an AWS Organization. If you only use Slack, set `enable_access_requester_cli = false` instead.
 4. The HTTP API had stage access logs on, in a log group the module created. The apply deletes that log group with the HTTP API; export it first if you need the history. The REST API logs nothing by default: set `api_gateway_access_logs_enabled = true` to log again, which needs the account's API Gateway CloudWatch Logs role (see [API Gateway](#api-gateway)).
 5. To use WAF, set `waf_enabled = true` or `waf_web_acl_arn` now (see [AWS WAF](#aws-waf)). If AWS Firewall Manager attaches a web ACL to your APIs, leave both unset.
 
@@ -367,7 +367,7 @@ The apply:
 Right after the apply:
 
 7. Slack: in the Slack app settings, set the Interactivity Request URL (`request_url` in the manifest) to the `requester_api_endpoint_url` output.
-8. CLI users: upgrade the `elevator` CLI to 5.0.0. The Lambda answers older CLIs with `400` and "This SSO Elevator deployment requires elevator CLI 5.0.0 or newer". Then re-run `elevator configure --endpoint` with the `requester_api_endpoint_url_cli` output. If the CLI reaches the API through a custom domain, also run `elevator configure --api-id` with the `requester_api_id` output; `configure --endpoint` clears a saved API id. Update `ELEVATOR_ENDPOINT` (and set `ELEVATOR_API_ID` for a custom domain) wherever scripts or CI set it, since the environment overrides the saved config.
+8. CLI users: upgrade the `elevator` CLI to 5.0.0. The Lambda answers older CLIs with `400` and "This SSO Elevator deployment requires elevator CLI 5.0.0 or newer". Then re-run `elevator configure --endpoint` with the `requester_api_endpoint_url_cli` output. If the CLI reaches the API through a custom domain, also run `elevator configure --api-id` with the `requester_api_id` output. Update `ELEVATOR_ENDPOINT` (and set `ELEVATOR_API_ID` for a custom domain) wherever scripts or CI set it, since the environment overrides the saved config.
 9. Cross-account CLI callers: their permission sets need `execute-api:Invoke` on the new `requester_api_execution_arn_cli` output. The old ARN names a deleted API.
 10. Delete the requester Lambda's published versions from 4.x. Each one keeps its own code and settings and stays invocable as `function:<name>:<N>` by anyone allowed `lambda:InvokeFunction` on it. If the CLI route was on in 4.x, those versions trust the caller identity in the event, which a direct invoke can forge. Delete every version older than the one the `live` alias points to:
 
@@ -509,14 +509,14 @@ SSO Elevator uses slack channels to communicate with users. But there is a use c
 ## API Gateway
 The requester Lambda sits behind one REST API (`api_gateway_name`, stage `default`) with two routes, both invoking the Lambda's `live` alias:
 
-- `POST /access-requester` for Slack (`requester_api_endpoint_url` output). Open to the internet; the Lambda verifies Slack's request signature. A request validator answers `400` without invoking the Lambda when the `X-Slack-Signature` or `X-Slack-Request-Timestamp` header is missing, so unsigned POSTs cannot cold-start it. The validator checks that the headers are present, not that they are valid.
+- `POST /access-requester` for Slack (`requester_api_endpoint_url` output). Open to the internet; the Lambda verifies Slack's request signature. A request validator answers `400` without invoking the Lambda when the `X-Slack-Signature` or `X-Slack-Request-Timestamp` header is missing, so unsigned POSTs cannot cold-start it. The validator checks that the headers are present, not that they are valid ([accepted risks](docs/accepted-risks.md)).
 - `POST /access-requester-cli` for the [CLI](#cli-tool), unless `enable_access_requester_cli = false`.
 
 It is a REST API rather than an HTTP API because only REST APIs support WAF, resource policies and request validation.
 
 Each route is throttled separately with `api_gateway_throttling_burst_limit` and `api_gateway_throttling_rate_limit`.
 
-Each apply that changes the Lambda publishes a new version and moves `live` to it. Async invokes of `live` (Slack lazy listeners, such as approve and deny) are not retried after a function error, because a retry would repeat their Slack posts and grants. Lambda still redelivers them after throttling or a Lambda system error.
+Each apply that changes the Lambda publishes a new version and moves `live` to it. Async invokes of `live` (Slack lazy listeners, such as approve and deny) are not retried after a function error, though Lambda still redelivers them after throttling or a Lambda system error ([accepted risks](docs/accepted-risks.md)).
 
 Stage access logs are off by default. `api_gateway_access_logs_enabled = true` creates a log group and turns them on. REST API logging needs the account-wide API Gateway CloudWatch Logs role (`aws_api_gateway_account`) to be set already, or the apply fails. The module does not set it, because other APIs in the account may depend on its current value.
 
@@ -530,11 +530,11 @@ Optional, off by default. Two modes, which cannot be combined (plan fails if bot
   4. `AWSManagedRulesAmazonIpReputationList`.
 
   Cost is about $9 a month plus $0.60 per million requests.
-- `waf_web_acl_arn = "<arn>"`: associates a REGIONAL web ACL you manage.
+- `waf_web_acl_arn = "<arn>"`: associates a REGIONAL web ACL you manage. The ARN must be known at plan time, so pass an existing ARN or apply the web ACL first; otherwise the association's `count` is unknown and the plan fails.
 
 If AWS Firewall Manager associates a web ACL with your API Gateway stages, leave both unset: an association from the module would conflict with it.
 
-The Common rule set can block legitimate requests. A request reason containing markup such as `<script>` matches `CrossSiteScripting_BODY`: Slack shows the user a generic error and the CLI gets `403`. WAF inspects only the first 16 KB of a body. See [accepted risks](docs/accepted-risks.md).
+The Common rule set can block a legitimate request whose reason contains markup such as `<script>`. WAF inspects only the first 16 KB of a body. See [accepted risks](docs/accepted-risks.md).
 
 The `waf_web_acl_arn` output is the associated web ACL in either mode.
 
@@ -542,7 +542,7 @@ The `waf_web_acl_arn` output is the associated web ACL in either mode.
 Access requests can also be submitted from the command line, without Slack, via `POST /access-requester-cli`, signed with the caller's own AWS credentials. The route is on by default; set `enable_access_requester_cli = false` if you only use Slack. The route, its Lambda permission and the Organizations lookup are then not created, and the Lambda rejects CLI requests. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for install and usage.
 
 Requirements:
-- The deployment account must belong to an AWS Organization: the API's resource policy is built from the organization id. The principal running Terraform needs `organizations:DescribeOrganization`, `organizations:ListAccounts`, `organizations:ListRoots` and `organizations:ListAWSServiceAccessForOrganization`, which the `aws_organizations_organization` data source calls.
+- The deployment account must belong to an AWS Organization: the API's resource policy is built from the organization id. The principal running Terraform needs `organizations:DescribeOrganization` for the `aws_organizations_organization` data source. The data source also calls `organizations:ListAccounts`, and outside the management account it ignores an access denied there. Where `ListAccounts` succeeds (the management account or a delegated administrator), it also needs `organizations:ListRoots` and `organizations:ListAWSServiceAccessForOrganization`.
 - The resource policy (`aws:PrincipalOrgID`) admits callers from any account in the organization, and API Gateway rejects everyone else. Callers in the deployment account need nothing more. Callers in any other account also need `execute-api:Invoke` on the `requester_api_execution_arn_cli` output in their own identity policy (their permission set), as IAM requires for cross-account `AWS_IAM` calls.
 - Callers must sign with an IAM Identity Center (SSO) session. IAM users, other roles, and CI/OIDC roles are rejected.
 - The session name must be the caller's Identity Store username. IAM Identity Center sets it that way, so a normal `aws sso login` session qualifies. The Lambda matches it exactly (case-sensitive) against `UserName`, takes that user's primary email (or the first listed one), and looks up the Slack user with that email. If any step finds no match, the request is rejected with the same generic message as an invalid session. A username longer than 64 characters is truncated in the session name and therefore never matches.
@@ -625,13 +625,17 @@ Terraform state from v4 still holds both secrets, in the Lambda environment vari
 
 ### Rotating a secret
 
-Write the new value with `put-parameter` as above. The revoker and attribute-syncer read the bot token on every invocation. The access-requester reads both secrets at cold start, so warm containers keep the old values until they are recycled. A new bot token can wait for that, but a new signing secret takes effect in Slack immediately, and warm access-requester containers reject every Slack request until they restart. Force new containers right after writing it, for example with any configuration change:
+Write the new value with `put-parameter` as above. The revoker and attribute-syncer read the bot token on every invocation. The access-requester reads both secrets at cold start, so warm containers keep the old values until they are recycled. A new bot token can wait for that, but a new signing secret takes effect in Slack immediately, and warm access-requester containers reject every Slack request until they restart. Force new containers right after writing it. API Gateway invokes the `live` alias, which points at a published version, so changing `$LATEST` alone is not enough: change the configuration, publish a version and move `live` to it.
 
 ```sh
-aws lambda update-function-configuration --function-name <requester_lambda_name> --description "Slack secret rotated $(date +%s)"
+FN=access-requester   # your requester_lambda_name
+aws lambda update-function-configuration --function-name "$FN" --description "Slack secret rotated $(date +%s)"
+aws lambda wait function-updated --function-name "$FN"
+VERSION=$(aws lambda publish-version --function-name "$FN" --query Version --output text)
+aws lambda update-alias --function-name "$FN" --name live --function-version "$VERSION"
 ```
 
-The next `terraform apply` sets the description back.
+Without the configuration change, `publish-version` returns the existing latest version instead of a new one. The next `terraform apply` sets the description back, which publishes another version and moves `live` to it.
 
 If a secret cannot be read or still holds the placeholder, the access-requester fails at start and every Slack request errors. The revoker and attribute-syncer log the error and still revoke and sync, without Slack messages. Some revoker invocations then fail after their work is done: a scheduled revocation of a single assignment fails after revoking it, and the Slack-only events (inconsistency reports, removing buttons from expired requests, approver reminders) fail outright. These show up as Lambda errors and, if `aws_sns_topic_subscription_email` is set, as DLQ alerts.
 
@@ -904,7 +908,7 @@ settings:
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.0 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.11 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 6.28 |
 | <a name="requirement_external"></a> [external](#requirement\_external) | >= 1.0 |
 | <a name="requirement_local"></a> [local](#requirement\_local) | >= 1.0 |
@@ -1009,7 +1013,7 @@ settings:
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
 | <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.4.3"` | no |
-| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true, adds a POST /access-requester-cli route to the requester REST API so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Only principals in this AWS Organization can call it. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Set to false if you only use Slack. | `bool` | `true` | no |
+| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true, adds a POST /access-requester-cli route to the requester REST API so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Only principals in this AWS Organization can call it. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization for the principal running Terraform, plus more Organizations read permissions in the management account or a delegated administrator (see the README CLI tool section). Set to false if you only use Slack. | `bool` | `true` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `"sso-elevator-check-on-inconsistency"` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `"sso-elevator-scheduled-revocation"` | no |
 | <a name="input_group_config"></a> [group\_config](#input\_group\_config) | value for the SSO Elevator group config | `any` | `[]` | no |
