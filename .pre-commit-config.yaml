@@ -5,7 +5,7 @@ repos:
     -   id: codespell
         args: [-C, "3"]
         types_or: [python, rst, markdown, cython, c, terraform]
-        additional_dependencies: [tomli]
+        additional_dependencies: [tomli==2.4.1]
 # Python
 -   repo: local
     hooks:

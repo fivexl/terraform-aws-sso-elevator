@@ -22,8 +22,10 @@ concurrency:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # Fork PRs get no secrets, so they could not push anyway.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Fork and Dependabot PRs get no Actions secrets, so they could not push anyway.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     steps:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

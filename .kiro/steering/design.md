@@ -84,3 +84,50 @@ When adding new configuration parameters:
 - macOS releases must remain signed and notarized by Apple Team ID
   `T962D4K3Y7`. Never make signing conditional or allow missing secrets to
   degrade into an unsigned release.
+
+## Dependency updates
+
+New upstream versions soak before they ship, as a defence against package and
+repository takeovers: 14 days from registry publish, 7 days for a fix to a
+critical/high advisory.
+
+- Dependabot opens security PRs only for `uv` (`src`, `layer`) and `gomod`
+  (`cmd/elevator`). They are signals, not merge targets: security PRs skip
+  Dependabot's cooldown and edit only one of `uv.lock`/`requirements.txt`.
+  Actions, Terraform, Docker and pre-commit get one grouped monthly PR with a
+  14-day cooldown; majors open individually.
+- Dependency changes reach `main` only through a release PR checked by
+  `scripts/deps_ready.py`. Close Dependabot PRs by hand, naming the version
+  taken.
+- `[tool.uv] exclude-newer = "14 days"` enforces the soak in `uv lock`. It needs
+  uv >= 0.12.17 locally; older uv silently ignores it (`required-version`
+  makes it fail instead).
+
+Release-branch procedure, in order:
+
+1. `uv run python scripts/deps_ready.py` — security rows with the newest soaked
+   fix, open routine Dependabot PRs, and manual pins (Go toolchain, syft,
+   GoReleaser).
+2. Per directory: `uv lock --upgrade-package <pkg>==<ver>`. For a 7–13-day-old
+   critical/high fix, first add `exclude-newer-package = { <pkg> = "<that
+   version's upload time>" }` under `[tool.uv]`.
+3. `go get <module>@<ver>` in `cmd/elevator`, and pin edits (action SHAs,
+   hook revs, image digests, Terraform `version =`, `toolchain`).
+4. `git add . && pre-commit run -a` (re-exports both `requirements.txt`).
+5. `bash run-tests.sh`.
+6. `uv run python scripts/deps_ready.py verify` — every version changed since
+   the last release tag must pass; `OVERRIDE` rows go in the PR body.
+
+Do not tag while the report shows a READY critical/high row that is not applied.
+List BLOCKED, no-fix, medium/low and dev rows in the release PR body.
+
+Overrides under 7 days need evidence in the release PR body: package, exact
+version, lockfile hash (wheel sha256 in `uv.lock`, `go.sum` line or action
+commit SHA), and what was verified — the PyPI attestation
+`https://pypi.org/integrity/<pkg>/<ver>/<file>/provenance` from the project's
+own trusted-publisher repo and workflow, or a signed tag on the expected repo
+for Go modules and actions. Scope it with an `exclude-newer-package` entry set
+to that version's upload time. Nothing verifiable means wait.
+
+Remove an `exclude-newer-package` entry once its version is more than 14 days
+old.
