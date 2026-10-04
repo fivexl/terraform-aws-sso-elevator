@@ -355,6 +355,12 @@ variable "lambda_memory_size" {
   default     = 256
 }
 
+variable "snap_start" {
+  description = "Enable Lambda SnapStart on the requester Lambda (see README \"SnapStart\"). Set false where Lambda doesn't offer SnapStart for this runtime or package type, since apply fails there: at the time of writing, container images in Asia Pacific (New Zealand) and Asia Pacific (Taipei)."
+  type        = bool
+  default     = true
+}
+
 variable "config_bucket_name" {
   description = "Name of the S3 bucket for storing configuration and cache data (accounts, permission sets, and future config files)"
   type        = string

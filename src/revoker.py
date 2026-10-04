@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 import boto3
 import botocore.exceptions
+from botocore.client import BaseClient
 import slack_sdk
 from mypy_boto3_events import EventBridgeClient
 from mypy_boto3_identitystore import IdentityStoreClient
@@ -39,6 +40,7 @@ identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH
 scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
 ssm_client = boto3.client("ssm")  # type: ignore # noqa: PGH003
+lambda_client = boto3.client("lambda")  # type: ignore # noqa: PGH003
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
@@ -109,7 +111,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 cfg=cfg,
                 slack_client=slack_client,
             )
-            return handle_sso_elevator_scheduled_revocation(
+            handle_sso_elevator_scheduled_revocation(
                 sso_client=sso_client,
                 cfg=cfg,
                 scheduler_client=scheduler_client,
@@ -117,6 +119,12 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 slack_client=slack_client,
                 identitystore_client=identitystore_client,
             )
+            # After both revocation passes and in its own boundary: pruning must never stop access removal.
+            try:
+                prune_requester_versions(lambda_client, cfg.requester_function_name, cfg.requester_alias_name)
+            except Exception as e:
+                logger.exception(f"Failed to prune old requester Lambda versions: {e}")
+            return None
         case ApproverNotificationEvent():
             logger.info("Handling ApproverNotificationEvent event", extra={"event": parsed_event})
             return handle_approvers_renotification_event(
@@ -586,6 +594,39 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
                 identitystore_client=identitystore_client,
                 cfg=cfg,
             )
+
+
+def prune_requester_versions(lambda_client: BaseClient, function_name: str, alias_name: str) -> None:
+    """Delete old requester versions, which SnapStart bills for until deleted. Keeps the version the
+    alias points to and the newest Active one below it (the rollback target), so a failed publish
+    never takes the rollback slot. Versions above the alias may be mid-publish and are left alone."""
+    if not function_name or not alias_name:
+        return
+    live = int(lambda_client.get_alias(FunctionName=function_name, Name=alias_name)["FunctionVersion"])
+    paginator = lambda_client.get_paginator("list_versions_by_function")
+    older = sorted(
+        (
+            int(version["Version"])
+            for page in paginator.paginate(FunctionName=function_name)
+            for version in page["Versions"]
+            if version["Version"].isdigit() and int(version["Version"]) < live
+        ),
+        reverse=True,
+    )
+    # State is read per version: list results may leave it out.
+    rollback = next(
+        (v for v in older if lambda_client.get_function_configuration(FunctionName=function_name, Qualifier=str(v))["State"] == "Active"),
+        None,
+    )
+    if rollback is None:
+        logger.info("No Active requester version below the alias, nothing to prune", extra={"live": live})
+        return
+    for version in (v for v in older if v < rollback):
+        try:
+            lambda_client.delete_function(FunctionName=function_name, Qualifier=str(version))
+            logger.info(f"Deleted requester version {version}")
+        except (lambda_client.exceptions.ResourceConflictException, lambda_client.exceptions.ResourceNotFoundException) as e:
+            logger.warning(f"Skipped deleting requester version {version}: {e}")
 
 
 def handle_discard_buttons_event(

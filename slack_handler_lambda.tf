@@ -6,6 +6,7 @@ module "access_requester_slack_handler" {
   description   = "Receive requests from slack and grants temporary access"
 
   publish       = true
+  snap_start    = var.snap_start
   timeout       = var.lambda_timeout
   memory_size   = var.lambda_memory_size
   architectures = [var.lambda_architecture]
