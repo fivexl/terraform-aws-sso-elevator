@@ -3,8 +3,9 @@ and how revocations and expiry show on the request message."""
 
 import sys
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
+import botocore.exceptions
 import pytest
 
 import config
@@ -224,6 +225,48 @@ def test_scheduled_group_revocation_ends_its_request_message(revoker):
 
     assert slack_client.chat_update.call_args.kwargs["text"] == ":lock: *Ended · group admins for* <@U_REQ>"
     slack_client.chat_postMessage.assert_called_once_with(channel="C1", thread_ts="100.1", text="Access ended: removed from group admins")
+
+
+def test_scheduled_group_revocation_of_an_already_removed_membership_only_deletes_its_schedule(revoker):
+    """#212: two racing Approves can each schedule a revoke for one membership; the second finds it gone."""
+    slack_client = MagicMock()
+    gone = botocore.exceptions.ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "DeleteGroupMembership")
+    event = _group_revoke_event()
+    with (
+        patch.object(revoker.sso, "remove_user_from_group", side_effect=gone),
+        patch.object(revoker.s3, "log_operation") as mock_log,
+        patch.object(revoker.schedule, "delete_schedule") as mock_delete,
+    ):
+        revoker.handle_scheduled_group_assignment_deletion(
+            group_revoke_event=event,
+            cfg=MagicMock(post_update_to_slack=True, slack_channel_id="C1"),
+            scheduler_client=MagicMock(),
+            slack_client=slack_client,
+            identitystore_client=MagicMock(),
+        )
+
+    mock_delete.assert_called_once_with(ANY, event.schedule_name)
+    mock_log.assert_not_called()
+    slack_client.chat_update.assert_not_called()
+    slack_client.chat_postMessage.assert_not_called()
+
+
+def test_scheduled_group_revocation_reraises_other_membership_errors(revoker):
+    denied = botocore.exceptions.ClientError({"Error": {"Code": "AccessDeniedException"}}, "DeleteGroupMembership")
+    with (
+        patch.object(revoker.sso, "remove_user_from_group", side_effect=denied),
+        patch.object(revoker.schedule, "delete_schedule") as mock_delete,
+        pytest.raises(botocore.exceptions.ClientError),
+    ):
+        revoker.handle_scheduled_group_assignment_deletion(
+            group_revoke_event=_group_revoke_event(),
+            cfg=MagicMock(),
+            scheduler_client=MagicMock(),
+            slack_client=MagicMock(),
+            identitystore_client=MagicMock(),
+        )
+
+    mock_delete.assert_not_called()
 
 
 def test_discard_buttons_event_expires_a_pending_request(revoker):

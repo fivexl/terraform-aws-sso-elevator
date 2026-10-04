@@ -279,6 +279,55 @@ def test_get_message_from_timestamp_fetches_exactly_that_message(slack_helpers_m
     assert sh.get_message_from_timestamp("C1", "1.6", client) is None
 
 
+def _approved_blocks(sh) -> list[dict]:  # noqa: ANN001
+    card = sh.RequestCard.for_request(_account_request(sh))
+    return sh.build_request_message(card, sh.RequestState.approved(sh.approved_by("U_APPROVER"), ENDS, auto=False))[1]
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    [
+        ("pending", False),
+        ("approved", True),
+        ("missing", False),  # deleted or unreadable: the click goes ahead as before
+    ],
+)
+def test_decided_elsewhere_reads_whether_the_request_still_shows_its_buttons(slack_helpers_module, history, expected):
+    sh = slack_helpers_module
+    blocks = {
+        "pending": sh.build_request_message(sh.RequestCard.for_request(_account_request(sh)), sh.RequestState.pending())[1],
+        "approved": _approved_blocks(sh),
+    }
+    client = MagicMock()
+    messages = [{"ts": "1.5", "blocks": blocks[history]}] if history in blocks else []
+    client.conversations_history.return_value = {"messages": messages}
+    assert sh.decided_elsewhere(client, "C1", "1.5") is expected
+
+
+def test_decided_elsewhere_treats_a_failed_read_as_still_pending(slack_helpers_module):
+    client = MagicMock()
+    client.conversations_history.side_effect = RuntimeError("ratelimited")
+    assert slack_helpers_module.decided_elsewhere(client, "C1", "1.5") is False
+
+
+def test_mark_requests_extended_skips_the_newer_requests_own_message(slack_helpers_module):
+    """#212: a late second click on one request replaces that request's own schedule;
+    only the genuinely older request becomes Extended."""
+    sh = slack_helpers_module
+
+    def _event(ts: str) -> MagicMock:
+        return MagicMock(channel_id="C1", message_ts=ts, requester=MagicMock(id="U_REQ"), approver=MagicMock(id="U_APPROVER"))
+
+    client = MagicMock()
+    client.chat_getPermalink.return_value = {"permalink": "https://x.slack.com/archives/C1/p2002"}
+    client.conversations_history.return_value = {"messages": [{"ts": "100.1", "blocks": _approved_blocks(sh)}]}
+
+    sh.mark_requests_extended(client, [_event("200.2"), _event("100.1")], "ReadOnly → aft #222222222222", "C1", "200.2")
+
+    assert [c.kwargs["ts"] for c in client.chat_update.call_args_list] == ["100.1"]
+    assert client.chat_update.call_args.kwargs["text"].startswith(":repeat: *Extended")
+
+
 def test_format_duration(slack_helpers_module):
     sh = slack_helpers_module
     assert sh.format_duration(timedelta(minutes=30)) == "30 min"

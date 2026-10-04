@@ -560,6 +560,28 @@ def report_grant_outcome(  # noqa: PLR0913
     raise error
 
 
+def grant_conflict_reply(approver_slack_id: str) -> str:
+    return (
+        f"<@{approver_slack_id}> another grant for this request is already running, please wait for its result. "
+        "If no 'access granted' follows, ask the requester to submit again."
+    )
+
+
+def already_decided_reply(approver_slack_id: str) -> str:
+    return f"<@{approver_slack_id}> this request was already decided by another click, see its status above."
+
+
+def decided_elsewhere(client: WebClient, channel_id: str, ts: str) -> bool:
+    """Whether another click already took the request off Pending (#212). Checked before painting
+    Processing, which could otherwise land on top of that click's final state. Unreadable counts as pending."""
+    try:
+        message = get_message_from_timestamp(channel_id, ts, client)
+    except Exception as e:
+        logger.exception(f"Failed to re-read request message {ts}, treating it as still pending: {e}")
+        return False
+    return message is not None and not any(b.get("block_id") == "buttons" for b in message.get("blocks") or [])
+
+
 def discard_request(  # noqa: PLR0913
     client: WebClient, channel_id: str, ts: str, card: RequestCard, approver_slack_id: str, requester_slack_id: str, dm_requester: bool
 ) -> bool:
@@ -576,7 +598,8 @@ def discard_request(  # noqa: PLR0913
 def mark_requests_extended(client: WebClient, replaced: list, subject: str, channel_id: str, newer_ts: str) -> None:
     """A new grant replaced these revoke events' schedules: point each one's request at the newer request."""
     for event in replaced:
-        if not (event.channel_id and event.message_ts):
+        # A late second click on the same request replaces that request's own schedule (#212).
+        if not (event.channel_id and event.message_ts) or (event.channel_id, event.message_ts) == (channel_id, newer_ts):
             continue
         try:
             permalink = client.chat_getPermalink(channel=channel_id, message_ts=newer_ts)["permalink"]

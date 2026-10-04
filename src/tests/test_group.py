@@ -6,6 +6,7 @@ from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 import access_control
 import entities
@@ -39,7 +40,6 @@ def group_module():
         mock_session.return_value.client.return_value = MagicMock()
         import group
 
-        group.cache_for_dublicate_requests.clear()
         yield group
     sys.modules.pop("group", None)
 
@@ -245,20 +245,7 @@ def test_group_approval_lookup_error_is_retryable(group_module, slack_client):
 
     mock_exec.assert_not_called()
     slack_client.chat_update.assert_not_called()
-    assert group_module.cache_for_dublicate_requests == {}
     assert "unexpected error" in slack_client.chat_postMessage.call_args.kwargs["text"]
-
-
-def test_group_button_click_clears_the_dedup_cache_when_make_decision_on_approve_request_raises(group_module, slack_client):
-    """#194 A3 residual: an exception here must not leave the request stuck on "already in progress"."""
-
-    def _boom(**_kwargs):  # noqa: ANN202, ANN003
-        raise RuntimeError("boom")
-
-    mock_exec = _click(group_module, slack_client, _payload(group_module), decide=_boom)
-
-    assert group_module.cache_for_dublicate_requests == {}
-    mock_exec.assert_not_called()
 
 
 def test_group_button_click_strips_buttons_then_shows_approved(group_module, slack_client):
@@ -275,7 +262,7 @@ def test_group_button_click_strips_buttons_then_shows_approved(group_module, sla
     assert _thread_replies(slack_client)[0].startswith("<@U_REQ> access granted")
 
 
-def test_group_button_click_reflects_a_grant_failure_and_clears_the_dedup_cache(group_module, slack_client):
+def test_group_button_click_reflects_a_grant_failure(group_module, slack_client):
     """The failure is shown on the request itself, so @handle_errors logs it without a second, top-level post."""
 
     def _fail(**_kwargs):  # noqa: ANN202, ANN003
@@ -283,11 +270,59 @@ def test_group_button_click_reflects_a_grant_failure_and_clears_the_dedup_cache(
 
     _click(group_module, slack_client, _payload(group_module), execute=_fail)
 
-    assert group_module.cache_for_dublicate_requests == {}
     final_update_text = slack_client.chat_update.call_args.kwargs["text"]
     assert final_update_text.startswith(":x: *Failed · group TestGroup")
     assert _thread_replies(slack_client) == ["Granting access failed: boom: group not found"]
     assert not any("unexpected error" in (c.kwargs.get("text") or "") for c in slack_client.chat_postMessage.call_args_list)
+
+
+def _client_error(code: str, operation: str) -> ClientError:
+    return ClientError({"Error": {"Code": code, "Message": "m"}}, operation)
+
+
+def test_group_button_click_leaves_the_card_to_a_racing_grant_on_conflict(group_module, slack_client):
+    """#212: the losing click of a double Approve must not paint the winner's request red."""
+
+    def _conflict(**_kwargs):  # noqa: ANN202, ANN003
+        raise _client_error("ConflictException", "CreateGroupMembership")
+
+    _click(group_module, slack_client, _payload(group_module), execute=_conflict)
+
+    assert slack_client.chat_update.call_count == 1  # Processing only, set before the grant ran
+    assert slack_client.chat_update.call_args.kwargs["text"].startswith(":hourglass_flowing_sand: *Processing")
+    assert _thread_replies(slack_client) == [group_module.slack_helpers.grant_conflict_reply(APPROVER_1.id)]
+
+
+def test_group_button_click_stops_when_another_click_already_decided_the_request(group_module, slack_client):
+    """#212: a click whose Processing would land on the winner's final state stops before painting it."""
+    sh = group_module.slack_helpers
+    payload = _payload(group_module)
+    card = sh.RequestCard.for_request(payload.request)
+    _, discarded = sh.build_request_message(card, sh.RequestState.discarded(APPROVER_2.id))
+    slack_client.conversations_history.return_value = {"messages": [{"ts": payload.thread_ts, "blocks": discarded}]}
+
+    mock_exec = _click(group_module, slack_client, payload)
+
+    mock_exec.assert_not_called()
+    slack_client.chat_update.assert_not_called()
+    assert _thread_replies(slack_client) == [sh.already_decided_reply(APPROVER_1.id)]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _client_error("ResourceNotFoundException", "CreateGroupMembership"),
+        _client_error("ConflictException", "DeleteGroupMembership"),
+    ],
+)
+def test_group_button_click_reports_other_grant_errors_as_failures(group_module, slack_client, error):
+    def _fail(**_kwargs):  # noqa: ANN202, ANN003
+        raise error
+
+    _click(group_module, slack_client, _payload(group_module), execute=_fail)
+
+    assert slack_client.chat_update.call_args.kwargs["text"].startswith(":x: *Failed")
+    assert _thread_replies(slack_client) == [f"Granting access failed: {error}"]
 
 
 def test_group_button_click_discard(group_module, slack_client):

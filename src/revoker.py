@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 import boto3
+import botocore.exceptions
 import slack_sdk
 from mypy_boto3_events import EventBridgeClient
 from mypy_boto3_identitystore import IdentityStoreClient
@@ -332,7 +333,15 @@ def handle_scheduled_group_assignment_deletion(
 ) -> None:
     logger.info("Handling scheduled group access revokation", extra={"revoke_event": group_revoke_event})
     group_assignment = group_revoke_event.group_assignment
-    sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
+    try:
+        sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
+    except botocore.exceptions.ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ResourceNotFoundException":
+            raise
+        # Already removed, e.g. by the other of two revokes racing Approves scheduled for one grant (#212).
+        logger.warning(f"Group membership already gone, nothing to revoke: {e}")
+        schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
+        return
     s3.log_operation(
         audit_entry=s3.AuditEntry(
             group_name=group_assignment.group_name,

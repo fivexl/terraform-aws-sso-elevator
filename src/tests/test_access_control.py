@@ -4,6 +4,7 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import botocore.exceptions
 import pytest
 
 import access_control
@@ -1540,6 +1541,18 @@ def test_execute_decision_logs_incomplete_entry_when_the_account_assignment_fail
     assert audit_entry.error_message == "boom: throttled"
 
 
+def test_execute_decision_writes_no_incomplete_entry_for_a_racing_grant_conflict(execute_decision_info, account_grant_mocks):
+    """#212: the racing click's grant succeeded and audits itself; the loser only re-raises."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    conflict = botocore.exceptions.ClientError({"Error": {"Code": "ConflictException"}}, "CreateAccountAssignment")
+    account_grant_mocks["create_account_assignment_and_wait_for_result"].side_effect = conflict
+
+    with pytest.raises(botocore.exceptions.ClientError):
+        execute_decision(decision=decision, **execute_decision_info)
+
+    account_grant_mocks["log_operation"].assert_not_called()
+
+
 def test_execute_decision_incomplete_falls_back_to_requested_permission_set_name(execute_decision_info, account_grant_mocks):
     decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
     account_grant_mocks["get_permission_set_by_name"].side_effect = RuntimeError("permission set not found")
@@ -1622,6 +1635,17 @@ def test_execute_decision_on_group_request_logs_incomplete_entry_when_group_memb
     assert audit_entry.secondary_domain_was_used is True
     assert audit_entry.group_membership_id == "NA"
     assert "boom" in audit_entry.error_message
+
+
+def test_execute_decision_on_group_request_writes_no_incomplete_entry_for_a_racing_grant_conflict(group_grant_mocks):
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    conflict = botocore.exceptions.ClientError({"Error": {"Code": "ConflictException"}}, "CreateGroupMembership")
+    group_grant_mocks["add_user_to_a_group"].side_effect = conflict
+
+    with pytest.raises(botocore.exceptions.ClientError):
+        _execute_group(decision)
+
+    group_grant_mocks["log_operation"].assert_not_called()
 
 
 @pytest.mark.parametrize("already_in_group", [False, True])

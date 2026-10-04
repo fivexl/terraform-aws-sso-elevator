@@ -305,6 +305,16 @@ def is_transient_aws_error(error: Exception) -> bool:
     return isinstance(error, botocore.exceptions.BotoCoreError)
 
 
+def is_grant_conflict(error: Exception) -> bool:
+    """True when another grant for the same assignment or membership is already running (#212):
+    a racing second Approve gets ConflictException from the create call itself."""
+    return (
+        isinstance(error, botocore.exceptions.ClientError)
+        and error.response.get("Error", {}).get("Code") == "ConflictException"
+        and error.operation_name in {"CreateAccountAssignment", "CreateGroupMembership"}
+    )
+
+
 def parse_permission_set(td: type_defs.DescribePermissionSetResponseTypeDef) -> entities.aws.PermissionSet:
     ps = td.get("PermissionSet", {})
     return entities.aws.PermissionSet.model_validate(
