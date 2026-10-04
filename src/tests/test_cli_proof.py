@@ -459,6 +459,7 @@ def test_unexpected_sts_success_body_is_rejected(connection, body):
         (429, b"", cli_proof.ProofUnavailable),
         (500, sts_error_xml("InternalFailure"), cli_proof.ProofUnavailable),
         (503, b"", cli_proof.ProofUnavailable),
+        (403, b"x" * (cli_proof.MAX_STS_RESPONSE_BYTES + 1), cli_proof.ProofRejected),
     ],
 )
 def test_sts_error_status_mapping(connection, status, body, error):
@@ -466,6 +467,13 @@ def test_sts_error_status_mapping(connection, status, body, error):
     with pytest.raises(error) as excinfo:
         cli_proof.fetch_caller_identity(parse(make_body()))
     assert SESSION_TOKEN not in str(excinfo.value)
+
+
+def test_oversized_sts_5xx_is_still_unavailable(connection):
+    respond(connection, 503, b"x" * (cli_proof.MAX_STS_RESPONSE_BYTES * 2))
+    with pytest.raises(cli_proof.ProofUnavailable):
+        cli_proof.fetch_caller_identity(parse(make_body()))
+    connection.return_value.getresponse.return_value.read.assert_called_once_with(cli_proof.MAX_STS_RESPONSE_BYTES + 1)
 
 
 @pytest.mark.parametrize(

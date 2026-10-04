@@ -127,6 +127,51 @@ func firstSet(flagValue, envValue, configValue string) string {
 	return configValue
 }
 
+// resolveTarget returns the endpoint and REST API id (each flag > env > saved
+// config). load runs only when a value must come from the saved config, so a
+// corrupt ~/.elevator/config.json does not block a request that never needed it.
+func resolveTarget(endpointFlag, envEndpoint, apiIDFlag, envAPIID string, load func() (cliConfig, error)) (string, string, error) {
+	var saved *cliConfig
+	savedConfig := func() (cliConfig, error) {
+		if saved == nil {
+			cfg, err := load()
+			if err != nil {
+				return cliConfig{}, fmt.Errorf("load config: %w", err)
+			}
+			saved = &cfg
+		}
+		return *saved, nil
+	}
+
+	endpoint := firstSet(endpointFlag, envEndpoint, "")
+	if endpoint == "" {
+		cfg, err := savedConfig()
+		if err != nil {
+			return "", "", err
+		}
+		endpoint = cfg.Endpoint
+	}
+	if endpoint == "" {
+		return "", "", errors.New("no --endpoint given, ELEVATOR_ENDPOINT not set, and none saved — run `elevator configure --endpoint URL` once, pass --endpoint, or set ELEVATOR_ENDPOINT")
+	}
+	if err := validateEndpointScheme(endpoint); err != nil {
+		return "", "", err
+	}
+	apiID, err := resolveAPIID(endpoint, apiIDFlag, envAPIID, "")
+	// Only a custom domain with no flag or env id fails here; then the saved id is needed.
+	if err != nil && apiIDFlag == "" && envAPIID == "" {
+		cfg, loadErr := savedConfig()
+		if loadErr != nil {
+			return "", "", loadErr
+		}
+		apiID, err = resolveAPIID(endpoint, "", "", cfg.APIID)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return endpoint, apiID, nil
+}
+
 // requestTimeout bounds a single attempt. The REST API's default integration
 // timeout is 29s, so this is set just above it — long enough that the
 // server, not this client, is what times out first.
@@ -198,27 +243,7 @@ func runRequest(args []string) {
 		log.Fatal(err)
 	}
 
-	// The config file is only read when neither --endpoint nor
-	// ELEVATOR_ENDPOINT supplied a value -- firstSet's precedence is
-	// flag > env > saved config, so a corrupt or unreadable
-	// ~/.elevator/config.json must not fatal a request that never needed it.
-	envEndpoint := os.Getenv("ELEVATOR_ENDPOINT")
-	envAPIID := os.Getenv("ELEVATOR_API_ID")
-	var saved cliConfig
-	if (*endpointFlag == "" && envEndpoint == "") || (*apiIDFlag == "" && envAPIID == "") {
-		var err error
-		if saved, err = loadConfig(); err != nil {
-			log.Fatalf("load config: %v", err)
-		}
-	}
-	endpoint := firstSet(*endpointFlag, envEndpoint, saved.Endpoint)
-	if endpoint == "" {
-		log.Fatal("no --endpoint given, ELEVATOR_ENDPOINT not set, and none saved — run `elevator configure --endpoint URL` once, pass --endpoint, or set ELEVATOR_ENDPOINT")
-	}
-	if err := validateEndpointScheme(endpoint); err != nil {
-		log.Fatal(err)
-	}
-	apiID, err := resolveAPIID(endpoint, *apiIDFlag, envAPIID, saved.APIID)
+	endpoint, apiID, err := resolveTarget(*endpointFlag, os.Getenv("ELEVATOR_ENDPOINT"), *apiIDFlag, os.Getenv("ELEVATOR_API_ID"), loadConfig)
 	if err != nil {
 		log.Fatal(err)
 	}

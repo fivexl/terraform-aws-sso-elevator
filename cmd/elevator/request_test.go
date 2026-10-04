@@ -396,6 +396,37 @@ func TestSendWithConnectRetryRetriesAfterADialFailure(t *testing.T) {
 	}
 }
 
+func TestResolveTargetLoadsConfigOnlyWhenNeeded(t *testing.T) {
+	const executeAPI = "https://abcde12345.execute-api.eu-west-1.amazonaws.com/default/access-requester-cli"
+	corrupt := func() (cliConfig, error) { return cliConfig{}, errors.New("parse config file: corrupt") }
+
+	for _, c := range []struct{ name, flag, env string }{
+		{name: "endpoint flag", flag: executeAPI},
+		{name: "endpoint env", env: executeAPI},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			endpoint, apiID, err := resolveTarget(c.flag, c.env, "", "", corrupt)
+			if err != nil || endpoint != executeAPI || apiID != "abcde12345" {
+				t.Fatalf("resolveTarget = %q, %q, %v; want the execute-api endpoint and id, no error", endpoint, apiID, err)
+			}
+		})
+	}
+
+	if _, _, err := resolveTarget("https://elevator.example.com/cli", "", "", "", corrupt); err == nil || !strings.Contains(err.Error(), "corrupt") {
+		t.Errorf("custom domain without an id: error = %v, want the config load error", err)
+	}
+
+	loads := 0
+	saved := func() (cliConfig, error) {
+		loads++
+		return cliConfig{Endpoint: "https://elevator.example.com/cli", APIID: "ccccc33333"}, nil
+	}
+	endpoint, apiID, err := resolveTarget("", "", "", "", saved)
+	if err != nil || endpoint != "https://elevator.example.com/cli" || apiID != "ccccc33333" || loads != 1 {
+		t.Errorf("from saved config: %q, %q, %v after %d loads; want saved endpoint and id after 1 load", endpoint, apiID, err, loads)
+	}
+}
+
 func TestFirstSet(t *testing.T) {
 	cases := []struct {
 		name                                      string

@@ -54,7 +54,7 @@ output, scenario, result.
    - Expect: `403` from API Gateway, "no resource-based policy allows"; the Lambda does not run.
 8. **CLI, not an SSO session**: an IAM role in an org account that has `execute-api:Invoke`,
    assumed with the session name set to a real Identity Store username.
-   - Expect: `403` with "not associated with an SSO session" from the Lambda; no assignment.
+   - Expect: `403` with "could not verify your identity" from the Lambda; no assignment.
 9. **Management account assignment**: a request to the management account through the
    management deployment.
    - Expect: assignment created, revoked on expiry.

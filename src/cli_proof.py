@@ -157,10 +157,15 @@ def fetch_caller_identity(envelope: Envelope) -> CallerIdentity:
     parts = urlsplit(envelope.url)
     headers = {name: value for name, value in envelope.headers.items() if name != "host"}
     status, body = _sts_get(parts.netloc, f"{parts.path}?{parts.query}", headers)
+    # Status before the size cap: a throttled or failing STS stays retryable whatever its body size.
+    if status == _HTTP_TOO_MANY_REQUESTS or status >= _HTTP_SERVER_ERROR:
+        raise ProofUnavailable(f"STS answered {status}")
+    if len(body) > MAX_STS_RESPONSE_BYTES:
+        raise ProofRejected("STS response exceeds the size cap")
     if status == _HTTP_OK:
         return _parse_identity(body)
     code = _error_code(body)
-    if status == _HTTP_TOO_MANY_REQUESTS or status >= _HTTP_SERVER_ERROR or code in _TRANSIENT_STS_CODES:
+    if code in _TRANSIENT_STS_CODES:
         raise ProofUnavailable(f"STS answered {status} {code}")
     raise ProofRejected(f"STS refused the proof: {status} {code}")
 
@@ -185,8 +190,6 @@ def _sts_get(host: str, target: str, headers: dict[str, str]) -> tuple[int, byte
         connection.close()
     if failure:
         raise ProofUnavailable(f"STS request failed: {failure}")
-    if len(body) > MAX_STS_RESPONSE_BYTES:
-        raise ProofRejected("STS response exceeds the size cap")
     return status, body
 
 

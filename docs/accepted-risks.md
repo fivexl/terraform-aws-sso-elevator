@@ -72,6 +72,15 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
   supports neither WAF nor resource policies, alive longer.
 - **Mitigation.** The README's "Upgrade to 5.0.0" lists the steps to run right after the apply.
 
+### Published 4.x versions keep the forgeable code
+
+- **What.** Each published Lambda version keeps its own code and stays invocable by version
+  number. Versions from 4.x with the CLI route on still trust the identity in the event, so
+  anyone allowed `lambda:InvokeFunction` on them can forge a CLI request for another user.
+- **Why accepted.** Terraform does not delete previously published versions, so the module cannot
+  remove them during the upgrade.
+- **Mitigation.** The README's "Upgrade to 5.0.0" has the step that deletes them.
+
 ## Closed
 
 ### Direct Lambda invoke could forge a CLI identity (fixed in 5.0.0)
@@ -80,9 +89,3 @@ Before 5.0.0 the Lambda took the CLI caller's identity from the API Gateway even
 allowed `lambda:InvokeFunction` on it could invoke it directly with an event naming another
 user. The CLI now sends a presigned `sts:GetCallerIdentity` proof, and the Lambda takes the
 identity from STS's answer.
-
-### Published 4.x versions keep the forgeable code (fixed by an upgrade step)
-
-Each published version keeps its own code and stays invocable by version number. Versions from
-4.x with the CLI route on still trust the identity in the event. The README's "Upgrade to
-5.0.0" has the step that deletes them.

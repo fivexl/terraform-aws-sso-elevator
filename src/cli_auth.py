@@ -41,7 +41,8 @@ GENERIC_REJECTION = {
     "body": json.dumps(
         {
             "message": (
-                "The credentials provided are not associated with an SSO session. Please sign in using your AWS SSO session and try again."
+                "Request rejected: could not verify your identity. Check that you are signed in with AWS SSO, "
+                "your system clock is correct, and the endpoint and API id are right."
             )
         }
     ),
