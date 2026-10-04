@@ -1310,7 +1310,7 @@ def test_process_access_request_posts_refusals_as_failed(main_module, reason, st
     assert mock_execute.call_args.kwargs["decision"] is decision
 
 
-def _process_auditing(main_module, client, decision, approvers=None):  # noqa: ANN001, ANN202
+def _process_auditing(main_module, client, decision, approvers=None, log_error=None):  # noqa: ANN001, ANN202
     """Runs process_access_request through the real execute_decision; returns the S3 audit mock."""
     with (
         patch.object(main_module.access_control, "make_decision_on_access_request", return_value=decision),
@@ -1318,7 +1318,7 @@ def _process_auditing(main_module, client, decision, approvers=None):  # noqa: A
         patch.object(main_module.slack_helpers, "find_approvers_in_slack", return_value=approvers or ([], [])),
         patch.object(main_module.schedule, "schedule_discard_buttons_event"),
         patch.object(main_module.schedule, "schedule_approver_notification_event"),
-        patch.object(main_module.s3, "log_operation") as mock_log_operation,
+        patch.object(main_module.s3, "log_operation", side_effect=log_error) as mock_log_operation,
     ):
         requester = MagicMock(id="U_REQ", email="email@domen.com", real_name="Test User")
         main_module.process_access_request(request=_request(main_module, account_name="aft"), requester=requester, client=client)
@@ -1335,14 +1335,33 @@ def test_process_access_request_audits_a_refusal_as_declined(main_module):
     assert (audit_entry.approver_slack_id, audit_entry.approver_email) == ("NA", "NA")
 
 
-def test_process_access_request_writes_no_audit_entry_when_requires_approval_finds_no_approvers_in_slack(main_module):
+def test_process_access_request_writes_one_declined_entry_when_requires_approval_finds_no_approvers_in_slack(main_module):
     decision = _decision(
         main_module, main_module.access_control.DecisionReason.RequiresApproval, approvers=frozenset(["approver@example.com"])
     )
 
     mock_log_operation = _process_auditing(main_module, _slack_client(), decision, approvers=([], ["approver@example.com"]))
 
-    mock_log_operation.assert_not_called()
+    mock_log_operation.assert_called_once()
+    entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    request = _request(main_module, account_name="aft")
+    assert (entry.operation_type, entry.decision_reason) == ("declined", "NoApproversFoundInSlack")
+    assert (entry.approver_slack_id, entry.approver_email) == ("NA", "NA")
+    assert (entry.audit_entry_type, entry.account_id, entry.role_name) == ("account", request.account_id, request.permission_set_name)
+    assert (entry.request_source, entry.verified_arn) == (request.request_source, request.verified_arn)
+    assert (entry.requester_slack_id, entry.requester_email) == ("U_REQ", "email@domen.com")
+
+
+def test_process_access_request_no_approvers_in_slack_audit_failure_keeps_the_slack_outcome(main_module):
+    client = _slack_client()
+    decision = _decision(
+        main_module, main_module.access_control.DecisionReason.RequiresApproval, approvers=frozenset(["approver@example.com"])
+    )
+
+    _process_auditing(main_module, client, decision, approvers=([], ["approver@example.com"]), log_error=RuntimeError("s3 down"))
+
+    assert client.chat_postMessage.call_args_list[0].kwargs["text"].startswith(":x: *Failed")
+    assert "None of the approvers" in _thread_replies(client)[0]
 
 
 # ---------------------------------------------------------------------------

@@ -333,6 +333,7 @@ def test_expired_request_writes_one_declined_expired_entry(revoker, group):
     else:
         assert (entry.audit_entry_type, entry.account_id, entry.role_name) == ("account", "111111111111", "Admin")
         assert entry.request_source == "cli"
+        assert entry.verified_arn == "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req"
 
 
 def test_expired_request_audit_uses_na_email_when_requester_lookup_fails(revoker):

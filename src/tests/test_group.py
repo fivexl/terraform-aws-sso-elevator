@@ -112,13 +112,28 @@ def test_requires_approval_no_approvers_found(group_module, slack_client):
     mocks.schedule.schedule_discard_buttons_event.assert_not_called()
 
 
-def test_requires_approval_no_approvers_found_writes_no_audit_entry(group_module, slack_client):
+def test_requires_approval_no_approvers_found_writes_one_declined_entry(group_module, slack_client):
     decision = _decision(access_control.DecisionReason.RequiresApproval, approvers=frozenset(["gone@example.com"]))
 
     with patch.object(group_module.s3, "log_operation") as mock_log_operation:
         _submit(group_module, slack_client, decision, approvers=([], ["gone@example.com"]), execute=REAL_EXECUTE)
 
-    mock_log_operation.assert_not_called()
+    mock_log_operation.assert_called_once()
+    entry = mock_log_operation.call_args.kwargs["audit_entry"]
+    assert (entry.operation_type, entry.decision_reason) == ("declined", "NoApproversFoundInSlack")
+    assert (entry.approver_slack_id, entry.approver_email) == ("NA", "NA")
+    assert (entry.audit_entry_type, entry.group_id, entry.group_name) == ("group", GROUP.id, GROUP.name)
+    assert (entry.requester_slack_id, entry.requester_email) == (REQUESTER.id, REQUESTER.email)
+
+
+def test_requires_approval_no_approvers_found_audit_failure_keeps_the_slack_outcome(group_module, slack_client):
+    decision = _decision(access_control.DecisionReason.RequiresApproval, approvers=frozenset(["gone@example.com"]))
+
+    with patch.object(group_module.s3, "log_operation", side_effect=RuntimeError("s3 down")):
+        _submit(group_module, slack_client, decision, approvers=([], ["gone@example.com"]), execute=REAL_EXECUTE)
+
+    assert slack_client.chat_postMessage.call_args_list[0].kwargs["text"].startswith(":x: *Failed · group TestGroup")
+    assert "None of the approvers" in _thread_replies(slack_client)[0]
 
 
 def test_group_submission_audits_a_refusal_as_declined(group_module, slack_client):

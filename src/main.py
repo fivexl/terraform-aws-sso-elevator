@@ -662,8 +662,7 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             thread_ts=payload.thread_ts,
         )
     if payload.action == entities.ApproverAction.Discard:
-        # Discard ends the request before any decision is made, so it is audited here,
-        # once the buttons are gone (like revoker's Expired path).
+        # Audited only once Slack shows Discarded, like revoker's Expired.
         if slack_helpers.discard_request(client, payload.channel_id, payload.thread_ts, card, approver.id, requester.id, dm_requester):
             s3.log_operation_best_effort(
                 s3.AuditEntry(
@@ -825,9 +824,29 @@ def process_access_request(
         slack_helpers.send_dm(client, requester.id, outcome.dm)
     if outcome.state.is_pending:
         _schedule_pending_request_events(ts)
+    elif decision.reason == access_control.DecisionReason.RequiresApproval:
+        # Posted Failed: no approver resolved in Slack, so the request ends here.
+        s3.log_operation_best_effort(
+            s3.AuditEntry(
+                account_id=request.account_id,
+                role_name=request.permission_set_name,
+                reason=request.reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id="NA",
+                approver_email="NA",
+                operation_type="declined",
+                permission_duration=request.permission_duration,
+                sso_user_principal_id="NA",
+                audit_entry_type="account",
+                request_source=request.request_source,
+                verified_arn=request.verified_arn,
+                decision_reason="NoApproversFoundInSlack",
+            ),
+        )
 
     # Called for denials too: one that ends the request is audited as "declined".
-    # Granted before the outcome is shown, so a failure is never reported as success.
+    # Auto-grants run before the outcome is shown, so a failure is never reported as success.
     replaced, grant_error = [], None
     try:
         replaced = access_control.execute_decision(

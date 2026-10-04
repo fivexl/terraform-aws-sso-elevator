@@ -384,8 +384,8 @@ def execute_decision(  # noqa: PLR0913
     revocation failed."""
     logger.info("Executing decision")
     if not decision.grant:
-        logger.info("Access request denied")
         if _ends_request(decision):
+            logger.info("Access request denied")
             s3.log_operation_best_effort(
                 s3.AuditEntry(
                     account_id=account_id,
@@ -531,8 +531,8 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     """Same contract as execute_decision, for group membership."""
     logger.info("Executing decision")
     if not decision.grant:
-        logger.info("Access request denied")
         if _ends_request(decision):
+            logger.info("Access request denied")
             s3.log_operation_best_effort(
                 s3.AuditEntry(
                     group_name=group.name,
