@@ -560,6 +560,13 @@ def report_grant_outcome(  # noqa: PLR0913
     raise error
 
 
+def grant_conflict_reply(approver_slack_id: str) -> str:
+    return (
+        f"<@{approver_slack_id}> another grant for this request is already running, please wait for its result. "
+        "If no 'access granted' follows, ask the requester to submit again."
+    )
+
+
 def discard_request(  # noqa: PLR0913
     client: WebClient, channel_id: str, ts: str, card: RequestCard, approver_slack_id: str, requester_slack_id: str, dm_requester: bool
 ) -> bool:

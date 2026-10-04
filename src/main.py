@@ -582,8 +582,6 @@ app.shortcut("request_for_group_membership")(
     load_select_options_for_group_access_request,
 )
 
-cache_for_dublicate_requests = {}
-
 
 @handle_errors
 def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> SlackResponse | None:  # noqa: ARG001, PLR0911
@@ -618,16 +616,6 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
     dm_requester = slack_helpers.should_dm(client, requester.id)
     card = slack_helpers.RequestCard.from_message(payload.message, slack_helpers.request_subject(request), requester.id)
 
-    if (
-        cache_for_dublicate_requests.get("requester_slack_id") == request.requester_slack_id
-        and cache_for_dublicate_requests.get("account_id") == request.account_id
-        and cache_for_dublicate_requests.get("permission_set_name") == request.permission_set_name
-    ):
-        return client.chat_postMessage(
-            channel=payload.channel_id,
-            text=f"<@{approver.id}> request is already in progress, please wait for the result.",
-            thread_ts=payload.thread_ts,
-        )
     if payload.action == entities.ApproverAction.Discard:
         # Audited only once Slack shows Discarded, like revoker's Expired.
         if slack_helpers.discard_request(client, payload.channel_id, payload.thread_ts, card, approver.id, requester.id, dm_requester):
@@ -649,7 +637,6 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
                     decision_reason="Discarded",
                 ),
             )
-        cache_for_dublicate_requests.clear()
         return None
 
     # A CLI request is evaluated against the identity verified at submission
@@ -660,38 +647,26 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
         request.verified_user_id if request.request_source == "cli" and request.verified_user_id != "NA" else None
     )  # noqa: E501
     requester_group_ids = access_control.get_requester_group_ids_if_needed(cfg.statements, eligibility_email, eligibility_verified_user_id)
-    cache_for_dublicate_requests["requester_slack_id"] = request.requester_slack_id
-    cache_for_dublicate_requests["account_id"] = request.account_id
-    cache_for_dublicate_requests["permission_set_name"] = request.permission_set_name
-
-    # Every exit below clears the dedup cache, or a retry would be stuck on
-    # "already in progress" for this container's life (#194 A3).
-    try:
-        decision = access_control.make_decision_on_approve_request(
-            action=payload.action,
-            statements=cfg.statements,
-            account_id=request.account_id,
-            permission_set_name=request.permission_set_name,
-            approver_email=approver.email,
-            requester_email=eligibility_email,
-            requester_group_ids=requester_group_ids,
-        )
-    except Exception:
-        cache_for_dublicate_requests.clear()
-        raise
+    decision = access_control.make_decision_on_approve_request(
+        action=payload.action,
+        statements=cfg.statements,
+        account_id=request.account_id,
+        permission_set_name=request.permission_set_name,
+        approver_email=approver.email,
+        requester_email=eligibility_email,
+        requester_group_ids=requester_group_ids,
+    )
     logger.info("Decision on request was made", extra={"decision": decision.dict()})
 
     if not decision.permit:
-        cache_for_dublicate_requests.clear()
         return client.chat_postMessage(
             channel=payload.channel_id,
             text=f"<@{approver.id}> you can not approve this request",
             thread_ts=payload.thread_ts,
         )
 
-    # Buttons go before the grant runs (#194 A2): the dedup cache is
-    # per-container, so only removing the buttons stops a second approver's
-    # click in another container from granting twice.
+    # Buttons go before the grant runs (#194 A2), so a later click has nothing to press.
+    # A click that already raced past them hits Identity Center's ConflictException (#212).
     decided_by = slack_helpers.approved_by(approver.id)
     slack_helpers.update_request_message(
         client, payload.channel_id, payload.thread_ts, card, slack_helpers.RequestState.processing(decided_by)
@@ -714,9 +689,13 @@ def handle_button_click(body: dict, client: WebClient, context: BoltContext) -> 
             message_ts=payload.thread_ts,
         )
     except Exception as e:  # noqa: BLE001
+        if sso.is_grant_conflict(e):
+            # The racing grant owns the card; recolouring it here would paint its success red.
+            logger.warning(f"Another grant for this request is already running: {e}")
+            slack_helpers.post_thread_reply(client, payload.channel_id, payload.thread_ts, slack_helpers.grant_conflict_reply(approver.id))
+            return None
         grant_error = e
         logger.exception(f"execute_decision failed: {e}", extra={"decision": decision.dict()})
-    cache_for_dublicate_requests.clear()
 
     slack_helpers.report_grant_outcome(
         client,

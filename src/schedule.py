@@ -1,4 +1,5 @@
 import json
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import botocore.exceptions
@@ -130,6 +131,15 @@ def event_bridge_schedule_after(td: timedelta) -> str:
     return f"at({(now + td).replace(microsecond=0).isoformat().replace('+00:00', '')})"
 
 
+SCHEDULE_NAME_MAX_LENGTH = 64  # EventBridge Scheduler's limit
+
+
+def revoke_schedule_name() -> str:
+    """Unique per grant, so two grants scheduled in the same second don't collide (#212)."""
+    suffix = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S") + "-" + secrets.token_hex(4)
+    return cfg.revoker_function_name[: SCHEDULE_NAME_MAX_LENGTH - len(suffix)] + suffix
+
+
 def _create_revoke_schedule(
     schedule_client: EventBridgeSchedulerClient,
     action: str,
@@ -167,7 +177,7 @@ def schedule_revoke_event(  # noqa: PLR0913
 ) -> list[RevokeEvent | GroupRevokeEvent]:
     """Returns the revoke events this one replaced."""
     logger.info("Scheduling revoke event")
-    schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = revoke_schedule_name()
     replaced = get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, user_account_assignment)
     revoke_event = RevokeEvent(
         schedule_name=schedule_name,
@@ -193,7 +203,7 @@ def schedule_group_revoke_event(  # noqa: PLR0913
 ) -> list[RevokeEvent | GroupRevokeEvent]:
     """Returns the revoke events this one replaced."""
     logger.info("Scheduling revoke event")
-    schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
+    schedule_name = revoke_schedule_name()
     revoke_event = GroupRevokeEvent(
         schedule_name=schedule_name,
         approver=approver,

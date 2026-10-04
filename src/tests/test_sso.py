@@ -261,3 +261,18 @@ def test_find_user_principal_id_by_email_strict_same_user_repeated_email_is_not_
     )
 
     assert sso.find_user_principal_id_by_email_strict("jane.smith@company.com", list_of_users) == "u-1"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ClientError({"Error": {"Code": "ConflictException"}}, "CreateAccountAssignment"), True),
+        (ClientError({"Error": {"Code": "ConflictException"}}, "CreateGroupMembership"), True),
+        (ClientError({"Error": {"Code": "ConflictException"}}, "DeleteAccountAssignment"), False),
+        (ClientError({"Error": {"Code": "AccessDeniedException"}}, "CreateAccountAssignment"), False),
+        (RuntimeError("ConflictException"), False),
+        (errors.PostGrantError("ConflictException"), False),
+    ],
+)
+def test_is_grant_conflict_matches_only_a_conflict_from_the_create_call(error, expected):  # noqa: ANN001
+    assert sso.is_grant_conflict(error) is expected

@@ -1528,7 +1528,62 @@ def test_handle_button_click_reflects_a_grant_failure_instead_of_claiming_succes
 
     assert client.chat_update.call_args.kwargs["text"].startswith(":x: *Failed · FullOrgAdmin → aft")
     assert _thread_replies(client) == ["Granting access failed: boom: permission set not found"]
-    assert main_module.cache_for_dublicate_requests == {}
+
+
+def _client_error(code: str, operation: str) -> botocore.exceptions.ClientError:
+    return botocore.exceptions.ClientError({"Error": {"Code": code, "Message": "m"}}, operation)
+
+
+def test_handle_button_click_leaves_the_card_to_a_racing_grant_on_conflict(main_module):
+    """#212: the losing click of a double Approve must not paint the winner's request red."""
+    client = _slack_client()
+
+    def _conflict(**_kwargs):  # noqa: ANN202, ANN003
+        raise _client_error("ConflictException", "CreateAccountAssignment")
+
+    result, *_ = _click(main_module, _button_click_body(main_module), client, execute=_conflict)
+
+    assert result is None
+    assert client.chat_update.call_count == 1  # Processing only, set before the grant ran
+    assert client.chat_update.call_args.kwargs["text"].startswith(":hourglass_flowing_sand: *Processing")
+    assert _thread_replies(client) == [main_module.slack_helpers.grant_conflict_reply("U_APPROVER")]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _client_error("AccessDeniedException", "CreateAccountAssignment"),
+        _client_error("ConflictException", "DeleteAccountAssignment"),
+        RuntimeError("ConflictException"),
+    ],
+)
+def test_handle_button_click_reports_other_grant_errors_as_failures(main_module, error):
+    client = _slack_client()
+
+    def _fail(**_kwargs):  # noqa: ANN202, ANN003
+        raise error
+
+    with pytest.raises(main_module.ShownOnRequest):
+        _click(main_module, _button_click_body(main_module), client, execute=_fail)
+
+    assert client.chat_update.call_args.kwargs["text"].startswith(":x: *Failed")
+    assert _thread_replies(client) == [f"Granting access failed: {error}"]
+
+
+def test_handle_button_click_post_grant_error_is_not_a_conflict(main_module):
+    """A PostGrantError means this click's grant is live, whatever caused the later step to fail."""
+    client = _slack_client()
+
+    def _fail(**_kwargs):  # noqa: ANN202, ANN003
+        try:
+            raise _client_error("ConflictException", "CreateSchedule")
+        except botocore.exceptions.ClientError as e:
+            raise main_module.access_control.PostGrantError(str(e)) from e
+
+    _click(main_module, _button_click_body(main_module), client, execute=_fail)
+
+    assert client.chat_update.call_args.kwargs["text"].startswith(":warning:")
+    assert "could not be scheduled" in _thread_replies(client)[0]
 
 
 def test_handle_button_click_shows_approved_and_pings_the_requester(main_module):
@@ -1541,20 +1596,6 @@ def test_handle_button_click_shows_approved_and_pings_the_requester(main_module)
     assert client.chat_update.call_args.kwargs["text"] == ":white_check_mark: *Approved · FullOrgAdmin → aft #111111111111 for* <@U_REQ>"
     assert _thread_replies(client)[0].startswith("<@U_REQ> access granted, ends at")
     assert len(_thread_replies(client)) == 1
-    assert main_module.cache_for_dublicate_requests == {}
-
-
-def test_handle_button_click_clears_the_dedup_cache_when_make_decision_on_approve_request_raises(main_module):
-    """#194 A3 residual: an exception here must not leave the request stuck on "already in progress"."""
-    client = _slack_client()
-    with (
-        patch.object(main_module.slack_helpers, "get_user", side_effect=[APPROVER, REQUESTER]),
-        patch.object(main_module.access_control, "make_decision_on_approve_request", side_effect=RuntimeError("boom")),
-        pytest.raises(RuntimeError, match="boom"),
-    ):
-        main_module.handle_button_click.__wrapped__(body=_button_click_body(main_module), client=client, context={})
-
-    assert main_module.cache_for_dublicate_requests == {}
 
 
 def test_handle_button_click_strips_buttons_before_execute_decision_runs(main_module):
