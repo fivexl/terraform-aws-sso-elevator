@@ -1,6 +1,6 @@
-FROM ghcr.io/astral-sh/uv:0.12.17@sha256:10787c682e4184e4f290de1171fd4703dc63de99221f10fe1c99002ce7fa9acc AS uv
+FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS uv
 
-FROM public.ecr.aws/lambda/python:3.13@sha256:88654a34882b5665ca04b0c8177422abb4d97a5ac2c68701e9fee04bb20c20d5
+FROM public.ecr.aws/lambda/python:3.14@sha256:feabf69ea6ba5e044cceb2a2cbf683c740c18970c2a3ac6191edb014dae1a047
 
 # Copy uv from the official image
 COPY --from=uv /uv /bin/uv
