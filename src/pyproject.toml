@@ -5,7 +5,7 @@ description = ""
 authors = [
     {name = "FivexL Consuling Services", email = "open.source@fivexl.io"}
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "boto3-stubs[identitystore,organizations,s3,scheduler,ssm,sso-admin,events]>=1.26.134",
     "pydantic[email]>=1.10.13",
@@ -59,8 +59,8 @@ exclude = [
 
 line-length = 140
 
-# Assume Python 3.13.
-target-version = "py313"
+# Assume Python 3.14.
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [
@@ -102,6 +102,9 @@ ignore = [
   "PLC0415",
   # Stable since ruff 0.16; the existing handlers take many positional args by design.
   "PLR0917",
+  # Python 3.14 defers annotations, so ruff would move annotation-only imports under TYPE_CHECKING.
+  # Pydantic and other libraries still resolve annotations at runtime; keep those imports real.
+  "TC001", "TC002", "TC003",
 ]
 
 # Allow autofix for all enabled rules (when `--fix`) is provided.
