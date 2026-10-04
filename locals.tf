@@ -5,6 +5,7 @@ locals {
 
   revoker_lambda_arn   = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.revoker_lambda_name}"
   requester_lambda_arn = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
+  requester_alias_name = "live"
   sso_instance_arn     = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].arns[0] : var.sso_instance_arn
   identity_store_id    = var.sso_instance_arn == "" ? data.aws_ssoadmin_instances.all[0].identity_store_ids[0] : var.identity_store_id
 

@@ -80,6 +80,10 @@ with its evidence.
 
 Upgrade and install:
 
+- [ ] Fresh install: the first apply succeeds, with API Gateway accepting the integrations
+      before or while the `live` alias is created. Then toggle `use_pre_created_image`: the
+      apply replaces the requester function cleanly, with no dependency cycle or
+      "function in use" error.
 - [ ] Fresh install, then upgrade a 4.4.x deployment by following README "Upgrade to 5.0.0".
       Expect: Slack and the CLI work again once steps 7–9 are done; old versions deleted by
       step 10.

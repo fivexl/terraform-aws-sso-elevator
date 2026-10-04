@@ -15,6 +15,9 @@ resource "aws_wafv2_web_acl" "requester" {
     allow {}
   }
 
+  # Sampling is off on the ACL and every rule: log redaction does not cover sampled requests, which
+  # would show the auth and Slack signature headers to anyone allowed to view samples.
+
   # Keeps one noisy IP from draining the API Gateway throttle shared by all callers.
   rule {
     name     = "RateLimitPerIp"
@@ -35,7 +38,7 @@ resource "aws_wafv2_web_acl" "requester" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "${var.api_gateway_name}-RateLimitPerIp"
-      sampled_requests_enabled   = true
+      sampled_requests_enabled   = false
     }
   }
 
@@ -65,7 +68,7 @@ resource "aws_wafv2_web_acl" "requester" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "${var.api_gateway_name}-AWSManagedRulesCommonRuleSet"
-      sampled_requests_enabled   = true
+      sampled_requests_enabled   = false
     }
   }
 
@@ -87,7 +90,7 @@ resource "aws_wafv2_web_acl" "requester" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "${var.api_gateway_name}-AWSManagedRulesKnownBadInputsRuleSet"
-      sampled_requests_enabled   = true
+      sampled_requests_enabled   = false
     }
   }
 
@@ -109,14 +112,14 @@ resource "aws_wafv2_web_acl" "requester" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "${var.api_gateway_name}-AWSManagedRulesAmazonIpReputationList"
-      sampled_requests_enabled   = true
+      sampled_requests_enabled   = false
     }
   }
 
   visibility_config {
     cloudwatch_metrics_enabled = true
     metric_name                = var.api_gateway_name
-    sampled_requests_enabled   = true
+    sampled_requests_enabled   = false
   }
 
   tags = var.tags

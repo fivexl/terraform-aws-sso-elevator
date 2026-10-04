@@ -485,9 +485,9 @@ variable "waf_web_acl_arn" {
 }
 
 variable "waf_rate_limit" {
-  description = "Requests per 5 minutes a single IP may send before the module-created web ACL blocks it. Used only when waf_enabled is true."
+  description = "Requests per 5 minutes a single IP may send before the module-created web ACL blocks it. All Slack traffic comes from Slack's shared IPs and one access request is about 5 calls, so keep it well above your peak request rate. Used only when waf_enabled is true."
   type        = number
-  default     = 100
+  default     = 1000
 
   validation {
     condition     = var.waf_rate_limit >= 10 && floor(var.waf_rate_limit) == var.waf_rate_limit

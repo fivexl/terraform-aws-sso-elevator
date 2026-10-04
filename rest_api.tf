@@ -19,6 +19,10 @@ resource "aws_api_gateway_rest_api" "requester" {
 }
 
 locals {
+  # A string rather than the alias module's invoke ARN: the deployment's create_before_destroy
+  # would otherwise propagate onto the function and break its replacement.
+  requester_integration_uri = "arn:${data.aws_partition.current.partition}:apigateway:${data.aws_region.current.region}:lambda:path/2015-03-31/functions/${local.requester_lambda_arn}:${local.requester_alias_name}/invocations"
+
   slack_method_arn = "${aws_api_gateway_rest_api.requester.execution_arn}/${local.api_stage_name}/POST${local.api_resource_path}"
   cli_method_arn   = "${aws_api_gateway_rest_api.requester.execution_arn}/${local.api_stage_name}/POST${local.api_resource_path_cli}"
 
@@ -91,7 +95,7 @@ resource "aws_api_gateway_integration" "slack" {
   http_method             = aws_api_gateway_method.slack.http_method
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
-  uri                     = module.access_requester_alias.lambda_alias_invoke_arn
+  uri                     = local.requester_integration_uri
 }
 
 # CLI route, signed with the caller's own AWS credentials.
@@ -117,7 +121,7 @@ resource "aws_api_gateway_integration" "cli" {
   http_method             = aws_api_gateway_method.cli[0].http_method
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
-  uri                     = module.access_requester_alias.lambda_alias_invoke_arn
+  uri                     = local.requester_integration_uri
 }
 
 resource "aws_api_gateway_deployment" "requester" {

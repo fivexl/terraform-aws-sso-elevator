@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // roundTripperFunc adapts a plain function to http.RoundTripper, so a test
@@ -317,18 +321,10 @@ func TestSendWithConnectRetryDoesNotRetryAfterTheServerWasReached(t *testing.T) 
 		time.Sleep(200 * time.Millisecond) // outlast the client timeout
 	}))
 	defer srv.Close()
-	// A nil body, not bytes.NewReader([]byte("{}")): sendWithConnectRetry
-	// reuses the same *http.Request across attempts without restoring the
-	// body from req.GetBody, so a non-empty body reader is already
-	// exhausted by attempt 2 -- that attempt then fails inside the
-	// transport on a Content-Length mismatch, before ever reaching the
-	// network, making hits stay 1 regardless of whether the retry
-	// predicate under test is actually correct. Confirmed: with the old
-	// body, this test still passed even after deliberately breaking
-	// isDialError's predicate to also retry on os.IsTimeout (the exact
-	// regression it exists to catch).
-	req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
-	if _, err := sendWithConnectRetry(&http.Client{Timeout: 50 * time.Millisecond}, req); err == nil {
+	newRequest := func() (*http.Request, error) {
+		return http.NewRequest(http.MethodPost, srv.URL, strings.NewReader("{}"))
+	}
+	if _, err := sendWithConnectRetry(&http.Client{Timeout: 50 * time.Millisecond}, newRequest); err == nil {
 		t.Fatal("expected a timeout")
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {
@@ -342,10 +338,31 @@ func TestSendWithConnectRetryDoesNotRetryAfterTheServerWasReached(t *testing.T) 
 // succeed, not just that a non-dial failure doesn't. Scripted via a fake
 // RoundTripper rather than real sockets, so it isn't subject to OS-level
 // port-reuse timing the way simulating this with real listeners would be.
+// The retry must carry a freshly signed request and proof, not the first
+// attempt's, so the attempts differ in signing date and nonce.
 func TestSendWithConnectRetryRetriesAfterADialFailure(t *testing.T) {
 	var attempts int32
+	type sent struct{ signDate, proofDate, nonce string }
+	var seen []sent
 	client := &http.Client{
-		Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var env proofEnvelope
+			if err := json.Unmarshal(body, &env); err != nil {
+				t.Fatalf("decode envelope: %v", err)
+			}
+			proofURL, err := url.Parse(env.Proof.URL)
+			if err != nil {
+				t.Fatalf("parse proof URL: %v", err)
+			}
+			seen = append(seen, sent{
+				signDate:  req.Header.Get("X-Amz-Date"),
+				proofDate: proofURL.Query().Get("X-Amz-Date"),
+				nonce:     env.Proof.Headers[strings.ToLower(nonceHeader)],
+			})
 			if atomic.AddInt32(&attempts, 1) == 1 {
 				// The exact shape isDialError checks for: op == "dial".
 				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
@@ -353,9 +370,14 @@ func TestSendWithConnectRetryRetriesAfterADialFailure(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
 		}),
 	}
-	req, _ := http.NewRequest(http.MethodPost, "http://elevator.invalid/", nil)
+	creds := aws.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "secret"}
+	clock := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	newRequest := func() (*http.Request, error) {
+		clock = clock.Add(time.Minute)
+		return buildSignedRequest(context.Background(), creds, []byte(`{"account":"111111111111"}`), "https://elevator.invalid/", "abcde12345", "eu-central-1", clock)
+	}
 
-	resp, err := sendWithConnectRetry(client, req)
+	resp, err := sendWithConnectRetry(client, newRequest)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,6 +386,13 @@ func TestSendWithConnectRetryRetriesAfterADialFailure(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&attempts); n != 2 {
 		t.Fatalf("got %d attempts, want exactly 2 (one dial failure, then a retry that reached the server)", n)
+	}
+	first, second := seen[0], seen[1]
+	if first.signDate == "" || first.proofDate == "" || first.nonce == "" {
+		t.Fatalf("first attempt missing signing date, proof date or nonce: %+v", first)
+	}
+	if first.signDate == second.signDate || first.proofDate == second.proofDate || first.nonce == second.nonce {
+		t.Fatalf("retry reused the first attempt's signature or proof: %+v vs %+v", first, second)
 	}
 }
 

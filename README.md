@@ -523,8 +523,8 @@ Stage access logs are off by default. `api_gateway_access_logs_enabled = true` c
 ## AWS WAF
 Optional, off by default. Two modes, which cannot be combined (plan fails if both are set):
 
-- `waf_enabled = true`: the module creates a REGIONAL web ACL, associates it with the API stage and logs to the CloudWatch log group `aws-waf-logs-<api_gateway_name>`, with the `authorization`, `x-amz-security-token` and `x-slack-signature` headers redacted. Rules, in order:
-  1. A per-IP rate limit, `waf_rate_limit` requests per 5 minutes (default 100, minimum 10). It stops one noisy IP from using up the API Gateway throttle that all callers share.
+- `waf_enabled = true`: the module creates a REGIONAL web ACL, associates it with the API stage and logs to the CloudWatch log group `aws-waf-logs-<api_gateway_name>`, with the `authorization`, `x-amz-security-token` and `x-slack-signature` headers redacted. CloudWatch metrics are on; request sampling is off, because redaction does not apply to sampled requests. Rules, in order:
+  1. A per-IP rate limit, `waf_rate_limit` requests per 5 minutes (default 1000, minimum 10). It stops one noisy IP from using up the API Gateway throttle that all callers share. All Slack traffic arrives from Slack's shared IPs and one access request takes about 5 calls, so a low limit blocks Slack bursts; the API Gateway throttle stays the tighter overall cap.
   2. `AWSManagedRulesCommonRuleSet`, with `SizeRestrictions_BODY` set to Count because Slack modal submissions can exceed its 8 KB limit.
   3. `AWSManagedRulesKnownBadInputsRuleSet`.
   4. `AWSManagedRulesAmazonIpReputationList`.
@@ -1049,7 +1049,7 @@ settings:
 | <a name="input_tags"></a> [tags](#input\_tags) | A map of tags to assign to resources. | `map(string)` | `{}` | no |
 | <a name="input_use_pre_created_image"></a> [use\_pre\_created\_image](#input\_use\_pre\_created\_image) | If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code. | `bool` | `true` | no |
 | <a name="input_waf_enabled"></a> [waf\_enabled](#input\_waf\_enabled) | If true, the module creates a REGIONAL AWS WAF web ACL (per-IP rate limit plus the AWS managed Common, Known Bad Inputs and Amazon IP Reputation rule sets), associates it with the requester API stage, and logs to the CloudWatch log group aws-waf-logs-<api\_gateway\_name>. Cannot be combined with waf\_web\_acl\_arn. Leave both unset when AWS Firewall Manager associates a web ACL for you. | `bool` | `false` | no |
-| <a name="input_waf_rate_limit"></a> [waf\_rate\_limit](#input\_waf\_rate\_limit) | Requests per 5 minutes a single IP may send before the module-created web ACL blocks it. Used only when waf\_enabled is true. | `number` | `100` | no |
+| <a name="input_waf_rate_limit"></a> [waf\_rate\_limit](#input\_waf\_rate\_limit) | Requests per 5 minutes a single IP may send before the module-created web ACL blocks it. All Slack traffic comes from Slack's shared IPs and one access request is about 5 calls, so keep it well above your peak request rate. Used only when waf\_enabled is true. | `number` | `1000` | no |
 | <a name="input_waf_web_acl_arn"></a> [waf\_web\_acl\_arn](#input\_waf\_web\_acl\_arn) | ARN of an existing REGIONAL AWS WAF web ACL to associate with the requester API stage, for organizations that manage a central web ACL. Cannot be combined with waf\_enabled. | `string` | `null` | no |
 
 ## Outputs

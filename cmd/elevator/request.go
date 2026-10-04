@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 )
@@ -40,7 +41,7 @@ var executeAPIRegionRE = regexp.MustCompile(`\.execute-api\.([a-z0-9-]+)\.amazon
 
 // resolveSigningRegion picks the region to SigV4-sign with. A signature
 // signed for the wrong region always fails API Gateway's AWS_IAM authorizer
-// with SignatureDoesNotMatch, and the caller's own AWS profile/config region
+// ("Credential should be scoped to a valid region"), and the caller's own AWS profile/config region
 // has no necessary relationship to where this particular API happens to be
 // deployed -- so once an explicit --region override is ruled out, a region
 // parsed straight out of the endpoint's own hostname is more reliable than
@@ -245,27 +246,8 @@ func runRequest(args []string) {
 	if err != nil {
 		log.Fatalf("encode request payload: %v", err)
 	}
-	nonce, err := newNonce()
-	if err != nil {
-		log.Fatal(err)
-	}
-	// The Lambda accepts only a proof for STS in its own region, which is the API's region.
-	body, err := buildEnvelope(ctx, creds, payload, apiID, resolvedRegion, nonce, time.Now())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		log.Fatalf("create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	sum := sha256.Sum256(body)
-	payloadHash := hex.EncodeToString(sum[:])
-
-	if err := v4.NewSigner().SignHTTP(ctx, creds, req, payloadHash, "execute-api", resolvedRegion, time.Now().UTC()); err != nil {
-		log.Fatalf("sign request: %v", err)
+	newRequest := func() (*http.Request, error) {
+		return buildSignedRequest(ctx, creds, payload, endpoint, apiID, resolvedRegion, time.Now())
 	}
 
 	// Diagnostics go to stderr, not stdout (#194 D4): stdout is reserved for
@@ -275,15 +257,15 @@ func runRequest(args []string) {
 	// Location, Body -- on stderr, rather than losing it while only the
 	// terse final log.Fatalf line survives.
 	fmt.Fprintf(os.Stderr, "Credential source: %s\n", creds.Source)
-	// Printed so a custom-domain wrong-region 403 (SignatureDoesNotMatch)
-	// is actually diagnosable -- resolveSigningRegion's fallback chain isn't
+	// Printed so a custom-domain wrong-region 403 ("Credential should be
+	// scoped to a valid region") is actually diagnosable -- resolveSigningRegion's fallback chain isn't
 	// visible anywhere else, and a custom domain doesn't get the free
 	// region hint an API Gateway default invoke URL's hostname gives.
 	fmt.Fprintf(os.Stderr, "Signing region: %s\n", resolvedRegion)
 	fmt.Fprintf(os.Stderr, "POST %s\n\n", endpoint)
 
 	httpClient := &http.Client{Timeout: requestTimeout, CheckRedirect: doNotFollowRedirects}
-	resp, err := sendWithConnectRetry(httpClient, req)
+	resp, err := sendWithConnectRetry(httpClient, newRequest)
 	if err != nil {
 		// sendWithConnectRetry only returns an error after either exhausting
 		// its dial-error retries or hitting a non-dial failure -- isDialError
@@ -324,13 +306,43 @@ func runRequest(args []string) {
 	printSubmissionResult(*account, *permissionSet, *duration, respBody)
 }
 
-// sendWithConnectRetry retries only when req never reached the server — a
+// buildSignedRequest builds the envelope (STS proof with a fresh nonce) and
+// SigV4-signs the API Gateway request, both at now. The Lambda accepts only
+// a proof for STS in its own region, which is the API's region.
+func buildSignedRequest(ctx context.Context, creds aws.Credentials, payload []byte, endpoint, apiID, region string, now time.Time) (*http.Request, error) {
+	nonce, err := newNonce()
+	if err != nil {
+		return nil, err
+	}
+	body, err := buildEnvelope(ctx, creds, payload, apiID, region, nonce, now)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	sum := sha256.Sum256(body)
+	if err := v4.NewSigner().SignHTTP(ctx, creds, req, hex.EncodeToString(sum[:]), "execute-api", region, now.UTC()); err != nil {
+		return nil, fmt.Errorf("sign request: %w", err)
+	}
+	return req, nil
+}
+
+// sendWithConnectRetry retries only when the request never reached the server — a
 // dial-level failure (DNS, connection refused, TLS handshake). A timeout
 // waiting for a response is not retried here: by then the request may
 // already be sitting in the Lambda, and retrying could submit a duplicate
 // access request (and a duplicate auto-grant, if the caller self-approves).
-func sendWithConnectRetry(client *http.Client, req *http.Request) (*http.Response, error) {
+// Each attempt calls newRequest, so a retry carries a fresh proof and
+// signature instead of one aged by the backoff toward the proof's expiry.
+func sendWithConnectRetry(client *http.Client, newRequest func() (*http.Request, error)) (*http.Response, error) {
 	for attempt := 1; attempt <= maxConnectAttempts; attempt++ {
+		req, err := newRequest()
+		if err != nil {
+			return nil, err
+		}
 		resp, err := client.Do(req)
 		if err == nil {
 			return resp, nil

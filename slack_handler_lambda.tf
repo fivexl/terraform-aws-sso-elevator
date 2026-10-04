@@ -106,7 +106,7 @@ module "access_requester_alias" {
   source  = "terraform-aws-modules/lambda/aws//modules/alias"
   version = "8.8.2"
 
-  name             = "live"
+  name             = local.requester_alias_name
   function_name    = module.access_requester_slack_handler.lambda_function_name
   function_version = module.access_requester_slack_handler.lambda_function_version
   refresh_alias    = true
@@ -168,7 +168,7 @@ data "aws_iam_policy_document" "slack_handler" {
       "lambda:InvokeFunction",
       "lambda:GetFunction"
     ]
-    resources = ["${local.requester_lambda_arn}:live"]
+    resources = ["${local.requester_lambda_arn}:${local.requester_alias_name}"]
   }
   statement {
     effect = "Allow"
