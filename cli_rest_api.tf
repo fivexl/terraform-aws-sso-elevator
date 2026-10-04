@@ -7,6 +7,18 @@ data "aws_organizations_organization" "current" {
   count = local.create_cli_rest_api ? 1 : 0
 }
 
+resource "aws_api_gateway_rest_api" "cli" {
+  count       = local.create_cli_rest_api ? 1 : 0
+  name        = "${var.api_gateway_name}-cli"
+  description = "SSO Elevator CLI access-request route"
+
+  endpoint_configuration {
+    types = ["REGIONAL"]
+  }
+
+  tags = var.tags
+}
+
 locals {
   # Kept in a local so the deployment trigger below hashes the policy as authored: AWS
   # reformats stored policy JSON, so reading it back makes plan and apply disagree.
@@ -16,7 +28,9 @@ locals {
       Effect    = "Allow"
       Principal = "*"
       Action    = "execute-api:Invoke"
-      Resource  = "execute-api:/*"
+      # The full ARN, as AWS stores it: the "execute-api:/*" shorthand is expanded on save
+      # and shows as a change on every plan. It needs the API id, hence a separate policy resource.
+      Resource = "${aws_api_gateway_rest_api.cli[0].execution_arn}/*"
       Condition = {
         StringEquals = {
           "aws:PrincipalOrgID" = data.aws_organizations_organization.current[0].id
@@ -26,17 +40,10 @@ locals {
   }) : null
 }
 
-resource "aws_api_gateway_rest_api" "cli" {
+resource "aws_api_gateway_rest_api_policy" "cli" {
   count       = local.create_cli_rest_api ? 1 : 0
-  name        = "${var.api_gateway_name}-cli"
-  description = "SSO Elevator CLI access-request route"
+  rest_api_id = aws_api_gateway_rest_api.cli[0].id
   policy      = local.cli_rest_api_policy
-
-  endpoint_configuration {
-    types = ["REGIONAL"]
-  }
-
-  tags = var.tags
 }
 
 resource "aws_api_gateway_resource" "cli" {
@@ -82,6 +89,9 @@ resource "aws_api_gateway_deployment" "cli" {
       aws_api_gateway_integration.cli[0].uri,
     ]))
   }
+
+  # A policy change takes effect only through a new deployment, so deploy after it is attached.
+  depends_on = [aws_api_gateway_rest_api_policy.cli]
 
   lifecycle {
     create_before_destroy = true
