@@ -13,6 +13,11 @@ output "requester_api_endpoint_url_cli" {
   value       = local.create_cli_rest_api ? "${aws_api_gateway_stage.cli[0].invoke_url}${local.api_resource_path_cli}" : null
 }
 
+output "requester_api_execution_arn_cli" {
+  description = "The execute-api ARN of the CLI's access-request route. Callers in other accounts need execute-api:Invoke on this ARN in their permission set. null unless enable_access_requester_cli is also true."
+  value       = local.create_cli_rest_api ? "${aws_api_gateway_rest_api.cli[0].execution_arn}/${aws_api_gateway_stage.cli[0].stage_name}/POST${local.api_resource_path_cli}" : null
+}
+
 output "config_s3_bucket_name" {
   description = "The name of the S3 bucket for storing configuration and cache data."
   value       = module.config_bucket.s3_bucket_id

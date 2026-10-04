@@ -162,32 +162,9 @@ class Config(BaseSettings):
 
     sso_instance_arn: str
 
-    # CLI caller's assumed-role name must start with this. IAM reserves the AWSReservedSSO_
-    # name prefix in every account, so keep that prefix. See cli_auth.py's module docstring.
-    cli_sso_role_name_prefix: str = "AWSReservedSSO_"
-
-    # Callers in this account also get the iam:GetRole reserved-path check, which cannot look
-    # up roles in other accounts. Terraform always sets it; "" only applies to tests.
-    cli_expected_account_id: str = ""
-
-    # Defense-in-depth only, not a real access control: a direct-invoke caller
-    # controls the entire event JSON, so this value is guessable, not secret
-    # (it's visible via DescribeApi/Terraform state to anyone with read
-    # access). It only blocks a naive/accidental direct lambda:InvokeFunction
-    # that doesn't bother setting requestContext.apiId -- it does not stop a
-    # deliberate forgery. The real trust boundary is the IAM policy deciding
-    # who can invoke this Lambda at all; see the README's CLI section.
+    # Id of the CLI REST API. "" means the CLI route is disabled and main.py rejects every
+    # CLI event. Not a secret: it only stops a direct invoke that doesn't forge requestContext.apiId.
     cli_expected_api_id: str = ""
-
-    @field_validator("cli_sso_role_name_prefix")
-    @classmethod
-    def cli_sso_role_name_prefix_must_not_be_empty(cls, value: str) -> str:  # noqa: ANN101
-        # str.startswith("") is always True, so an empty prefix would
-        # silently make cli_auth.extract_identity's role-name check accept
-        # any role name at all instead of rejecting non-matching ones.
-        if value == "":
-            raise ValueError("cli_sso_role_name_prefix must not be empty — an empty prefix matches every role name")
-        return value
 
     log_level: str = "INFO"
     slack_app_log_level: str = "INFO"

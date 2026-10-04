@@ -108,20 +108,15 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         request_context = event.get("requestContext") or {}
         user_arn = (request_context.get("identity") or {}).get("userArn", "")
 
-        # Defense-in-depth, not a real access control: this only blocks a
-        # direct lambda:InvokeFunction call that doesn't bother forging
-        # requestContext.apiId (an accidental or naive one), not a
-        # deliberate one -- a direct invoker controls the entire event JSON,
-        # so this value is guessable (visible via DescribeApi/Terraform
-        # state to anyone with read access), not secret. The real trust
-        # boundary is the IAM policy on who may invoke this Lambda at all;
-        # see the README's CLI section. cli_expected_api_id defaults to ""
-        # when the CLI route doesn't exist, and a forged event carrying
-        # "apiId": "" satisfies this check too -- so does simply omitting
-        # requestContext.apiId (or requestContext itself), since dict.get
-        # returns None by default when a key is missing -- though None != ""
-        # is also true, so the comparison below still rejects that case the
-        # same way (#194 B1).
+        # When the CLI route is disabled the expected API id is "", so a forged direct invoke
+        # carrying "apiId": "" would pass the comparison. Rejecting outright keeps a deployment
+        # that never enabled the CLI from accepting CLI-shaped events.
+        if not cfg.cli_expected_api_id:
+            logger.info("Rejected CLI request: the CLI route is not enabled", extra={"user_arn": user_arn})
+            return cli_auth.GENERIC_REJECTION
+
+        # Defense-in-depth, not an access control: a direct invoker controls the whole event,
+        # and the API id is not secret. The real boundary is who may invoke this Lambda.
         if request_context.get("apiId") != cfg.cli_expected_api_id:
             logger.info(
                 "Rejected CLI request: requestContext.apiId did not match this deployment's API Gateway",
@@ -134,8 +129,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # Cheap request-body validation (JSON syntax, field presence, reason
         # length, duration format -- all local, no AWS calls) happens before
         # cli_auth.extract_identity below, not after (#193 item 1): that
-        # call does a full paginated identitystore:ListUsers scan (plus
-        # iam:GetRole for same-account callers), the most expensive thing
+        # call does a full paginated identitystore:ListUsers scan, the most expensive thing
         # on this path. A caller sending
         # malformed JSON, a non-object body, missing fields, or an
         # over-length reason used to still pay for that call before getting
@@ -253,29 +247,16 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 ),
             }
 
-        # Identity verification (iam:GetRole for same-account callers and a
-        # full paginated identitystore:ListUsers scan) runs only now, after every cheap, local check on the body
+        # Identity verification (a full paginated identitystore:ListUsers
+        # scan) runs only now, after every cheap, local check on the body
         # above has already passed -- see the comment where user_arn is
         # extracted for why.
         try:
             identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if user_arn else None
-        except cli_auth.TransientIAMError as e:
-            # IAM or Identity Store couldn't answer right now (throttled, a
-            # 5xx, briefly unavailable) -- this says nothing about whether the
-            # caller's identity is valid, so it shouldn't be reported as
-            # GENERIC_REJECTION's "your credentials are invalid", nor paged
-            # to the approvals channel as an unexpected error. A 503 tells
-            # the caller this is worth retrying.
-            #
-            # The underlying cause is logged, not just the fact that some
-            # transient error happened (#194 AGENTS.md convention pass) --
-            # otherwise there's no way to tell a throttle apart from a 5xx
-            # apart from a connectivity blip from this log line alone.
-            # TransientIAMError itself is always raised bare (`raise
-            # TransientIAMError from e`, no message), so str(e) here would
-            # be empty -- the real detail is on __cause__, from that `from
-            # e` chain.
-            logger.warning(f"Transient IAM error while verifying CLI identity; asking the caller to retry: {e.__cause__}")
+        except cli_auth.TransientIdentityStoreError as e:
+            # The Identity Store couldn't answer right now; that says nothing about the caller,
+            # so ask them to retry. The exception is raised bare, so the detail is on __cause__.
+            logger.warning(f"Transient Identity Store error while verifying CLI identity; asking the caller to retry: {e.__cause__}")
             return _transient_aws_error_response()
         if not identity:
             logger.info("Rejected CLI request: could not verify a signed identity with an email", extra={"user_arn": user_arn})
@@ -353,12 +334,10 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # own recommended delegated-admin deployment topology, and any
         # per-account variant has the same "rejects legitimate first-time
         # access" problem this one did. The identity is still verified by
-        # SigV4 + AWS_IAM, the assumed role's name matching this
-        # deployment's configured prefix (which IAM refuses to let anyone
-        # create, given the default AWSReservedSSO_ prefix), the session name
+        # SigV4 + AWS_IAM, the assumed role's AWSReservedSSO_ name prefix
+        # (which IAM refuses to let anyone else create), the session name
         # resolving to a real Identity Store user, and the email round-trip
-        # cross-check below. Same-account callers also get iam:GetRole's
-        # reserved-path check; see cli_auth.py's module docstring.
+        # cross-check below.
         try:
             requester = slack_helpers.get_user_by_email(app.client, identity_email)
         except slack_sdk.errors.SlackApiError as e:

@@ -30,10 +30,6 @@ locals {
 
   create_cli_rest_api = var.create_api_gateway && var.enable_access_requester_cli
 
-  # Callers in this account also get the iam:GetRole reserved-path check (src/cli_auth.py);
-  # GetRole cannot look up roles in other accounts.
-  cli_expected_account_id = data.aws_caller_identity.current.account_id
-
   # Attribute sync configuration
   attribute_sync_event_rule_name = var.attribute_sync_event_rule_name
 

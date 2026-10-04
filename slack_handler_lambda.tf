@@ -80,8 +80,6 @@ module "access_requester_slack_handler" {
       CONFIG_BUCKET_KMS_KEY_ARN = var.config_bucket_kms_key_arn != null ? var.config_bucket_kms_key_arn : ""
     },
     local.create_cli_rest_api ? {
-      CLI_EXPECTED_ACCOUNT_ID  = local.cli_expected_account_id
-      CLI_SSO_ROLE_NAME_PREFIX = var.cli_sso_role_name_prefix
       # Defense-in-depth only, not an access control: see src/config.py's cli_expected_api_id.
       CLI_EXPECTED_API_ID = aws_api_gateway_rest_api.cli[0].id
     } : {}
@@ -172,19 +170,6 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:sso:::instance/*",
       "arn:aws:sso:::permissionSet/*/*",
       "arn:aws:sso:::account/*"
-    ]
-  }
-  # src/cli_auth.py calls iam:GetRole to confirm a same-account CLI caller's role sits at IAM
-  # Identity Center's reserved path. Roles at any other path get AccessDenied, which is rejected.
-  statement {
-    sid    = "GetRoleReservedPathOnly"
-    effect = "Allow"
-    actions = [
-      "iam:GetRole",
-    ]
-    resources = [
-      "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
-      "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"
     ]
   }
 

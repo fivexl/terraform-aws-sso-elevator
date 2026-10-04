@@ -50,12 +50,7 @@ def main_module():
     group, and boto3 client construction) mocked out — same technique
     test_group.py's group_module fixture uses for the same underlying problem.
 
-    cli_auth's own module-level iam client goes through this same patched
-    boto3.Session, so its get_role() is stubbed here too, returning a role
-    at IAM Identity Center's real reserved path — otherwise every "valid
-    SSO session" test below would get rejected by cli_auth's own path check
-    (a MagicMock().Path never equals the real path string). Likewise, the
-    shared client's list_users paginator is stubbed to resolve every test
+    The shared client's list_users paginator is stubbed to resolve every test
     ARN's session name ("req@example.com") to a matching Identity Store
     user, since cli_auth.extract_identity now looks the session name up
     rather than trusting it directly. That same stubbed user's UserId
@@ -84,7 +79,6 @@ def main_module():
         patch("slack_bolt.App") as mock_app_cls,
     ):
         shared_client = MagicMock()
-        shared_client.get_role.return_value = {"Role": {"Path": "/aws-reserved/sso.amazonaws.com/", "RoleName": "irrelevant-for-this-test"}}
 
         def _paginator_for(operation_name, **_kwargs):
             paginator = MagicMock()
@@ -255,6 +249,26 @@ def test_handle_cli_access_request_logs_the_caller_arn_on_an_api_id_mismatch(mai
     expected_arn = event["requestContext"]["identity"]["userArn"]
     info_calls = mock_logger.info.call_args_list
     assert any("apiId" in (c.args[0] if c.args else "") and c.kwargs.get("extra", {}).get("user_arn") == expected_arn for c in info_calls)
+
+
+@pytest.mark.parametrize("api_id", ["", None])
+def test_handle_cli_access_request_rejects_every_event_when_cli_is_disabled(main_module, api_id):
+    """With the CLI route disabled, cli_expected_api_id is "". A forged direct invoke carrying
+    "apiId": "" must still be rejected, before any identity lookup."""
+    event = _cli_request_event(
+        body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"},
+        user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com",
+        api_id=api_id,
+    )
+    disabled_cfg = main_module.cfg.model_copy(update={"cli_expected_api_id": ""})
+    with (
+        patch.object(main_module, "cfg", disabled_cfg),
+        patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity,
+    ):
+        result = main_module.handle_cli_access_request(event)
+
+    assert result == main_module.cli_auth.GENERIC_REJECTION
+    mock_extract_identity.assert_not_called()
 
 
 def test_handle_cli_access_request_rejects_missing_api_id(main_module):
@@ -1058,7 +1072,7 @@ def test_handle_cli_access_request_reports_unexpected_errors(main_module):
     assert result["statusCode"] == 500
 
 
-def test_handle_cli_access_request_returns_503_on_transient_iam_error(main_module):
+def test_handle_cli_access_request_returns_503_on_transient_identity_store_error(main_module):
     """A throttled/unavailable Identity Store lookup says nothing about
     whether the caller's identity is valid -- it must not be reported as
     GENERIC_REJECTION's "your credentials are invalid" (403), nor page the
@@ -1069,7 +1083,7 @@ def test_handle_cli_access_request_returns_503_on_transient_iam_error(main_modul
         user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_FullOrgAdmin_x/req@example.com",
     )
     with (
-        patch.object(main_module.cli_auth, "extract_identity", side_effect=main_module.cli_auth.TransientIAMError),
+        patch.object(main_module.cli_auth, "extract_identity", side_effect=main_module.cli_auth.TransientIdentityStoreError),
         patch.object(main_module.app.client, "chat_postMessage") as mock_post_message,
     ):
         result = main_module.handle_cli_access_request(event)

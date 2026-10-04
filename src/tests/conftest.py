@@ -20,8 +20,6 @@ def pytest_sessionstart(session):  # noqa: ANN201, ARG001, ANN001
         config.SLACK_BOT_TOKEN_PARAMETER_ENV: "/test/slack-bot-token",
         config.SLACK_SIGNING_SECRET_PARAMETER_ENV: "/test/slack-signing-secret",
         "sso_instance_arn": "x",
-        "cli_expected_account_id": "111111111111",
-        "cli_sso_role_name_prefix": "AWSReservedSSO_",
         "cli_expected_api_id": "test-api-id",
         "log_level": "DEBUG",
         "slack_app_log_level": "INFO",
