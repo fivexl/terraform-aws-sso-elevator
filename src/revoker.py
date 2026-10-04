@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from time import monotonic
 
 import boto3
 import botocore.exceptions
@@ -85,7 +86,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
         case CheckOnInconsistency():
             logger.info("Handling CheckOnInconsistency event", extra={"event": parsed_event})
             check_on_groups_inconsistency(
-                identity_store_client=identitystore_client,
+                identitystore_client=identitystore_client,
                 sso_client=sso_client,
                 scheduler_client=scheduler_client,
                 events_client=events_client,
@@ -104,12 +105,14 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
 
         case SSOElevatorScheduledRevocation():
             logger.info("Handling SSOElevatorScheduledRevocation event", extra={"event": parsed_event})
+            sweep_audit = SweepAudit()
             handle_sso_elevator_group_scheduled_revocation(
-                identity_store_client=identitystore_client,
+                identitystore_client=identitystore_client,
                 sso_client=sso_client,
                 scheduler_client=scheduler_client,
                 cfg=cfg,
                 slack_client=slack_client,
+                sweep_audit=sweep_audit,
             )
             handle_sso_elevator_scheduled_revocation(
                 sso_client=sso_client,
@@ -118,6 +121,7 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
                 org_client=org_client,
                 slack_client=slack_client,
                 identitystore_client=identitystore_client,
+                sweep_audit=sweep_audit,
             )
             # After both revocation passes and in its own boundary: pruning must never stop access removal.
             try:
@@ -134,6 +138,28 @@ def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # n
             )
 
 
+class SweepAudit:
+    """Audit writes for one reconciliation sweep. After the first failed or slow S3 write the rest skip S3
+    and go to the log only, so a slow S3 cannot use up the run's time before every removal is done."""
+
+    # A write that succeeds but takes this long still trips the breaker: a run has only ~30 s.
+    SLOW_WRITE_SECONDS = 1
+
+    def __init__(self) -> None:  # noqa: ANN101
+        self.skip_s3 = False
+
+    def log(self, audit_entry: s3.AuditEntry) -> None:  # noqa: ANN101
+        if self.skip_s3:
+            logger.warning(
+                f"Skipped {audit_entry.operation_type} audit write to S3 after an earlier failed or slow write in this sweep",
+                extra={"audit_entry": s3.audit_record(audit_entry)},
+            )
+            return
+        started = monotonic()
+        failed = s3.log_operation_best_effort(audit_entry) is not None
+        self.skip_s3 = failed or monotonic() - started >= self.SLOW_WRITE_SECONDS
+
+
 def handle_account_assignment_deletion(  # noqa: PLR0913
     account_assignment: sso.UserAccountAssignment,
     cfg: config.Config,
@@ -141,6 +167,7 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
     org_client: OrganizationsClient,
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
+    sweep_audit: SweepAudit,
 ) -> SlackResponse | None:
     logger.info("Handling account assignment deletion", extra={"account_assignment": account_assignment})
 
@@ -155,7 +182,7 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
         account_assignment.permission_set_arn,
     )
 
-    s3.log_operation(
+    sweep_audit.log(
         s3.AuditEntry(
             role_name=permission_set.name,
             account_id=account_assignment.account_id,
@@ -297,7 +324,8 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
         permission_set_arn=user_account_assignment.permission_set_arn,
     )
 
-    s3.log_operation(
+    # Access is already gone: a failed audit write must not skip the cleanup and Slack update below.
+    s3.log_operation_best_effort(
         s3.AuditEntry(
             role_name=permission_set.name,
             account_id=user_account_assignment.account_id,
@@ -350,8 +378,9 @@ def handle_scheduled_group_assignment_deletion(
         logger.warning(f"Group membership already gone, nothing to revoke: {e}")
         schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
         return
-    s3.log_operation(
-        audit_entry=s3.AuditEntry(
+    # As for accounts: the membership is gone, so the audit write is best-effort.
+    s3.log_operation_best_effort(
+        s3.AuditEntry(
             group_name=group_assignment.group_name,
             group_id=group_assignment.group_id,
             reason="scheduled_revocation",
@@ -434,7 +463,7 @@ def handle_check_on_inconsistency(  # noqa: PLR0913
 
 
 def check_on_groups_inconsistency(  # noqa: PLR0913
-    identity_store_client: IdentityStoreClient,
+    identitystore_client: IdentityStoreClient,
     sso_client: SSOAdminClient,
     scheduler_client: EventBridgeSchedulerClient,
     events_client: EventBridgeClient,
@@ -445,7 +474,7 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
     sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
     identity_store_id = sso_instance.identity_store_id
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
-    group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
+    group_assignments = sso.get_group_assignments(identity_store_id, identitystore_client, cfg)
     group_assignments_from_events = [
         sso.GroupAssignment(
             group_name=scheduled_event.revoke_event.group_assignment.group_name,
@@ -464,7 +493,7 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
                 sso_user_id=group_assignment.user_principal_id,
                 sso_client=sso_client,
                 cfg=cfg,
-                identitystore_client=identity_store_client,
+                identitystore_client=identitystore_client,
                 slack_client=slack_client,
             )
             rule = schedule.get_event_bridge_rule(
@@ -488,17 +517,18 @@ def check_on_groups_inconsistency(  # noqa: PLR0913
 
 
 def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
-    identity_store_client: IdentityStoreClient,
+    identitystore_client: IdentityStoreClient,
     sso_client: SSOAdminClient,
     scheduler_client: EventBridgeSchedulerClient,
     cfg: config.Config,
     slack_client: slack_sdk.WebClient,
+    sweep_audit: SweepAudit,
 ) -> None:
     sso_instance_arn = cfg.sso_instance_arn
     sso_instance = sso.describe_sso_instance(sso_client, sso_instance_arn)
     identity_store_id = sso_instance.identity_store_id
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
-    group_assignments = sso.get_group_assignments(identity_store_id, identity_store_client, cfg)
+    group_assignments = sso.get_group_assignments(identity_store_id, identitystore_client, cfg)
     group_assignments_from_events = [
         sso.GroupAssignment(
             group_name=scheduled_event.revoke_event.group_assignment.group_name,
@@ -519,8 +549,8 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
             continue
         else:
             sso.remove_user_from_group(group_assignment.identity_store_id, group_assignment.membership_id, identitystore_client)
-            s3.log_operation(
-                audit_entry=s3.AuditEntry(
+            sweep_audit.log(
+                s3.AuditEntry(
                     group_name=group_assignment.group_name,
                     group_id=group_assignment.group_id,
                     reason="scheduled_revocation",
@@ -559,6 +589,7 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
     org_client: OrganizationsClient,
     slack_client: slack_sdk.WebClient,
     identitystore_client: IdentityStoreClient,
+    sweep_audit: SweepAudit,
 ) -> None:
     account_assignments = sso.get_account_assignment_information(sso_client, cfg, org_client)
     scheduled_revoke_events = schedule.get_scheduled_events(scheduler_client)
@@ -593,6 +624,7 @@ def handle_sso_elevator_scheduled_revocation(  # noqa: PLR0913
                 slack_client=slack_client,
                 identitystore_client=identitystore_client,
                 cfg=cfg,
+                sweep_audit=sweep_audit,
             )
 
 

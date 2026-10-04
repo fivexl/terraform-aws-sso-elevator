@@ -1378,6 +1378,27 @@ def test_process_access_request_marks_replaced_requests_extended_when_the_new_sc
     assert extended["text"].startswith(":repeat: *Extended")
 
 
+def test_process_access_request_shows_an_audit_write_failure_as_approved_with_a_warning(main_module):
+    """#238: access is live and scheduled, so the request reads Auto-approved and counts as succeeded
+    (the CLI's ok: true); the thread flags the missing audit record and the replaced request is Extended."""
+    client = _client_with_old_request()
+    old_event = _old_revoke_event(main_module)
+    decision = _decision(main_module, main_module.access_control.DecisionReason.SelfApproval, grant=True)
+
+    def _audit_failed(**_kwargs):  # noqa: ANN202, ANN003
+        raise main_module.access_control.AuditWriteError("s3 down", [old_event])
+
+    (_, succeeded), _, _ = _process(main_module, client, decision, execute=_audit_failed)
+
+    assert succeeded is True
+    assert client.chat_update.call_args_list[0].kwargs["text"].startswith(":white_check_mark: *Auto-approved")
+    reply = _thread_replies(client)[0]
+    assert reply.startswith("<@U_REQ> access granted, ends at <!date^")
+    assert reply.endswith("but the audit record could not be written: s3 down")
+    extended = next(c.kwargs for c in client.chat_update.call_args_list if c.kwargs["ts"] == "100.1")
+    assert extended["text"].startswith(":repeat: *Extended")
+
+
 def test_process_access_request_posts_pending_with_buttons_and_pings_approvers(main_module):
     client = _slack_client()
     approver = main_module.entities.slack.User(id="U_APP", email="approver@example.com", real_name="A")

@@ -81,6 +81,26 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
   remove them during the upgrade.
 - **Mitigation.** The README's "Upgrade to 5.0.0" has the step that deletes them.
 
+### An S3 outage loses audit records from the bucket
+
+- **What.** Audit writes fail open. When S3 fails or is slow, grants and revocations go ahead
+  without their S3 audit record, so Athena queries miss them. A reconciliation sweep stops
+  trying S3 after its first failed or slow (over 1 s) write.
+- **Why accepted.** Blocking grants or expiry on S3 would turn an S3 incident into an access
+  incident: grants stop, or access outlives its expiry.
+- **Mitigation.** Each lost entry is written in full to the Lambda's CloudWatch logs, which are
+  then the record. A grant whose audit write failed shows a warning in its Slack thread and, when
+  S3 accepts it, an `incomplete` entry.
+
+### Access outlives its expiry when both audit and scheduling fail
+
+- **What.** If the grant audit write and the revocation schedule both fail, nothing revokes the
+  access at its end time. It lasts until the next reconciliation sweep (daily by default).
+- **Why accepted.** Rolling the grant back can fail too, and for a group it would remove a
+  membership the user may have had before the request.
+- **Mitigation.** Slack marks the request as not scheduled and says the inconsistency check will
+  remove it. Revoke it manually for a faster end.
+
 ## Closed
 
 ### Direct Lambda invoke could forge a CLI identity (fixed in 5.0.0)

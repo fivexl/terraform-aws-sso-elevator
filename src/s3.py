@@ -5,12 +5,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import boto3
+from botocore.config import Config
 from mypy_boto3_s3 import S3Client, type_defs
 
 from config import get_config, get_logger
 
 logger = get_logger(service="s3")
-s3: S3Client = boto3.client("s3")
+# Audit writes only. Bounded so a slow S3 fails the write (the entry then goes to CloudWatch)
+# well inside the Lambda timeout, instead of killing the grant or revocation around it.
+s3: S3Client = boto3.client("s3", config=Config(connect_timeout=2, read_timeout=3, retries={"mode": "standard", "total_max_attempts": 2}))
 
 
 @dataclass
@@ -45,8 +48,9 @@ class AuditEntry:
     sso_user_email: str = "NA"  # Human-readable email for the SSO user
     # "declined" entries only: a DecisionReason value, "Discarded" or "Expired".
     decision_reason: str = "NA"
-    # "incomplete" entries only: the error that stopped an approved request, prefixed
-    # with the failed step when access was already granted.
+    # "incomplete" entries only: the error that stopped an approved request, prefixed with the failed
+    # step when access was already granted. A failed grant audit write still schedules the revocation,
+    # so an "incomplete" entry with no "grant" entry can stand for live, scheduled access.
     error_message: str = "NA"
 
 
@@ -74,6 +78,18 @@ def log_operation(
     now = datetime.now(timezone.utc)
     logger.debug("Posting audit entry to s3", extra={"audit_entry": audit_entry})
     logger.info("Posting audit entry to s3")
+    return s3.put_object(
+        Bucket=bucket_name,
+        Key=f"{bucket_prefix}/{now.strftime('%Y/%m/%d')}/{uuid.uuid4()}.json",
+        Body=json.dumps(audit_record(audit_entry, now)),
+        ContentType="application/json",
+        ServerSideEncryption="AES256",
+    )
+
+
+def audit_record(audit_entry: AuditEntry, now: datetime | None = None) -> dict:
+    """The JSON object stored in S3 for audit_entry."""
+    now = now or datetime.now(timezone.utc)
     if isinstance(audit_entry.permission_duration, timedelta):
         permission_duration = str(int(audit_entry.permission_duration.total_seconds()))
     else:
@@ -88,23 +104,18 @@ def log_operation(
     # Handle matched_attributes - convert None to "NA" for JSON serialization consistency
     if audit_entry_dict.get("matched_attributes") is None:
         audit_entry_dict["matched_attributes"] = "NA"
-
-    json_data = json.dumps(audit_entry_dict)
-    return s3.put_object(
-        Bucket=bucket_name,
-        Key=f"{bucket_prefix}/{now.strftime('%Y/%m/%d')}/{uuid.uuid4()}.json",
-        Body=json_data,
-        ContentType="application/json",
-        ServerSideEncryption="AES256",
-    )
+    return audit_entry_dict
 
 
-def log_operation_best_effort(audit_entry: AuditEntry) -> None:
-    # For entries whose loss must not fail the caller's flow or mask the error being recorded.
+def log_operation_best_effort(audit_entry: AuditEntry) -> Exception | None:
+    """For entries whose loss must not fail the caller's flow. Returns the write error, if any.
+    The log record then carries the full entry, so CloudWatch alone can reconstruct it."""
     try:
         log_operation(audit_entry=audit_entry)
     except Exception as e:
-        logger.exception(f"Failed to write {audit_entry.operation_type} audit entry: {e}")
+        logger.exception(f"Failed to write {audit_entry.operation_type} audit entry: {e}", extra={"audit_entry": audit_record(audit_entry)})
+        return e
+    return None
 
 
 @dataclass

@@ -328,6 +328,37 @@ def test_mark_requests_extended_skips_the_newer_requests_own_message(slack_helpe
     assert client.chat_update.call_args.kwargs["text"].startswith(":repeat: *Extended")
 
 
+def test_report_grant_outcome_shows_an_audit_write_failure_as_approved_with_a_thread_warning(slack_helpers_module):
+    """#238: the access is live and scheduled, so only the thread flags the missing audit record."""
+    sh = slack_helpers_module
+    card = sh.RequestCard.for_request(_account_request(sh))
+    client = MagicMock()
+    old_event = object()
+
+    with patch.object(sh, "mark_requests_extended") as mock_extended:
+        sh.report_grant_outcome(
+            client,
+            channel_id="C1",
+            ts="1.5",
+            card=card,
+            decided_by=sh.approved_by("U_APPROVER"),
+            auto=False,
+            duration=timedelta(minutes=30),
+            replaced=[],
+            error=sh.AuditWriteError("s3 down", [old_event]),
+            dm_requester=True,
+        )
+
+    assert client.chat_update.call_args.kwargs["text"].startswith(":white_check_mark: *Approved")
+    thread, dm = (c.kwargs for c in client.chat_postMessage.call_args_list)
+    assert thread["thread_ts"] == "1.5"
+    assert thread["text"].startswith("<@U_REQ> access granted, ends at <!date^")
+    assert thread["text"].endswith(", but the audit record could not be written: s3 down")
+    assert dm["channel"] == "U_REQ"
+    assert dm["text"].startswith("Access granted: ReadOnly → aft #222222222222, ends at ")
+    mock_extended.assert_called_once_with(client, [old_event], card.subject, "C1", "1.5")
+
+
 def test_format_duration(slack_helpers_module):
     sh = slack_helpers_module
     assert sh.format_duration(timedelta(minutes=30)) == "30 min"

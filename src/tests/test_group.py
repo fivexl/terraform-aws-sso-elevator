@@ -276,6 +276,21 @@ def test_group_button_click_reflects_a_grant_failure(group_module, slack_client)
     assert not any("unexpected error" in (c.kwargs.get("text") or "") for c in slack_client.chat_postMessage.call_args_list)
 
 
+def test_group_button_click_shows_an_audit_write_failure_as_approved_with_a_warning(group_module, slack_client):
+    """#238: the membership is live and scheduled; only the thread flags the missing audit record."""
+
+    def _audit_failed(**_kwargs):  # noqa: ANN202, ANN003
+        raise access_control.AuditWriteError("s3 down", [])
+
+    _click(group_module, slack_client, _payload(group_module), execute=_audit_failed)
+
+    assert slack_client.chat_update.call_args.kwargs["text"] == ":white_check_mark: *Approved · group TestGroup for* <@U_REQ>"
+    reply = _thread_replies(slack_client)[0]
+    assert reply.startswith("<@U_REQ> access granted, ends at <!date^")
+    assert reply.endswith("but the audit record could not be written: s3 down")
+    assert not any("unexpected error" in (c.kwargs.get("text") or "") for c in slack_client.chat_postMessage.call_args_list)
+
+
 def _client_error(code: str, operation: str) -> ClientError:
     return ClientError({"Error": {"Code": code, "Message": "m"}}, operation)
 
