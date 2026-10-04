@@ -468,20 +468,27 @@ SSO Elevator uses slack channels to communicate with users. But there is a use c
 ## API gateway feature
 The requester Lambda is invoked via API Gateway (`create_api_gateway`, defaults to `true`). The Lambda Function URL path (`create_lambda_url`) has been removed. `create_lambda_url` defaulted to `true`, so a deployment that never set it loses its Function URL on the next apply, with no plan error. Before applying, point the Slack App manifest's Request URL at the `requester_api_endpoint_url` output, and remove `create_lambda_url` from your configuration if you set it.
 
+The misspelled `event_brige_*` variables are removed; use `event_bridge_*`.
+
 ## CLI tool
 Access requests can also be submitted from the command line, without Slack, via `POST /access-requester-cli` on a separate REST API, signed with the caller's own AWS credentials and verified by API Gateway's `AWS_IAM` authorizer. The route is off by default; set `enable_access_requester_cli = true` to create it. See [`cmd/elevator/README.md`](cmd/elevator/README.md) for build and usage instructions.
 
 Requirements:
-- The deployment account must belong to an AWS Organization, and the principal running Terraform needs `organizations:DescribeOrganization`: the REST API's resource policy is built from the organization id.
+- The deployment account must belong to an AWS Organization: the REST API's resource policy is built from the organization id. The principal running Terraform needs `organizations:DescribeOrganization`, `organizations:ListAccounts`, `organizations:ListRoots` and `organizations:ListAWSServiceAccessForOrganization`, which the `aws_organizations_organization` data source calls.
 - The resource policy (`aws:PrincipalOrgID`) admits callers from any account in the organization, and API Gateway rejects everyone else. Callers in the deployment account need nothing more. Callers in any other account also need `execute-api:Invoke` on the `requester_api_execution_arn_cli` output in their own identity policy (their permission set), as IAM requires for cross-account `AWS_IAM` calls.
 - Callers must sign with an IAM Identity Center (SSO) session. IAM users, other roles, and CI/OIDC roles are rejected.
 - The session name must be the caller's Identity Store username. IAM Identity Center sets it that way, so a normal `aws sso login` session qualifies. The Lambda matches it exactly (case-sensitive) against `UserName`, takes that user's primary email (or the first listed one), and looks up the Slack user with that email. If any step finds no match, the request is rejected with the same generic message as an invalid session. A username longer than 64 characters is truncated in the session name and therefore never matches.
 
 **Trust model:** the requester Lambda does not re-verify the caller's signature; API Gateway's `AWS_IAM` authorizer does that before the Lambda runs. `src/cli_auth.py` then checks that the assumed role's name starts with `AWSReservedSSO_` and that the session name matches a real Identity Store user. IAM reserves role names starting with `AWSReservedSSO_` in every account. This was tested: `aws iam create-role --role-name AWSReservedSSO_ForgeTest_0000000000000000 ...` with administrator permissions fails with `InvalidInput: The role name 'AWSReservedSSO_ForgeTest_0000000000000000' is reserved for AWS use`. So the name alone proves the session comes from IAM Identity Center, in any account of the organization, with no IAM call. The caller's account is not checked in the Lambda; the resource policy covers that.
 
-The residual risk is a direct invoke: anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway with a forged event, including a forged identity. Keep that permission restricted to API Gateway's own invocation role. When `enable_access_requester_cli` is false, the Lambda rejects every CLI-shaped event.
+The residual risk is a direct invoke: anyone with `lambda:InvokeFunction` on the requester Lambda can bypass API Gateway with a forged event, including a forged identity. API Gateway needs no IAM permission: the function's resource policy admits `apigateway.amazonaws.com`, scoped by source ARN. So grant `lambda:InvokeFunction` on the requester Lambda to no other principal. When `enable_access_requester_cli` is false, the Lambda rejects every CLI-shaped event.
 
 This module's IAM policies hardcode `arn:aws:`, so the CLI route is only tested in the standard `aws` partition.
+
+**Upgrading a deployment that already had `enable_access_requester_cli = true`:**
+- The CLI route moves to a new REST API on a new host. Re-run `elevator configure --endpoint` with the `requester_api_endpoint_url_cli` output.
+- Callers in other accounts need `execute-api:Invoke` in their permission sets on the new `requester_api_execution_arn_cli` value.
+- Remove `cli_sso_role_name_prefix` from your configuration.
 
 ## Slack secrets in SSM Parameter Store
 
@@ -921,7 +928,7 @@ settings:
 | <a name="input_ecr_owner_account_id"></a> [ecr\_owner\_account\_id](#input\_ecr\_owner\_account\_id) | In what account is the ECR repository located. | `string` | `"222341826240"` | no |
 | <a name="input_ecr_repo_name"></a> [ecr\_repo\_name](#input\_ecr\_repo\_name) | The name of the ECR repository. | `string` | `"aws-sso-elevator"` | no |
 | <a name="input_ecr_repo_tag"></a> [ecr\_repo\_tag](#input\_ecr\_repo\_tag) | The tag of the image in the ECR repository. | `string` | `"4.4.3"` | no |
-| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true (and create\_api\_gateway is also true), creates a separate REST API with a POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization for the principal running Terraform. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
+| <a name="input_enable_access_requester_cli"></a> [enable\_access\_requester\_cli](#input\_enable\_access\_requester\_cli) | If true (and create\_api\_gateway is also true), creates a separate REST API with a POST /access-requester-cli route so the elevator CLI can submit requests directly, signed with the caller's own AWS credentials, instead of only through Slack. Requires the deployment account to be in an AWS Organization and organizations:DescribeOrganization, organizations:ListAccounts, organizations:ListRoots and organizations:ListAWSServiceAccessForOrganization for the principal running Terraform. Off by default so upgrading an existing deployment doesn't silently add a new AWS\_IAM-authorized entry point onto the same access-granting Lambda without an explicit decision to enable it. | `bool` | `false` | no |
 | <a name="input_event_bridge_check_on_inconsistency_rule_name"></a> [event\_bridge\_check\_on\_inconsistency\_rule\_name](#input\_event\_bridge\_check\_on\_inconsistency\_rule\_name) | value for the event bridge check on inconsistency rule name | `string` | `"sso-elevator-check-on-inconsistency"` | no |
 | <a name="input_event_bridge_scheduled_revocation_rule_name"></a> [event\_bridge\_scheduled\_revocation\_rule\_name](#input\_event\_bridge\_scheduled\_revocation\_rule\_name) | value for the event bridge scheduled revocation rule name | `string` | `"sso-elevator-scheduled-revocation"` | no |
 | <a name="input_group_config"></a> [group\_config](#input\_group\_config) | value for the SSO Elevator group config | `any` | `[]` | no |

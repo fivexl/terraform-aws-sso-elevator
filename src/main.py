@@ -76,35 +76,13 @@ def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
 
 
 def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, PLR0915
-    """Handle a signed CLI request for AWS access, submitted via the AWS_IAM-authenticated
-    CLI_ACCESS_REQUEST_PATH route instead of the Slack modal.
-
-    API Gateway has already verified the caller's SigV4 signature by the time this runs;
-    cli_auth.extract_identity only decides whether the resulting identity is trustworthy
-    enough to act on. Past that point, this funnels into the same process_access_request
-    the Slack modal path uses, so approval and everything downstream is unchanged.
-    """
+    """Handle a CLI access request on CLI_ACCESS_REQUEST_PATH. API Gateway has verified the
+    signature; cli_auth decides whether the identity may act. Then it joins the Slack path at
+    process_access_request."""
     logger.info("Handling CLI access request")
     try:
-        # Each hop uses `or {}` rather than a .get(..., {}) default, since a
-        # key can be present with an explicit JSON null value -- a default
-        # only kicks in when the key is missing entirely, so
-        # "identity": null would otherwise reach .get("userArn") on None and
-        # raise, turning a routine unverified-identity case into a 500 with
-        # a Slack post instead of the clean 403 it should be.
-        #
-        # Extracted here, before the apiId check below, purely so every
-        # rejection past this point -- including the apiId mismatch itself
-        # -- can log the caller's asserted ARN (#194 B10). This is only ever
-        # used for logging until cli_auth.extract_identity independently
-        # verifies it further down; nothing here trusts it operationally.
-        # This is API Gateway's own AWS_IAM-authorizer-verified value, not
-        # attacker-controlled JSON body content, so logging it plainly (not
-        # just at DEBUG, which the default LOG_LEVEL=INFO deployment never
-        # emits) is what makes a rejected request attributable at all --
-        # without it, an operator investigating a wave of rejections has no
-        # identity to go on beyond "some signed caller", since the CLI
-        # REST API's stage has no access logging (see cli_rest_api.tf).
+        # `or {}` because a key may hold an explicit JSON null. user_arn is read early so every
+        # rejection can log it; it is authorizer-verified, and the stage has no access logging.
         request_context = event.get("requestContext") or {}
         user_arn = (request_context.get("identity") or {}).get("userArn", "")
 
@@ -115,8 +93,7 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
             logger.info("Rejected CLI request: the CLI route is not enabled", extra={"user_arn": user_arn})
             return cli_auth.GENERIC_REJECTION
 
-        # Defense-in-depth, not an access control: a direct invoker controls the whole event,
-        # and the API id is not secret. The real boundary is who may invoke this Lambda.
+        # Defense-in-depth only; see config.cli_expected_api_id.
         if request_context.get("apiId") != cfg.cli_expected_api_id:
             logger.info(
                 "Rejected CLI request: requestContext.apiId did not match this deployment's API Gateway",
@@ -126,20 +103,8 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
 
         logger.info("Authorizer IAM userArn", extra={"user_arn": user_arn})
 
-        # Cheap request-body validation (JSON syntax, field presence, reason
-        # length, duration format -- all local, no AWS calls) happens before
-        # cli_auth.extract_identity below, not after (#193 item 1): that
-        # call does a full paginated identitystore:ListUsers scan, the most expensive thing
-        # on this path. A caller sending
-        # malformed JSON, a non-object body, missing fields, or an
-        # over-length reason used to still pay for that call before getting
-        # its 400 -- and since this route's
-        # AWS_IAM authorizer only proves the caller can *sign* a request,
-        # not that they're a legitimate SSO principal, this meant anyone
-        # able to sign a request (not just genuine SSO users) could drive
-        # full Identity Store scans with garbage payloads at the route's
-        # throttle. Validating the body first rejects that for free, before
-        # any AWS call runs at all.
+        # Validate the body before extract_identity: its Identity Store scan is the most expensive
+        # call here, and any signer could otherwise drive it with garbage payloads.
         try:
             # The CLI REST API sets no binary_media_types, so API Gateway
             # sends isBase64Encoded false and this branch shouldn't trigger.
@@ -247,10 +212,6 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 ),
             }
 
-        # Identity verification (a full paginated identitystore:ListUsers
-        # scan) runs only now, after every cheap, local check on the body
-        # above has already passed -- see the comment where user_arn is
-        # extracted for why.
         try:
             identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if user_arn else None
         except cli_auth.TransientIdentityStoreError as e:
@@ -320,24 +281,8 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 "headers": {"content-type": "application/json"},
                 "body": json.dumps({"message": "account and permission_set must both be ones this deployment is configured for."}),
             }
-        # No "does the caller already hold this exact assignment" check here
-        # -- issue #193: that defense-in-depth check (round-1 finding #6)
-        # required the requester to already have the specific account/
-        # permission-set pair they were requesting, which rejects every
-        # genuine elevation request by construction (the whole point of this
-        # tool is granting access the caller does not currently have). It
-        # only ever passed for a redundant re-request of a still-live grant
-        # SSO Elevator had itself just issued. Removed rather than rescoped:
-        # a correct principal-wide "do they have any real assignment
-        # anywhere" check needs sso-admin:ListAccountAssignmentsForPrincipal,
-        # which round-3 already established doesn't work from this module's
-        # own recommended delegated-admin deployment topology, and any
-        # per-account variant has the same "rejects legitimate first-time
-        # access" problem this one did. The identity is still verified by
-        # SigV4 + AWS_IAM, the assumed role's AWSReservedSSO_ name prefix
-        # (which IAM refuses to let anyone else create), the session name
-        # resolving to a real Identity Store user, and the email round-trip
-        # cross-check below.
+        # No check that the caller already holds this assignment: elevation grants access the
+        # caller lacks, so such a check would reject every genuine request.
         try:
             requester = slack_helpers.get_user_by_email(app.client, identity_email)
         except slack_sdk.errors.SlackApiError as e:
@@ -386,14 +331,8 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
         # collision fix above closes off, so it must not be trusted here to
         # confirm this cross-check).
         #
-        # Reuses list_of_users from the identity tuple above rather than
-        # calling sso.list_users(...) again -- that's the exact full
-        # paginated Identity Store scan cli_auth.extract_identity's own
-        # comment calls "the call on this path most likely to throttle", and
-        # a second, unguarded call here would both double that cost per
-        # request and reintroduce the transient-error gap (ClientError/
-        # BotoCoreError -> 500 + Slack post) extract_identity was
-        # specifically hardened against.
+        # Reuses list_of_users from extract_identity: a second Identity Store scan would double the
+        # cost and lose extract_identity's transient-error handling.
         try:
             requester_user_id = sso.find_user_principal_id_by_email_strict(requester.email, list_of_users)
         except (SSOUserNotFound, AmbiguousSSOUser):

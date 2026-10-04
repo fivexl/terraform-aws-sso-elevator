@@ -2,7 +2,7 @@
 # because only REST APIs support resource policies. The policy admits any principal in this
 # AWS Organization (aws:PrincipalOrgID); API Gateway returns 403 to callers outside it.
 
-# Needs organizations:DescribeOrganization on the principal running Terraform.
+# Organizations permissions the principal running Terraform needs: README "CLI tool".
 data "aws_organizations_organization" "current" {
   count = local.create_cli_rest_api ? 1 : 0
 }
@@ -29,7 +29,7 @@ locals {
 resource "aws_api_gateway_rest_api" "cli" {
   count       = local.create_cli_rest_api ? 1 : 0
   name        = "${var.api_gateway_name}-cli"
-  description = "REST API for SSO Elevator's access-requester Lambda, CLI route only -- see issue #214"
+  description = "SSO Elevator CLI access-request route"
   policy      = local.cli_rest_api_policy
 
   endpoint_configuration {
@@ -43,8 +43,7 @@ resource "aws_api_gateway_resource" "cli" {
   count       = local.create_cli_rest_api ? 1 : 0
   rest_api_id = aws_api_gateway_rest_api.cli[0].id
   parent_id   = aws_api_gateway_rest_api.cli[0].root_resource_id
-  # Must match main.py's CLI_ACCESS_REQUEST_PATH.
-  path_part = trimprefix(local.api_resource_path_cli, "/")
+  path_part   = trimprefix(local.api_resource_path_cli, "/")
 }
 
 resource "aws_api_gateway_method" "cli" {

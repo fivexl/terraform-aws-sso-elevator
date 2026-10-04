@@ -1,28 +1,7 @@
-"""Identity verification for the CLI access-request path.
+"""Identity check for the CLI access-request path.
 
-The CLI signs its request directly against API Gateway (SigV4, an AWS_IAM
-authorizer). API Gateway verifies the signature and puts the caller's
-identity at requestContext.identity.userArn before the Lambda runs.
-extract_identity doesn't verify a signature; it decides whether that
-identity is trustworthy enough to act on: an IAM Identity Center session
-whose session name resolves to a real Identity Store user.
-
-The caller's account is not checked here. The REST API's resource policy
-(aws:PrincipalOrgID) makes API Gateway reject callers outside the AWS
-Organization before this code runs.
-
-The remaining residual risk is a direct lambda:InvokeFunction call: the
-invoker controls the whole event, including requestContext.identity, so
-this check is only as strong as the restriction on who may invoke the
-Lambda (see the README's CLI section).
-
-IAM Identity Center sets the session name (RoleSessionName) to the caller's
-Identity Store username, which is not always an email (an AD sAMAccountName
-is a valid username). So the session name is matched exactly against
-UserName and the email is read from that user's record.
-
-A username truncated by RoleSessionName's 64-character limit does not match
-exactly and is rejected. That is an accepted, fail-closed limitation.
+API Gateway's AWS_IAM authorizer verifies the signature; this module decides whether that identity
+may act. Trust model and its limits: README "CLI tool".
 """
 
 import json
@@ -41,11 +20,9 @@ if TYPE_CHECKING:
 # Matches all three real AWS partitions (aws, aws-cn, aws-us-gov) -- a
 # hardcoded "aws" would reject every request outside the standard partition
 # with the same generic message a genuinely invalid ARN gets.
-_ASSUMED_ROLE_ARN_RE = re.compile(r"^arn:(?:aws|aws-cn|aws-us-gov):sts::\d{12}:assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)$")
+_ASSUMED_ROLE_ARN_RE = re.compile(r"arn:(?:aws|aws-cn|aws-us-gov):sts::\d{12}:assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)")
 
-# IAM reserves role names starting with this prefix in every account: CreateRole fails with
-# "The role name ... is reserved for AWS use", even for an administrator. So the name alone
-# proves the role was provisioned by IAM Identity Center, in any account, with no IAM call.
+# IAM reserves this role-name prefix for IAM Identity Center in every account (README "CLI tool").
 SSO_ROLE_NAME_PREFIX = "AWSReservedSSO_"
 
 
@@ -71,15 +48,11 @@ GENERIC_REJECTION = {
 def extract_identity(
     user_arn: str, identity_store_client: "IdentityStoreClient", identity_store_id: str, s3_client: "S3Client"
 ) -> tuple[str, str, dict] | None:
-    """Return the requester's (email, UserId, the full list_users() snapshot they were matched
-    against), or None. user_arn must be an assumed-role session under a role named with
-    SSO_ROLE_NAME_PREFIX whose session name exactly matches one Identity Store UserName.
-
-    The UserId is the one this session was verified against, so a caller can cross-check a
-    later email-based lookup against it. The snapshot lets that cross-check reuse this scan
-    instead of paying for another full paginated list_users."""
+    """Return (email, UserId, list_users snapshot) for an IAM Identity Center session whose
+    session name exactly matches one Identity Store UserName, else None. The UserId and snapshot
+    let the caller cross-check a later email lookup without another list_users scan."""
     cfg = config.get_config()
-    match = _ASSUMED_ROLE_ARN_RE.match(user_arn)
+    match = _ASSUMED_ROLE_ARN_RE.fullmatch(user_arn)
     if not match or not match["role_name"].startswith(SSO_ROLE_NAME_PREFIX):
         return None
 

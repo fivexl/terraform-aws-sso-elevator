@@ -45,28 +45,9 @@ def _fake_permission_sets_from_config(_sso_client, _s3_client, cfg):
 
 @pytest.fixture
 def main_module():
-    """Import main with all module-level side effects (Bolt's App() token
-    validation, the SSO instance lookup transitively triggered by importing
-    group, and boto3 client construction) mocked out — same technique
-    test_group.py's group_module fixture uses for the same underlying problem.
-
-    The shared client's list_users paginator is stubbed to resolve every test
-    ARN's session name ("req@example.com") to a matching Identity Store
-    user, since cli_auth.extract_identity now looks the session name up
-    rather than trusting it directly. That same stubbed user's UserId
-    ("u-req") is what both find_email_by_username (inside extract_identity)
-    and handle_cli_access_request's own email-round-trip cross-check (a
-    second, independent lookup by requester.email against the same stub)
-    resolve to -- they agree by construction here, since every test below
-    uses the same "req@example.com" identity throughout; the mismatch case
-    is exercised on its own, separately.
-
-    organizations.get_accounts_from_config_with_cache and
-    sso.get_permission_sets_from_config_with_cache are patched to the fake
-    catalog-lookup functions above, rather than left to hit the (mocked)
-    AWS clients directly -- handle_cli_access_request now validates account
-    and permission_set against their real return values, not a literal
-    membership check against cfg.accounts/cfg.permission_sets."""
+    """Import main with module-level side effects mocked (Bolt token check, SSO instance lookup,
+    boto3 clients). list_users resolves every test session name to user "u-req"
+    (req@example.com); the account/permission-set catalogs come from the fakes above."""
     sys.modules.pop("main", None)
     sys.modules.pop("group", None)
     sys.modules.pop("cli_auth", None)
@@ -111,15 +92,7 @@ def main_module():
 
 
 def _cli_request_event(body: dict | None = None, user_arn: str | None = None, api_id: str | None = "test-api-id") -> dict:
-    """A Lambda proxy event shaped like what the CLI's REST API route (cli_rest_api.tf)
-    sends: httpMethod/resource rather than routeKey, and the verified identity at
-    requestContext.identity.userArn. These tests call handle_cli_access_request directly
-    rather than going through lambda_handler's dispatch (that's covered separately, below).
-    Needs the main_module fixture to have imported main.
-
-    api_id defaults to conftest.py's mock_env cli_expected_api_id value, so every test below
-    passes the apiId check for free unless it's overridden -- that check is exercised on its
-    own, separately."""
+    """A REST API proxy event for the CLI route; api_id defaults to conftest's cli_expected_api_id."""
     event = {
         "httpMethod": "POST",
         "resource": sys.modules["main"].CLI_ACCESS_REQUEST_PATH,
@@ -184,9 +157,7 @@ def test_lambda_handler_routes_cli_event_to_cli_handler(main_module):
 
 
 def test_lambda_handler_does_not_treat_a_get_on_the_cli_resource_as_a_cli_request(main_module):
-    """_is_cli_event checks the method too, not just the resource path -- a GET (which this
-    REST API never actually defines a method for, but which API Gateway itself would reject
-    before this Lambda ever ran) must not be misdispatched as a CLI request."""
+    """_is_cli_event checks the method, not just the resource path."""
     event = {"httpMethod": "GET", "resource": main_module.CLI_ACCESS_REQUEST_PATH}
     context = MagicMock()
     with patch.object(main_module, "SlackRequestHandler") as mock_handler_cls:
@@ -197,8 +168,7 @@ def test_lambda_handler_does_not_treat_a_get_on_the_cli_resource_as_a_cli_reques
 
 
 def test_lambda_handler_routes_slack_events_to_bolt(main_module):
-    """A Slack route event (module.http_api, payload format 2.0) has a routeKey and no
-    httpMethod/resource at the top level -- _is_cli_event must not misdispatch it."""
+    """A Slack HTTP API event (routeKey, no httpMethod/resource) goes to Bolt."""
     event = {"routeKey": "POST /access-requester", "rawPath": "/access-requester"}
     context = MagicMock()
     with patch.object(main_module, "SlackRequestHandler") as mock_handler_cls:
@@ -303,21 +273,14 @@ def test_handle_cli_access_request_accepts_caller_from_a_different_account(main_
 
 
 def test_handle_cli_access_request_rejects_missing_identity_context(main_module):
-    # A complete, otherwise-valid body -- not just {"account": ...} -- since
-    # body validation now runs before the identity check (#193 item 1); an
-    # incomplete body here would be rejected by that check instead of the
-    # identity-missing check this test means to isolate.
+    # A valid body, so the identity check is what rejects it.
     event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
     result = main_module.handle_cli_access_request(event)
     assert result == main_module.cli_auth.GENERIC_REJECTION
 
 
 def test_handle_cli_access_request_rejects_explicit_null_identity(main_module):
-    """Regression test: a JSON key present with an explicit null value is
-    not the same as a missing key -- `{}.get("identity", {})` only
-    applies its default when the key is absent, so "identity": null
-    used to reach .get("userArn") on None and raise, turning this into a 500
-    with a Slack post instead of the same clean 403 a missing key gets."""
+    """An explicit "identity": null gets the same 403 as a missing key, not a 500."""
     event = _cli_request_event(body={"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})
     event["requestContext"]["identity"] = None
     result = main_module.handle_cli_access_request(event)
@@ -488,12 +451,7 @@ def test_handle_cli_access_request_rejects_missing_body_with_an_otherwise_valid_
 
 
 def test_handle_cli_access_request_rejects_malformed_body_without_resolving_identity(main_module):
-    """Regression test (#193 item 1): cheap request-body validation must run
-    before cli_auth.extract_identity, not after -- that call does a full
-    paginated identitystore:ListUsers scan, and a caller sending a malformed
-    body used to pay for it before getting its 400. Verified directly:
-    extract_identity must never even be called for a body this broken,
-    regardless of what a real call to it would have resolved."""
+    """A malformed body is rejected before extract_identity runs its Identity Store scan."""
     event = _cli_request_event(user_arn="arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Foo/req@example.com")
     event["body"] = "{not json"
     with patch.object(main_module.cli_auth, "extract_identity") as mock_extract_identity:
@@ -503,13 +461,8 @@ def test_handle_cli_access_request_rejects_malformed_body_without_resolving_iden
 
 
 def test_handle_cli_access_request_decodes_a_base64_encoded_body(main_module):
-    """Regression test (#194 B7): API Gateway HTTP APIs base64-encode the
-    body onto this same "body" field (rather than using a separate one)
-    whenever isBase64Encoded is true. The shipped Go CLI always sends
-    application/json, which HTTP APIs never encode this way, so this never
-    triggers against it in practice -- but ignoring the flag would silently
-    misreport a different signed client's genuinely valid, merely-encoded
-    request as "not valid JSON" instead of actually decoding it first."""
+    """The CLI REST API sets no binary_media_types, so API Gateway sends isBase64Encoded false.
+    If the flag is set anyway, the body is decoded before JSON parsing."""
     import base64
 
     raw_json = json.dumps({"account": "111111111111", "permission_set": "Foo", "reason": "x", "duration": "1"})

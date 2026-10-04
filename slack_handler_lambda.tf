@@ -172,12 +172,24 @@ data "aws_iam_policy_document" "slack_handler" {
       "arn:aws:sso:::account/*"
     ]
   }
-
-  # identitystore:ListUsers here is also what src/cli_auth.py (via
-  # sso.find_email_by_username) relies on to resolve a CLI caller's
-  # Identity Store username (RoleSessionName) to their real registered
-  # email — RoleSessionName isn't always an email itself (AD-style
-  # usernames, or a long email truncated to its 64-character limit).
+  # IAM Identity Center provisions the AWSReservedSSO_ role with the caller's permissions when it
+  # creates an account assignment in the management account (AWS docs: AccessToSSOProvisionedRoles).
+  statement {
+    effect = "Allow"
+    actions = [
+      "iam:PutRolePolicy",
+      "iam:AttachRolePolicy",
+      "iam:CreateRole",
+      "iam:GetRole",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRolePolicies",
+    ]
+    resources = [
+      "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+      "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_*"
+    ]
+  }
+  # identitystore:ListUsers maps a CLI caller's session name to an Identity Store user (src/cli_auth.py).
   statement {
     effect = "Allow"
     actions = [
