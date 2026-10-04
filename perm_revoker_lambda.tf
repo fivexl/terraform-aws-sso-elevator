@@ -97,7 +97,10 @@ module "access_revoker" {
 }
 
 data "aws_iam_policy_document" "revoker" {
-  source_policy_documents = [data.aws_iam_policy_document.read_slack_secrets["bot_token"].json]
+  source_policy_documents = [
+    data.aws_iam_policy_document.read_slack_secrets["bot_token"].json,
+    data.aws_iam_policy_document.schedule_access.json,
+  ]
 
   statement {
     sid    = "AllowDescribeRule"
@@ -140,17 +143,6 @@ data "aws_iam_policy_document" "revoker" {
       "sso:DescribePermissionSet",
       "identitystore:ListUsers",
       "identitystore:DescribeUser",
-    ]
-    resources = ["*"]
-  }
-  statement {
-    effect = "Allow"
-    actions = [
-      "scheduler:DeleteSchedule",
-      "iam:PassRole",
-      "scheduler:CreateSchedule",
-      "scheduler:ListSchedules",
-      "scheduler:GetSchedule",
     ]
     resources = ["*"]
   }
@@ -215,18 +207,41 @@ resource "aws_cloudwatch_event_target" "check_inconsistency" {
   })
 }
 
+# Shared by the requester and revoker roles: both create, read and delete one-time schedules
+# in the module's schedule group, which invoke the revoker through eventbridge_role.
+data "aws_iam_policy_document" "schedule_access" {
+  statement {
+    sid       = "ManageSchedules"
+    effect    = "Allow"
+    actions   = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:DeleteSchedule"]
+    resources = ["arn:aws:scheduler:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:schedule/${var.schedule_group_name}/*"]
+  }
+  # ListSchedules has no resource-level permissions.
+  statement {
+    sid       = "ListSchedules"
+    effect    = "Allow"
+    actions   = ["scheduler:ListSchedules"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "PassScheduleRole"
+    effect    = "Allow"
+    actions   = ["iam:PassRole"]
+    resources = [aws_iam_role.eventbridge_role.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["scheduler.amazonaws.com"]
+    }
+  }
+}
+
+# Scheduler assumes this role to invoke the revoker; its identity policy is all Scheduler needs.
 resource "aws_iam_role" "eventbridge_role" {
   name = var.schedule_role_name
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      },
       {
         Action = "sts:AssumeRole"
         Effect = "Allow"
@@ -245,14 +260,6 @@ resource "aws_iam_role_policy" "eventbridge_policy" {
     Statement = [
       {
         Action = [
-          "events:PutRule",
-          "events:PutTargets"
-        ]
-        Effect   = "Allow"
-        Resource = "*"
-      },
-      {
-        Action = [
           "lambda:InvokeFunction"
         ]
         Effect   = "Allow"
@@ -262,12 +269,4 @@ resource "aws_iam_role_policy" "eventbridge_policy" {
   })
 
   role = aws_iam_role.eventbridge_role.id
-}
-
-resource "aws_lambda_permission" "eventbridge" {
-  statement_id  = "AllowEventBridge"
-  action        = "lambda:InvokeFunction"
-  function_name = module.access_revoker.lambda_function_name
-  principal     = "scheduler.amazonaws.com"
-  source_arn    = aws_iam_role.eventbridge_role.arn
 }

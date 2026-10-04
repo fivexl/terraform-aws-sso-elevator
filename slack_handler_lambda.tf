@@ -79,27 +79,15 @@ module "access_requester_slack_handler" {
       # already uses (#194 High #5, found by Andrey Devyatkin).
       CONFIG_BUCKET_KMS_KEY_ARN = var.config_bucket_kms_key_arn != null ? var.config_bucket_kms_key_arn : ""
     },
-    local.create_cli_rest_api ? {
-      # Defense-in-depth only, not an access control: see src/config.py's cli_expected_api_id.
-      CLI_EXPECTED_API_ID = aws_api_gateway_rest_api.cli[0].id
+    var.enable_access_requester_cli ? {
+      # The audience the CLI's STS identity proof must name: see src/config.py's cli_expected_api_id.
+      CLI_EXPECTED_API_ID = aws_api_gateway_rest_api.requester.id
     } : {}
   )
 
-  allowed_triggers = merge(
-    var.create_api_gateway ? {
-      AllowExecutionFromAPIGateway = {
-        service    = "apigateway"
-        source_arn = "${module.http_api[0].api_execution_arn}/*/*${local.api_resource_path}"
-      }
-    } : {},
-    # The CLI REST API (cli_rest_api.tf), scoped to its one stage and method.
-    local.create_cli_rest_api ? {
-      AllowExecutionFromAPIGatewayCli = {
-        service    = "apigateway"
-        source_arn = "${aws_api_gateway_rest_api.cli[0].execution_arn}/${local.api_stage_name}/POST${local.api_resource_path_cli}"
-      }
-    } : {}
-  )
+  # API Gateway invokes the "live" alias, so its permissions are aws_lambda_permission.api_gateway.
+  create_current_version_allowed_triggers   = false
+  create_unqualified_alias_allowed_triggers = false
 
   attach_policy_json = true
   policy_json        = data.aws_iam_policy_document.slack_handler.json
@@ -107,34 +95,72 @@ module "access_requester_slack_handler" {
   dead_letter_target_arn    = var.aws_sns_topic_subscription_email != "" ? aws_sns_topic.dlq[0].arn : null
   attach_dead_letter_policy = var.aws_sns_topic_subscription_email != "" ? true : false
 
-  # do not retry automatically
-  maximum_retry_attempts = 0
-
   cloudwatch_logs_retention_in_days = var.logs_retention_in_days
 
   tags = var.tags
 }
 
-data "aws_iam_policy_document" "slack_handler" {
-  source_policy_documents = [data.aws_iam_policy_document.read_slack_secrets["all"].json]
+# API Gateway targets this alias rather than $LATEST, so a new version goes live only once the
+# alias moves to it -- the hook SnapStart and provisioned concurrency need.
+module "access_requester_alias" {
+  source  = "terraform-aws-modules/lambda/aws//modules/alias"
+  version = "8.8.2"
 
+  name             = "live"
+  function_name    = module.access_requester_slack_handler.lambda_function_name
+  function_version = module.access_requester_slack_handler.lambda_function_version
+  refresh_alias    = true
+
+  # Permissions are aws_lambda_permission.api_gateway below: the submodule's qualified-alias
+  # permissions don't depend on its alias, so a fresh install can race "alias not found".
+  create_version_allowed_triggers         = false
+  create_qualified_alias_allowed_triggers = false
+}
+
+# One permission per route on the alias, scoped to its stage and method.
+resource "aws_lambda_permission" "api_gateway" {
+  for_each = merge(
+    { AllowExecutionFromAPIGateway = local.slack_method_arn },
+    var.enable_access_requester_cli ? { AllowExecutionFromAPIGatewayCli = local.cli_method_arn } : {}
+  )
+
+  statement_id  = each.key
+  action        = "lambda:InvokeFunction"
+  function_name = module.access_requester_slack_handler.lambda_function_name
+  qualifier     = module.access_requester_alias.lambda_alias_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = each.value
+}
+
+# Bolt lazy listeners re-invoke the alias asynchronously; a retry would repeat their Slack posts
+# and grants. Standalone because the module applies maximum_retry_attempts only with
+# create_async_event_config, and the alias submodule's async config can't target only the alias.
+resource "aws_lambda_function_event_invoke_config" "access_requester_live" {
+  function_name          = module.access_requester_slack_handler.lambda_function_name
+  qualifier              = module.access_requester_alias.lambda_alias_name
+  maximum_retry_attempts = 0
+}
+
+data "aws_iam_policy_document" "slack_handler" {
+  source_policy_documents = [
+    data.aws_iam_policy_document.read_slack_secrets["all"].json,
+    data.aws_iam_policy_document.schedule_access.json,
+  ]
+
+  # Identity Center's own SAML provider, which it updates when creating an assignment in the
+  # management account (AWS docs: AccessToSSOProvisionedRoles).
   statement {
-    sid    = "GetSAMLProvider"
+    sid    = "SSOSAMLProvider"
     effect = "Allow"
     actions = [
-      "iam:GetSAMLProvider"
-    ]
-    resources = ["*"]
-  }
-  statement {
-    sid    = "UpdateSAMLProvider"
-    effect = "Allow"
-    actions = [
+      "iam:GetSAMLProvider",
       "iam:UpdateSAMLProvider",
     ]
-    resources = ["*"]
+    resources = ["arn:aws:iam::*:saml-provider/AWSSSO_*_DO_NOT_DELETE"]
   }
 
+  # Bolt lazy listeners invoke context.invoked_function_arn, the "live" alias. Built from the
+  # local string: referencing the alias resource would make this policy depend on the function.
   statement {
     sid    = "GetInvokeSelf"
     effect = "Allow"
@@ -142,7 +168,7 @@ data "aws_iam_policy_document" "slack_handler" {
       "lambda:InvokeFunction",
       "lambda:GetFunction"
     ]
-    resources = [local.requester_lambda_arn]
+    resources = ["${local.requester_lambda_arn}:live"]
   }
   statement {
     effect = "Allow"
@@ -199,17 +225,6 @@ data "aws_iam_policy_document" "slack_handler" {
       "sso:DescribePermissionSet",
       "identitystore:ListUsers",
       "identitystore:DescribeUser",
-    ]
-    resources = ["*"]
-  }
-  statement {
-    effect = "Allow"
-    actions = [
-      "scheduler:CreateSchedule",
-      "iam:PassRole",
-      "scheduler:ListSchedules",
-      "scheduler:GetSchedule",
-      "scheduler:DeleteSchedule",
     ]
     resources = ["*"]
   }
@@ -278,40 +293,5 @@ data "aws_iam_policy_document" "slack_handler" {
       ]
       resources = [statement.value]
     }
-  }
-}
-
-module "http_api" {
-  count         = var.create_api_gateway ? 1 : 0
-  source        = "terraform-aws-modules/apigateway-v2/aws"
-  version       = "6.1.1"
-  name          = var.api_gateway_name
-  description   = "API Gateway for SSO Elevator's access-requester Lambda, to communicate with Slack"
-  protocol_type = "HTTP"
-
-  cors_configuration = {
-    allow_credentials = true
-    allow_origins     = ["https://slack.com"]
-    allow_methods     = ["POST"]
-    max_age           = 86400
-  }
-
-  # Slack route only. The CLI route is a REST API (cli_rest_api.tf), which supports resource policies.
-  routes = {
-    "POST ${local.api_resource_path}" : {
-      integration = {
-        uri  = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.requester_lambda_name}"
-        type = "AWS_PROXY"
-      }
-      throttling_burst_limit = var.api_gateway_throttling_burst_limit
-      throttling_rate_limit  = var.api_gateway_throttling_rate_limit
-    }
-  }
-  stage_name         = local.api_stage_name
-  create_domain_name = false
-  tags               = var.tags
-  stage_access_log_settings = {
-    create_log_group            = true
-    log_group_retention_in_days = var.logs_retention_in_days
   }
 }

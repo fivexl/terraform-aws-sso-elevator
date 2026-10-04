@@ -19,15 +19,12 @@ locals {
   # In case of non-default value for var.config_bucket_name, we use the value as is and expect the name is unique.
   config_bucket_name = var.config_bucket_name != "sso-elevator-config" ? var.config_bucket_name : "sso-elevator-config-${random_string.random.result}"
 
-  # HTTP API configuration (Slack route only; the CLI route is cli_rest_api.tf's REST API)
+  # Requester REST API (rest_api.tf)
   api_resource_path = "/access-requester"
   api_stage_name    = "default"
-  full_api_url      = var.create_api_gateway ? "${module.http_api[0].stage_invoke_url}${local.api_resource_path}" : ""
 
   # Must match main.py's CLI_ACCESS_REQUEST_PATH.
   api_resource_path_cli = "/access-requester-cli"
-
-  create_cli_rest_api = var.enable_access_requester_cli
 
   # Attribute sync configuration
   attribute_sync_event_rule_name = var.attribute_sync_event_rule_name
