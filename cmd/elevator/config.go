@@ -12,6 +12,8 @@ import (
 // cliConfig is the on-disk shape of ~/.elevator/config.json.
 type cliConfig struct {
 	Endpoint string `json:"endpoint"`
+	// APIID is the REST API id, needed only when Endpoint is a custom domain.
+	APIID string `json:"api_id,omitempty"`
 }
 
 func configFilePath() (string, error) {
@@ -105,32 +107,55 @@ func saveConfig(cfg cliConfig) (string, error) {
 	return path, nil
 }
 
-// runConfigure implements `elevator configure --endpoint URL`, saving the
-// endpoint so subsequent `elevator` requests don't need --endpoint passed
-// every time. Passing --endpoint on a request still overrides this file.
+// runConfigure implements `elevator configure [--endpoint URL] [--api-id ID]`,
+// saving them so later requests don't need them passed every time. A new
+// --endpoint replaces the saved API id too, since that id belonged to the
+// old endpoint; --api-id alone keeps the saved endpoint.
 func runConfigure(args []string) {
 	fs := flag.NewFlagSet("elevator configure", flag.ExitOnError)
 	fs.Usage = func() { usage(fs.Output()) }
-	endpoint := fs.String("endpoint", "", "SSO Elevator API invoke URL to save for future commands (required)")
+	endpoint := fs.String("endpoint", "", "SSO Elevator API invoke URL to save for future commands")
+	apiID := fs.String("api-id", "", "REST API id to save, needed only for a custom-domain endpoint (Terraform output requester_api_id)")
 	exitIfHelpRequested(fs, args)
 	fs.Parse(args)
 
 	if fs.NArg() > 0 {
 		log.Fatalf("unrecognized argument(s): %v (did you mean --endpoint %s?)", fs.Args(), fs.Arg(0))
 	}
-
-	if *endpoint == "" {
-		fmt.Fprintln(fs.Output(), "Usage: elevator configure --endpoint URL")
+	cfg, err := configureConfig(*endpoint, *apiID)
+	if err != nil {
+		fmt.Fprintln(fs.Output(), "Usage: elevator configure [--endpoint URL] [--api-id ID]")
 		fs.PrintDefaults()
-		log.Fatal("--endpoint is required")
-	}
-	if err := validateEndpointScheme(*endpoint); err != nil {
 		log.Fatal(err)
 	}
-
-	path, err := saveConfig(cliConfig{Endpoint: *endpoint})
+	path, err := saveConfig(cfg)
 	if err != nil {
 		log.Fatalf("save config: %v", err)
 	}
-	fmt.Printf("Saved endpoint to %s\n", path)
+	fmt.Printf("Saved configuration to %s\n", path)
+}
+
+// configureConfig returns the config `configure` should save for the given
+// flags, reading the saved config only when --endpoint is not given.
+func configureConfig(endpoint, apiID string) (cliConfig, error) {
+	if endpoint == "" && apiID == "" {
+		return cliConfig{}, fmt.Errorf("--endpoint or --api-id is required")
+	}
+	if apiID != "" {
+		if err := validateAPIID(apiID); err != nil {
+			return cliConfig{}, err
+		}
+	}
+	if endpoint != "" {
+		if err := validateEndpointScheme(endpoint); err != nil {
+			return cliConfig{}, err
+		}
+		return cliConfig{Endpoint: endpoint, APIID: apiID}, nil
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return cliConfig{}, err
+	}
+	cfg.APIID = apiID
+	return cfg, nil
 }

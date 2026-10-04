@@ -1,0 +1,12 @@
+{
+  "api_id": "abcde12345",
+  "region": "eu-central-1",
+  "signing_time": "2026-01-15T12:00:00Z",
+  "access_key_id": "ASIAIOSFODNN7EXAMPLE",
+  "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+  "session_token": "FAKE+SESSION/TOKEN=FOR-TESTS",
+  "nonce": "00112233445566778899aabbccddeeff",
+  "payload": "{\"account\":\"111111111111\",\"permission_set\":\"ReadOnly\",\"duration\":\"60\",\"reason\":\"incident \\u003c42\\u003e \\u0026 \\\"quotes\\\" ü\"}",
+  "payload_sha256": "a988b9f1c68ce4a2f38e43d10b2835a10726f253200bfd7ba8d800f8680c227c",
+  "body": "{\"version\":1,\"payload\":\"{\\\"account\\\":\\\"111111111111\\\",\\\"permission_set\\\":\\\"ReadOnly\\\",\\\"duration\\\":\\\"60\\\",\\\"reason\\\":\\\"incident \\\\u003c42\\\\u003e \\\\u0026 \\\\\\\"quotes\\\\\\\" ü\\\"}\",\"proof\":{\"url\":\"https://sts.eu-central-1.amazonaws.com/?Action=GetCallerIdentity\u0026Version=2011-06-15\u0026X-Amz-Algorithm=AWS4-HMAC-SHA256\u0026X-Amz-Credential=ASIAIOSFODNN7EXAMPLE%2F20260115%2Feu-central-1%2Fsts%2Faws4_request\u0026X-Amz-Date=20260115T120000Z\u0026X-Amz-Expires=60\u0026X-Amz-Security-Token=FAKE%2BSESSION%2FTOKEN%3DFOR-TESTS\u0026X-Amz-SignedHeaders=host%3Bx-elevator-nonce%3Bx-elevator-payload-sha256%3Bx-elevator-server-id\u0026X-Amz-Signature=f7a8c0f0e08fc2bd7a548b979eaf4ce3a27644f80ceeb44d1d4b5530bb05c660\",\"headers\":{\"x-elevator-nonce\":\"00112233445566778899aabbccddeeff\",\"x-elevator-payload-sha256\":\"a988b9f1c68ce4a2f38e43d10b2835a10726f253200bfd7ba8d800f8680c227c\",\"x-elevator-server-id\":\"abcde12345\"}}}"
+}

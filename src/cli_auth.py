@@ -1,7 +1,7 @@
-"""Identity check for the CLI access-request path.
+"""Identity checks for the CLI access-request path.
 
-API Gateway's AWS_IAM authorizer verifies the signature; this module decides whether that identity
-may act. Trust model and its limits: README "CLI tool".
+cli_proof establishes the caller's ARN through STS; this module decides whether that identity may
+act. Trust model and its limits: README "CLI tool".
 """
 
 import json
@@ -18,6 +18,7 @@ logger = config.get_logger(service="cli_auth")
 
 if TYPE_CHECKING:
     from mypy_boto3_identitystore import IdentityStoreClient
+    from mypy_boto3_organizations import OrganizationsClient
     from mypy_boto3_s3 import S3Client
 
 _ASSUMED_ROLE_ARN_RE = re.compile(r"arn:aws:sts::\d{12}:assumed-role/(?P<role_name>[^/]+)/(?P<session_name>.+)")
@@ -26,9 +27,9 @@ _ASSUMED_ROLE_ARN_RE = re.compile(r"arn:aws:sts::\d{12}:assumed-role/(?P<role_na
 SSO_ROLE_NAME_PREFIX = "AWSReservedSSO_"
 
 
-class TransientIdentityStoreError(Exception):
-    """Raised when the Identity Store lookup fails for a reason that says nothing about
-    whether the caller's identity is valid (throttling, a 5xx, a connectivity failure).
+class TransientAWSError(Exception):
+    """Raised when an Identity Store or Organizations lookup fails for a reason that says nothing
+    about whether the caller's identity is valid (throttling, a 5xx, a connectivity failure).
     Callers surface it as a 503 the CLI can retry, not as GENERIC_REJECTION or a 500."""
 
 
@@ -43,6 +44,22 @@ GENERIC_REJECTION = {
         }
     ),
 }
+
+
+def caller_account_in_organization(org_client: "OrganizationsClient", account_id: str) -> bool:
+    """Whether account_id belongs to this deployment's organization. STS vouches for any AWS
+    account, so a session from another organization must stop here. Fails closed."""
+    try:
+        org_client.describe_account(AccountId=account_id)
+    except botocore.exceptions.ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "AccountNotFoundException":
+            return False
+        if sso.is_transient_aws_error(e):
+            raise TransientAWSError from e
+        raise
+    except botocore.exceptions.BotoCoreError as e:
+        raise TransientAWSError from e
+    return True
 
 
 def extract_identity(
@@ -63,10 +80,10 @@ def extract_identity(
         list_of_users = sso.list_users_with_cache(identity_store_client, identity_store_id, s3_client, cfg)
     except botocore.exceptions.ClientError as e:
         if sso.is_transient_aws_error(e):
-            raise TransientIdentityStoreError from e
+            raise TransientAWSError from e
         raise
     except botocore.exceptions.BotoCoreError as e:
-        raise TransientIdentityStoreError from e
+        raise TransientAWSError from e
     try:
         found = sso.find_email_by_username(list_of_users, match["session_name"])
     except errors.AmbiguousSSOUser:

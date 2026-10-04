@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -175,5 +176,59 @@ func TestLoadConfigReturnsAnErrorForMalformedJSON(t *testing.T) {
 	_, err := loadConfig()
 	if err == nil {
 		t.Fatal("loadConfig with a malformed config file returned no error, want one")
+	}
+}
+
+func TestConfigureConfig(t *testing.T) {
+	const endpoint = "https://elevator.example.com/cli"
+	cases := []struct {
+		name            string
+		saved           *cliConfig
+		endpoint, apiID string
+		want            cliConfig
+		wantErr         bool
+	}{
+		{name: "nothing given", wantErr: true},
+		{name: "endpoint only", endpoint: endpoint, want: cliConfig{Endpoint: endpoint}},
+		{name: "endpoint and api id", endpoint: endpoint, apiID: "abcde12345", want: cliConfig{Endpoint: endpoint, APIID: "abcde12345"}},
+		{name: "new endpoint drops the old api id", saved: &cliConfig{Endpoint: "https://old.example.com", APIID: "zzzzz99999"}, endpoint: endpoint, want: cliConfig{Endpoint: endpoint}},
+		{name: "api id alone keeps the saved endpoint", saved: &cliConfig{Endpoint: endpoint}, apiID: "abcde12345", want: cliConfig{Endpoint: endpoint, APIID: "abcde12345"}},
+		{name: "malformed api id", endpoint: endpoint, apiID: "ABC", wantErr: true},
+		{name: "plain http endpoint", endpoint: "http://elevator.example.com", wantErr: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withTempHome(t)
+			if c.saved != nil {
+				if _, err := saveConfig(*c.saved); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := configureConfig(c.endpoint, c.apiID)
+			if (err != nil) != c.wantErr || got != c.want {
+				t.Errorf("configureConfig(%q, %q) = %+v, %v; want %+v, error %v", c.endpoint, c.apiID, got, err, c.want, c.wantErr)
+			}
+		})
+	}
+}
+
+func TestSavedAPIIDRoundTripsAndIsOmittedWhenEmpty(t *testing.T) {
+	dir := withTempHome(t)
+	if _, err := saveConfig(cliConfig{Endpoint: "https://example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".elevator", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "api_id") {
+		t.Errorf("config without an API id should not write api_id: %s", data)
+	}
+	if _, err := saveConfig(cliConfig{Endpoint: "https://example.com", APIID: "abcde12345"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig()
+	if err != nil || cfg.APIID != "abcde12345" {
+		t.Errorf("loadConfig = %+v, %v; want APIID abcde12345", cfg, err)
 	}
 }

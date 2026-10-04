@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import timedelta
 from typing import Callable
@@ -14,6 +15,7 @@ from slack_sdk.web.slack_response import SlackResponse
 
 import access_control
 import cli_auth
+import cli_proof
 import config
 import entities
 import group
@@ -48,11 +50,19 @@ app = App(
 CLI_ACCESS_REQUEST_PATH = "/access-requester-cli"
 
 
+UPGRADE_ELEVATOR_MESSAGE = (
+    "This SSO Elevator deployment requires elevator CLI 5.0.0 or newer, which proves your identity to it. Upgrade elevator and try again."
+)
+
+
 def _is_cli_event(event: dict) -> bool:
-    """Whether event is a REST API proxy event for the CLI route. Slack events come from an
-    HTTP API (payload format 2.0, routeKey instead of httpMethod/resource), so they never match.
-    """
+    """Whether event is a REST API proxy event for the CLI route. Slack's route on the same REST API
+    has a different resource, so its events go to Bolt."""
     return event.get("httpMethod") == "POST" and event.get("resource") == CLI_ACCESS_REQUEST_PATH
+
+
+def _cli_response(status: int, message: str) -> dict:
+    return {"statusCode": status, "headers": {"content-type": "application/json"}, "body": json.dumps({"message": message})}
 
 
 def _transient_aws_error_response() -> dict:
@@ -77,54 +87,31 @@ def lambda_handler(event: str, context):  # noqa: ANN001, ANN201
 
 
 def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, PLR0915
-    """Handle a CLI access request on CLI_ACCESS_REQUEST_PATH. API Gateway has verified the
-    signature; cli_auth decides whether the identity may act. Then it joins the Slack path at
-    process_access_request."""
+    """Handle a CLI access request on CLI_ACCESS_REQUEST_PATH. The caller's identity comes from the
+    STS proof in the body (cli_proof), never from requestContext, which a direct Lambda invoke can
+    forge. cli_auth then decides whether that identity may act, and the request joins the Slack path
+    at process_access_request. The event body carries the proof, so it is never logged."""
     logger.info("Handling CLI access request")
     try:
-        # `or {}` because a key may hold an explicit JSON null. user_arn is read early so every
-        # rejection can log it; it is authorizer-verified, and the stage has no access logging.
-        request_context = event.get("requestContext") or {}
-        user_arn = (request_context.get("identity") or {}).get("userArn", "")
-
-        # When the CLI route is disabled the expected API id is "", so a forged direct invoke
-        # carrying "apiId": "" would pass the comparison. Rejecting outright keeps a deployment
-        # that never enabled the CLI from accepting CLI-shaped events.
+        # Without an expected API id every proof would be checked against "", so refuse outright.
         if not cfg.cli_expected_api_id:
-            logger.info("Rejected CLI request: the CLI route is not enabled", extra={"user_arn": user_arn})
+            logger.info("Rejected CLI request: the CLI route is not enabled")
             return cli_auth.GENERIC_REJECTION
-
-        # Defense-in-depth only; see config.cli_expected_api_id.
-        if request_context.get("apiId") != cfg.cli_expected_api_id:
-            logger.info(
-                "Rejected CLI request: requestContext.apiId did not match this deployment's API Gateway",
-                extra={"user_arn": user_arn},
-            )
-            return cli_auth.GENERIC_REJECTION
-
-        logger.info("CLI caller userArn", extra={"user_arn": user_arn})
-
-        # Validate the body before extract_identity: its Identity Store scan is the most expensive
-        # call here, and any signer could otherwise drive it with garbage payloads.
         try:
-            body = json.loads(event.get("body") or "{}")
-        except json.JSONDecodeError:
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "Request body must be valid JSON."}),
-            }
-        # A syntactically valid JSON document isn't necessarily an object --
-        # e.g. "[]" or "42" both pass json.loads above, and body.get below
-        # would then raise AttributeError, unwinding to the blanket
-        # exception handler as a 500 plus a Slack post for what's just bad
-        # caller input.
-        if not isinstance(body, dict):
-            return {
-                "statusCode": 400,
-                "headers": {"content-type": "application/json"},
-                "body": json.dumps({"message": "Request body must be a JSON object."}),
-            }
+            if event.get("isBase64Encoded"):
+                raise cli_proof.UpgradeRequired
+            envelope = cli_proof.parse_envelope(
+                event.get("body"), expected_api_id=cfg.cli_expected_api_id, region=os.environ.get("AWS_REGION", "")
+            )
+        except cli_proof.UpgradeRequired:
+            logger.info("Rejected CLI request: the body is not a version 1 proof envelope")
+            return _cli_response(400, UPGRADE_ELEVATOR_MESSAGE)
+        except cli_proof.BadRequest as e:
+            return _cli_response(400, str(e))
+        except cli_proof.ProofRejected as e:
+            logger.info(f"Rejected CLI request: {e}")
+            return cli_auth.GENERIC_REJECTION
+        body = envelope.payload
 
         # Coerced to "" rather than left as whatever JSON type the caller
         # sent -- account_id in particular gets passed straight into
@@ -195,15 +182,34 @@ def handle_cli_access_request(event: dict) -> dict:  # noqa: PLR0911, PLR0912, P
                 ),
             }
 
+        # The STS call and the Identity Store scan are the costliest steps, so every check on the
+        # payload itself runs first.
         try:
-            identity = cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if user_arn else None
-        except cli_auth.TransientIdentityStoreError as e:
-            # The Identity Store couldn't answer right now; that says nothing about the caller,
-            # so ask them to retry. The exception is raised bare, so the detail is on __cause__.
-            logger.warning(f"Transient Identity Store error while verifying CLI identity; asking the caller to retry: {e.__cause__}")
+            caller = cli_proof.fetch_caller_identity(envelope)
+        except cli_proof.ProofRejected as e:
+            logger.info(f"Rejected CLI request: {e}")
+            return cli_auth.GENERIC_REJECTION
+        except cli_proof.ProofUnavailable as e:
+            logger.warning(f"STS could not verify the CLI proof; asking the caller to retry: {e}")
+            return _transient_aws_error_response()
+        user_arn = caller.arn
+        logger.info("CLI caller verified by STS", extra={"user_arn": user_arn})
+
+        try:
+            in_organization = cli_auth.caller_account_in_organization(org_client, caller.account)
+            identity = (
+                cli_auth.extract_identity(user_arn, identity_store_client, group.identity_store_id, s3_client) if in_organization else None
+            )
+        except cli_auth.TransientAWSError as e:
+            # Organizations or the Identity Store couldn't answer right now; that says nothing about
+            # the caller, so ask them to retry. The exception is raised bare, so the detail is on __cause__.
+            logger.warning(f"Transient AWS error while verifying CLI identity; asking the caller to retry: {e.__cause__}")
             return _transient_aws_error_response()
         if not identity:
-            logger.info("Rejected CLI request: could not verify a signed identity with an email", extra={"user_arn": user_arn})
+            logger.info(
+                "Rejected CLI request: the verified identity is outside this organization or has no SSO user",
+                extra={"user_arn": user_arn},
+            )
             return cli_auth.GENERIC_REJECTION
         identity_email, identity_user_id, list_of_users = identity
 

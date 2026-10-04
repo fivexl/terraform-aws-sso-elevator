@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import botocore.exceptions
 import pytest
@@ -108,7 +108,7 @@ def test_extract_identity_rejects_non_sso_identity_without_identity_store_lookup
 def test_extract_identity_raises_transient_error_on_identity_store_failure(error, mock_list_users, mock_find_email_by_username):
     mock_list_users.side_effect = error
 
-    with pytest.raises(cli_auth.TransientIdentityStoreError):
+    with pytest.raises(cli_auth.TransientAWSError):
         extract_identity(EMAIL_ARN)
     mock_find_email_by_username.assert_not_called()
 
@@ -120,3 +120,37 @@ def test_extract_identity_propagates_non_transient_identity_store_error(mock_lis
 
     with pytest.raises(botocore.exceptions.ClientError):
         extract_identity(EMAIL_ARN)
+
+
+def test_caller_account_in_organization_accepts_a_member_account():
+    org_client = MagicMock()
+    assert cli_auth.caller_account_in_organization(org_client, "111111111111") is True
+    org_client.describe_account.assert_called_once_with(AccountId="111111111111")
+
+
+def test_caller_account_in_organization_rejects_an_unknown_account():
+    org_client = MagicMock()
+    org_client.describe_account.side_effect = _client_error("AccountNotFoundException")
+    assert cli_auth.caller_account_in_organization(org_client, "999999999999") is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _client_error("TooManyRequestsException", 500),
+        _client_error("ThrottlingException"),
+        botocore.exceptions.ConnectTimeoutError(endpoint_url="x"),
+    ],
+)
+def test_caller_account_in_organization_raises_transient_errors(error):
+    org_client = MagicMock()
+    org_client.describe_account.side_effect = error
+    with pytest.raises(cli_auth.TransientAWSError):
+        cli_auth.caller_account_in_organization(org_client, "111111111111")
+
+
+def test_caller_account_in_organization_fails_closed_on_other_errors():
+    org_client = MagicMock()
+    org_client.describe_account.side_effect = _client_error("AccessDeniedException")
+    with pytest.raises(botocore.exceptions.ClientError):
+        cli_auth.caller_account_in_organization(org_client, "111111111111")
