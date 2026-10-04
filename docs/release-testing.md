@@ -34,9 +34,10 @@ output, scenario, result.
      next request succeeds.
 2. **Upgrade from the previous major.** Follow the release's upgrade guide (for 5.0.0,
    [UPGRADE-5.0.md](../UPGRADE-5.0.md)) step by step on a deployment running the previous release.
-   - Expect: the secret hashes match before and after; the Lambda environment holds parameter
-     names, not values. Whether Slack keeps working throughout depends on the release: see its
-     upgrade guide (5.0.0 has downtime).
+   - Expect: after the move to SSM, the secret hashes match the pre-upgrade values; after the
+     rotation step, both secrets have new values and Slack and CLI requests still work.
+     The Lambda environment holds parameter names, not values. Whether Slack keeps working
+     throughout depends on the release: see its upgrade guide (5.0.0 has downtime).
 3. **No drift.** Run `terraform plan -detailed-exitcode` right after each apply.
    - Expect: exit code 0.
 

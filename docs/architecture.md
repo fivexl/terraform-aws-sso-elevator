@@ -20,17 +20,17 @@
 5. **Revocation.** When the schedule fires, the revoker deletes the assignment (or membership), writes a `revoke` audit entry and updates Slack.
 6. **Sweep.** The nightly revoker run deletes every user-level assignment, in the accounts and permission sets the rules name, that has no pending revocation schedule, and removes every member of a configured group (`group_config`) who has no pending revocation schedule. The 2-hourly check only warns in Slack about them.
 
-The sweep is the safety net for everything else: an assignment made by hand, a grant whose revocation could not be scheduled, or a scheduled revocation that failed (the one-time schedule deletes itself after firing, and the revoker's async invoke is not retried). In each case access ends at the next sweep at the latest.
+The sweep is the safety net for everything else: an assignment made by hand, a grant whose revocation could not be scheduled, or a scheduled revocation that failed (the one-time schedule deletes itself after firing). In each case access ends at the next sweep at the latest.
 
 ## Outage behaviour
 
-The requester calls Organizations, IAM Identity Center and the Identity Store on every request. To keep working through throttling or a short outage of those APIs, it caches the account list, the permission set list and the Identity Store user list in the config bucket (`cache_enabled`, on by default):
+The requester calls Organizations, IAM Identity Center and the Identity Store on every request. To keep working through throttling or a short outage of those APIs, it caches the account list, the permission set list and the Identity Store user list in the config bucket (`cache_enabled`, on by default). The user list cache only serves the CLI's caller lookup. Slack requests, and the grant step on either path, list Identity Store users uncached, so an Identity Store outage still fails them.
 
 - Each lookup calls the API and reads the cache in parallel. The API answer wins whenever there is one; the cache is rewritten when the answer differs.
 - If the API fails, the cached copy is used and a warning is logged. If both fail, the request fails.
 - The cache never expires: a stale list is better than none during an outage, and every successful call refreshes it.
 - An empty API answer never overwrites a non-empty cache; an empty account or user list is more likely an API fault than the truth.
-- A cache read that takes longer than 5 seconds is abandoned, so a slow S3 never delays a request whose API call already returned.
+- The lookup waits up to 5 seconds for the cache read, even when the API has already answered, then abandons it. A cache rewrite runs before the request goes on. So a slow S3 can add up to 5 seconds plus the write time to each lookup.
 - Cache failures never fail a request; they are logged as warnings (`Failed to get cached ...`, `Failed to cache ...`).
 
 The revoker and attribute-syncer never use the cache: removing access must work from current data, not a snapshot.

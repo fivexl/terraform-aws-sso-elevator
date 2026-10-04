@@ -79,7 +79,7 @@ Each rule has:
 - **group_name**: a group display name, listed in `attribute_sync_managed_groups`.
 - **attributes**: conditions that must all match (AND).
 
-Several rules for the same group are alternatives (OR): matching any one of them is enough. Attribute names and values are compared case-insensitively. A rule with no attributes matches nobody.
+Several rules for the same group are alternatives (OR): matching any one of them is enough. Attribute names and values are compared case-insensitively. A rule with empty `attributes` passes `terraform apply`, but the syncer then rejects the whole configuration and every run fails without syncing any group.
 
 Attribute names the syncer reads from each Identity Store user:
 
@@ -88,7 +88,9 @@ Attribute names the syncer reads from each Identity Store user:
 - Enterprise attributes: `department`, `costCenter`, `organization`, `division`, `employeeNumber`
 - External IDs, as `externalId_<issuer>`
 
-A condition on any other name never matches. For example, use `title`, not `jobTitle`, and `userType`, not `employeeType`.
+Any other name is never read, so the syncer treats it as unset. For example, use `title`, not `jobTitle`, and `userType`, not `employeeType`.
+
+A missing attribute counts as the empty string, so a condition with value `""` matches every user who lacks that attribute, or names one the syncer does not read. Do not use empty values.
 
 A managed group name that does not exist in the Identity Store is logged as an error and its rules are skipped.
 
@@ -116,7 +118,7 @@ Each action is written to the audit bucket with one of these operation types:
 
 The syncer posts to `slack_channel_id`: one message per user added, per manual assignment detected, and per manual assignment removed, plus a summary and any errors at the end of a run that changed something or hit an error. Runs with no changes post nothing.
 
-An error on one user or group does not stop the run; it is counted and reported in the summary.
+An error on one user or group does not stop the run; it is counted and reported in the summary. A failed `DescribeUser` call is the exception: it is only logged, and the syncer judges that user from their `ListUsers` record, which lacks the enterprise attributes such as `department`. Under `remove`, a member who matched on those attributes can be removed that run.
 
 ## Do not overlap with `group_config`
 

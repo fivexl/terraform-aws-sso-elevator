@@ -10,7 +10,7 @@ Breaking release with downtime. Follow [UPGRADE-5.0.md](UPGRADE-5.0.md).
 
 - One REST API serves both Slack (`POST /access-requester`) and the CLI (`POST /access-requester-cli`), invoking the requester Lambda's `live` alias. A request validator answers `400` to a Slack-route POST without Slack's signature headers, without invoking the Lambda.
 - Optional AWS WAF: `waf_enabled` creates a web ACL with a per-IP rate limit (`waf_rate_limit`) and AWS managed rule sets; `waf_web_acl_arn` attaches one you manage.
-- Lambda SnapStart on the requester (`snap_start`, on by default), so the first Slack click after idle answers within Slack's 3-second deadline. The revoker's nightly run deletes old requester versions, keeping `live` and one rollback version.
+- Lambda SnapStart on the requester (`snap_start`, on by default). It cuts cold-start latency to help the first Slack click after idle meet Slack's 3-second deadline. The revoker's nightly run deletes old requester versions, keeping `live` and one rollback version.
 - Opt-in REST API stage access logs (`api_gateway_access_logs_enabled`).
 - The CLI proves its caller's identity with a presigned `sts:GetCallerIdentity` request bound to the request body and API id. The Lambda no longer trusts the identity in the event, so a direct Lambda invoke cannot forge a CLI caller.
 - CLI callers from any account in the organization, admitted by the API's resource policy.

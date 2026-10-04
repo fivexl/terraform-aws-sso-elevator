@@ -72,7 +72,7 @@ Do not put a group managed by [attribute sync](attribute-sync.md) in `group_conf
 
 For a request, the Elevator collects every statement that matches it (the account and permission set, or the group) and that the requester may use. Then:
 
-1. **Explicit deny.** If any of those statements sets `ApprovalIsNotRequired = false`, no statement can grant the request without approval. If any statement sets `AllowSelfApproval = false` and lists the requester in its `Approvers`, the requester cannot self-approve through any statement.
+1. **Explicit deny.** Two separate controls. If any of those statements sets `ApprovalIsNotRequired = false`, no statement's `ApprovalIsNotRequired = true` takes effect; self-approval still can. If any statement sets `AllowSelfApproval = false` and lists the requester in its `Approvers`, no statement's `AllowSelfApproval = true` takes effect for that requester; `ApprovalIsNotRequired = true` still can.
 2. **Automatic approval.** Otherwise access is granted at once if a statement sets `ApprovalIsNotRequired = true`, or sets `AllowSelfApproval = true` and lists the requester in its `Approvers`.
 3. **Approvers.** Otherwise the approvers are the union of `Approvers` across all those statements, minus the requester. A statement covering all accounts adds its approvers to every request, even where a narrower statement exists.
 4. **Nobody can approve.** If that set is empty, the request fails with "Nobody can approve this request." This is what happens when the requester is the only approver and self-approval is not allowed. If no statement matches, the request fails with "No statement in the configuration covers this request."

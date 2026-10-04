@@ -2,7 +2,7 @@
 
 Every grant, revocation, declined request and approved-but-failed request is written to the audit bucket as one JSON object per event, at `<s3_bucket_partition_prefix>/yyyy/MM/dd/<uuid>.json`. The bucket is `s3_name_of_the_existing_bucket` if set, otherwise one the module creates (`sso_elevator_bucket_id` output).
 
-Audit writes never block access expiry. While S3 is unavailable, entries go to the Lambda's CloudWatch logs instead (the log record carries the full entry), so an Athena table over the bucket misses them. See [accepted risks](accepted-risks.md#an-s3-outage-loses-audit-records-from-the-bucket).
+Audit writes never block access expiry. While S3 is unavailable, the requester and revoker log the full entry to their CloudWatch logs instead, so an Athena table over the bucket misses them. The attribute syncer logs only the error, so its entries from that time are lost. See [accepted risks](accepted-risks.md#an-s3-outage-loses-audit-records-from-the-bucket).
 
 ## Fields
 
@@ -17,7 +17,7 @@ The columns below follow `AuditEntry` in `src/s3.py`. Fields that don't apply to
 
 Other fields worth knowing:
 
-- `request_source` is `slack` or `cli`; `verified_arn` is the STS-verified caller ARN of a CLI request.
+- `request_source` is `slack` or `cli` on account-request entries the requester writes. Group entries, entries the revoker writes (revocations, expiries) and attribute-sync entries hold `"NA"`, so a filter on `request_source = 'slack'` drops them. `verified_arn` is the STS-verified caller ARN of a CLI request.
 - `permission_duration` is in seconds.
 - `matched_attributes` is the string `"NA"` when absent but a JSON object when present, so the table declares it `string`; read the populated case with `json_extract`.
 - `version` is `2` from 5.0.0 on and null on older records.
