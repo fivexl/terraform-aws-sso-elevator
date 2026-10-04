@@ -1,6 +1,10 @@
+import datetime
+import io
+import json
 from unittest.mock import MagicMock
 
 import pytest
+from botocore.exceptions import ClientError
 
 import errors
 import sso
@@ -36,12 +40,90 @@ def test_list_users_with_cache_returns_the_same_shape_as_list_users_when_cache_i
     client = MagicMock()
     paginator = MagicMock()
     client.get_paginator.return_value = paginator
-    paginator.paginate.return_value = [{"Users": [{"UserName": "a"}, {"UserName": "b"}]}]
+    paginator.paginate.return_value = [
+        {"Users": [{"UserId": "u-2", "UserName": "b", "DisplayName": "B"}, {"UserId": "u-1", "UserName": "a", "DisplayName": "A"}]}
+    ]
     cfg = MagicMock(cache_enabled=False, config_bucket_name="unused")
 
     result = sso.list_users_with_cache(client, "d-1234567890", MagicMock(), cfg)
 
-    assert result == {"Users": [{"UserName": "a"}, {"UserName": "b"}]}
+    assert result == {"Users": [{"UserId": "u-1", "UserName": "a"}, {"UserId": "u-2", "UserName": "b"}]}
+
+
+def _api_users() -> list[dict]:
+    created = datetime.datetime(2024, 1, 1, tzinfo=datetime.UTC)
+    return [
+        {
+            "UserId": f"u-{i}",
+            "UserName": f"user{i}",
+            "Emails": [{"Value": f"user{i}@example.com", "Type": "work", "Primary": True}],
+            "DisplayName": f"User {i}",
+            "CreatedAt": created,
+            "UpdatedAt": created,
+            "IdentityStoreId": "d-1234567890",
+        }
+        for i in (1, 2)
+    ]
+
+
+_PROJECTED_USERS = [
+    {"UserId": f"u-{i}", "UserName": f"user{i}", "Emails": [{"Value": f"user{i}@example.com", "Type": "work", "Primary": True}]}
+    for i in (1, 2)
+]
+
+
+def _identitystore_client(pages) -> MagicMock:
+    client = MagicMock()
+    client.get_paginator.return_value.paginate.side_effect = pages
+    return client
+
+
+def _s3_client(cached_body: bytes | None) -> MagicMock:
+    s3 = MagicMock()
+    s3.exceptions.NoSuchKey = type("NoSuchKey", (Exception,), {})
+    if cached_body is None:
+        s3.get_object.side_effect = s3.exceptions.NoSuchKey()
+    else:
+        s3.get_object.return_value = {"Body": io.BytesIO(cached_body)}
+    return s3
+
+
+_CACHE_CFG = MagicMock(cache_enabled=True, config_bucket_name="test-config-bucket", config_bucket_kms_key_arn="")
+
+
+def test_list_users_with_cache_writes_users_with_datetime_fields_projected():
+    """Regression (#223): botocore returns CreatedAt/UpdatedAt as datetime,
+    which made the users cache unwritable."""
+    s3 = _s3_client(None)
+
+    sso.list_users_with_cache(_identitystore_client(lambda **_: [{"Users": _api_users()}]), "d-1234567890", s3, _CACHE_CFG)
+
+    s3.put_object.assert_called_once()
+    assert json.loads(s3.put_object.call_args.kwargs["Body"]) == _PROJECTED_USERS
+
+
+def test_list_users_with_cache_does_not_rewrite_unchanged_users_in_a_different_order():
+    s3 = _s3_client(json.dumps(_PROJECTED_USERS).encode())
+    client = _identitystore_client(lambda **_: [{"Users": list(reversed(_api_users()))}])
+
+    result = sso.list_users_with_cache(client, "d-1234567890", s3, _CACHE_CFG)
+
+    assert result == {"Users": _PROJECTED_USERS}
+    s3.put_object.assert_not_called()
+
+
+def test_list_users_with_cache_falls_back_to_what_it_wrote_when_list_users_throttles():
+    first_s3 = _s3_client(None)
+    sso.list_users_with_cache(_identitystore_client(lambda **_: [{"Users": _api_users()}]), "d-1234567890", first_s3, _CACHE_CFG)
+    written = first_s3.put_object.call_args.kwargs["Body"]
+
+    throttled = ClientError({"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}}, "ListUsers")
+    second_s3 = _s3_client(written)
+    result = sso.list_users_with_cache(_identitystore_client(throttled), "d-1234567890", second_s3, _CACHE_CFG)
+
+    assert result == {"Users": _PROJECTED_USERS}
+    assert sso.find_email_by_username(result, "user2") == ("user2@example.com", "u-2")
+    second_s3.put_object.assert_not_called()
 
 
 def test_find_email_by_username_matches_exact_username():

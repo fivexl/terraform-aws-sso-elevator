@@ -454,9 +454,9 @@ class TestSetCachedUsers:
 
     def test_a_payload_over_the_generic_cache_limit_still_writes(self, mock_s3_client, cache_config_enabled):
         """Regression test (#194 High #4, found live by Andrey Devyatkin):
-        a representative user record is ~445 bytes, so the generic
-        MAX_DATA_SIZE (5MB, sized for the small accounts/permission-sets
-        caches) is crossed at just 11,616 users -- above that, this used to
+        a raw ListUsers record was ~445 bytes (~166 once projected), so the
+        generic MAX_DATA_SIZE (5MB, sized for the small accounts/permission-sets
+        caches) was crossed at just 11,616 users -- above that, this used to
         silently fail to write anything at all, so the fallback this cache
         exists to provide didn't exist on exactly the directories large
         enough to need it. set_cached_users must use the much higher
