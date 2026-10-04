@@ -323,7 +323,7 @@ def test_expired_request_writes_one_declined_expired_entry(revoker, group):
 
     slack_client.chat_update.assert_called_once()
     mock_log_operation.assert_called_once()
-    entry = mock_log_operation.call_args.args[0]
+    entry = mock_log_operation.call_args.kwargs["audit_entry"]
     assert (entry.operation_type, entry.decision_reason) == ("declined", "Expired")
     assert (entry.approver_slack_id, entry.approver_email) == ("NA", "NA")
     assert (entry.requester_slack_id, entry.requester_email) == ("U_REQ", "req@example.com")
@@ -341,7 +341,7 @@ def test_expired_request_audit_uses_na_email_when_requester_lookup_fails(revoker
     with patch.object(revoker.s3, "log_operation") as mock_log_operation:
         _expire(revoker, _pending_request_message(revoker, group=False), slack_client)
 
-    assert mock_log_operation.call_args.args[0].requester_email == "NA"
+    assert mock_log_operation.call_args.kwargs["audit_entry"].requester_email == "NA"
 
 
 def test_expired_request_audit_failure_does_not_block_button_removal(revoker):

@@ -609,7 +609,9 @@ def handle_discard_buttons_event(
     _log_expired_request(request=request, slack_client=slack_client)
 
 
-def _log_expired_request(request: slack_helpers.RequestForAccess | slack_helpers.RequestForGroupAccess, slack_client: slack_sdk.WebClient) -> None:
+def _log_expired_request(
+    request: slack_helpers.RequestForAccess | slack_helpers.RequestForGroupAccess, slack_client: slack_sdk.WebClient
+) -> None:
     # Best-effort: the buttons are already gone, so an audit failure must not fail the event.
     try:
         if isinstance(request, slack_helpers.RequestForGroupAccess):
@@ -628,7 +630,7 @@ def _log_expired_request(request: slack_helpers.RequestForAccess | slack_helpers
             logger.exception(f"Failed to look up requester for expired request audit entry: {e}")
             requester_email = "NA"
         s3.log_operation(
-            s3.AuditEntry(
+            audit_entry=s3.AuditEntry(
                 reason=request.reason,
                 requester_slack_id=request.requester_slack_id,
                 requester_email=requester_email,
