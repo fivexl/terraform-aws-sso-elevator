@@ -40,7 +40,7 @@ repos:
     -   id: ruff-format
 # Terraform
 - repo: https://github.com/antonbabenko/pre-commit-terraform
-  rev: v1.104.0
+  rev: v1.109.1
   hooks:
     - id: terraform_fmt
       exclude: ^(tests|src/tests)/
