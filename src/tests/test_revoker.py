@@ -129,7 +129,7 @@ def test_group_sweep_uses_the_identitystore_client_it_is_passed(revoker):
     assert global_client.mock_calls == []
 
 
-def _sweep(revoker, log_operation, slack_client=None):  # noqa: ANN001, ANN202
+def _sweep(revoker, log_operation, slack_client=None, remove_side_effect=None):  # noqa: ANN001, ANN202
     """Runs one SSOElevatorScheduledRevocation invocation over two group and two account assignments."""
     groups = [
         sso.GroupAssignment(group_name="g", group_id="g-1", user_principal_id="u", membership_id=m, identity_store_id="d-1")
@@ -146,7 +146,7 @@ def _sweep(revoker, log_operation, slack_client=None):  # noqa: ANN001, ANN202
         patch.object(revoker.schedule, "get_scheduled_events", return_value=[]),
         patch.object(revoker.sso, "get_group_assignments", return_value=groups),
         patch.object(revoker.sso, "get_account_assignment_information", return_value=accounts),
-        patch.object(revoker.sso, "remove_user_from_group") as mock_remove,
+        patch.object(revoker.sso, "remove_user_from_group", side_effect=remove_side_effect) as mock_remove,
         patch.object(revoker.sso, "delete_account_assignment_and_wait_for_result") as mock_delete,
         patch.object(revoker.sso, "describe_permission_set"),
         patch.object(revoker.s3, "log_operation", log_operation),
@@ -188,6 +188,18 @@ def test_sweep_stops_writing_to_s3_after_a_slow_write(revoker):
 
     assert log_operation.call_count == 1
     assert [c.args[1].account_id for c in mocks.delete.call_args_list] == ["111111111111", "222222222222"]
+
+
+def test_sweep_skips_a_group_membership_that_is_already_gone(revoker):
+    """#244: a membership removed since it was listed is not revoked again and does not skip the account pass."""
+    gone = botocore.exceptions.ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "DeleteGroupMembership")
+    log_operation = MagicMock()
+
+    mocks = _sweep(revoker, log_operation, remove_side_effect=[gone, None])
+
+    assert [c.args[1] for c in mocks.remove.call_args_list] == ["m-1", "m-2"]
+    assert [c.args[1].account_id for c in mocks.delete.call_args_list] == ["111111111111", "222222222222"]
+    assert [c.kwargs["audit_entry"].audit_entry_type for c in log_operation.call_args_list] == ["group", "account", "account"]
 
 
 def test_sweep_still_raises_a_real_removal_failure(revoker):
