@@ -37,7 +37,8 @@ sso_client = boto3.client("sso-admin")  # type: ignore # noqa: PGH003
 identitystore_client = boto3.client("identitystore")  # type: ignore # noqa: PGH003
 scheduler_client = boto3.client("scheduler")  # type: ignore # noqa: PGH003
 events_client = boto3.client("events")  # type: ignore # noqa: PGH003
-slack_client = slack_sdk.WebClient(token=cfg.slack_bot_token)
+ssm_client = boto3.client("ssm")  # type: ignore # noqa: PGH003
+slack_client = slack_sdk.WebClient(token=config.get_slack_secret(ssm_client, "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=True))
 
 
 def lambda_handler(event: dict, __) -> SlackResponse | None:  # type: ignore # noqa: ANN001, PGH003
@@ -162,13 +163,8 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
     )
 
     if cfg.post_update_to_slack:
-        # The actual revocation (delete_account_assignment_and_wait_for_result above) and its
-        # audit record have already succeeded by this point. This call is only telling Slack
-        # about it -- a failure here (#208 review, "Slack errors still stop revocations") must
-        # not propagate, since handle_sso_elevator_scheduled_revocation calls this function in
-        # a loop over every assignment that needs revoking, and an unhandled exception here
-        # would abort that loop, leaving every remaining assignment un-revoked even though
-        # this one's revocation already went through.
+        # The revocation already succeeded. handle_sso_elevator_scheduled_revocation calls this
+        # in a loop, so a Slack failure must not abort the remaining revocations.
         try:
             account = organizations.describe_account(org_client, account_assignment.account_id)
             return slack_notify_user_on_revoke(
@@ -180,9 +176,9 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
                 identitystore_client=identitystore_client,
                 slack_client=slack_client,
             )
-        except Exception:
+        except Exception as e:
             logger.exception(
-                "Failed to notify Slack about a completed revocation -- the revocation itself already succeeded",
+                f"Failed to notify Slack about a completed revocation, the revocation itself succeeded: {e}",
                 extra={"account_assignment": account_assignment},
             )
     return None
@@ -275,13 +271,8 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
 
     if cfg.post_update_to_slack:
-        # Deliberately NOT wrapped in try/except (#208 re-review): this function is the sole
-        # action of one EventBridge-triggered invocation, not called in a loop over multiple
-        # assignments -- there's nothing else in this invocation a Slack failure here could
-        # abort. Letting it propagate is what makes this invocation report failure to Lambda,
-        # which is what feeds perm_revoker_lambda.tf's DLQ/SNS-email alerting on a broken
-        # Slack integration; swallowing it here would silently disable that alerting even
-        # though the revocation itself (already done above) genuinely succeeded.
+        # Not wrapped in try/except: this is the invocation's only action, not a loop, and a
+        # propagated Slack failure is what reaches the DLQ/SNS alerting.
         account = organizations.describe_account(org_client, user_account_assignment.account_id)
         slack_notify_user_on_revoke(
             cfg=cfg,
@@ -322,11 +313,7 @@ def handle_scheduled_group_assignment_deletion(  # noqa: PLR0913
     )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
     if cfg.post_update_to_slack:
-        # Deliberately NOT wrapped in try/except (#208 re-review) -- same reasoning as
-        # handle_scheduled_account_assignment_deletion above: this is the sole action of one
-        # EventBridge-triggered invocation, not a loop, so letting a Slack-notification
-        # failure propagate is what preserves the DLQ/SNS-email alerting for a broken Slack
-        # integration, rather than silently swallowing the only signal of it.
+        # Not wrapped in try/except, same as handle_scheduled_account_assignment_deletion.
         slack_notify_user_on_group_access_revoke(
             cfg=cfg,
             group_assignment=group_assignment,
@@ -494,11 +481,8 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
                 ),
             )
             if cfg.post_update_to_slack:
-                # This loop revokes every group assignment not already covered by a proper
-                # schedule (#208 review, "Slack errors still stop revocations"): the removal
-                # and its audit record above already succeeded, so a Slack notification
-                # failure must not abort the loop and leave the remaining group assignments
-                # un-revoked.
+                # The removal already succeeded; a Slack failure must not abort the loop and
+                # leave the remaining group assignments un-revoked.
                 try:
                     slack_notify_user_on_group_access_revoke(
                         cfg=cfg,
@@ -507,9 +491,9 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
                         identitystore_client=identitystore_client,
                         slack_client=slack_client,
                     )
-                except Exception:
+                except Exception as e:
                     logger.exception(
-                        "Failed to notify Slack about a completed group revocation -- the revocation itself already succeeded",
+                        f"Failed to notify Slack about a completed group revocation, the revocation itself succeeded: {e}",
                         extra={"group_assignment": group_assignment},
                     )
 

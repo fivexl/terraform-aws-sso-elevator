@@ -47,9 +47,10 @@ module "access_requester_slack_handler" {
     {
       LOG_LEVEL = var.log_level
 
-      SLACK_CHANNEL_ID    = var.slack_channel_id
-      SCHEDULE_GROUP_NAME = var.schedule_group_name
-
+      SLACK_BOT_TOKEN_SSM_PARAMETER_NAME      = aws_ssm_parameter.slack_bot_token.name
+      SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME = aws_ssm_parameter.slack_signing_secret.name
+      SLACK_CHANNEL_ID                        = var.slack_channel_id
+      SCHEDULE_GROUP_NAME                     = var.schedule_group_name
 
       SSO_INSTANCE_ARN                            = local.sso_instance_arn
       SCHEDULE_POLICY_ARN                         = aws_iam_role.eventbridge_role.arn
@@ -94,20 +95,7 @@ module "access_requester_slack_handler" {
       # a deliberate forgery can just set this field too. See src/config.py's
       # cli_expected_api_id docstring.
       CLI_EXPECTED_API_ID = module.http_api[0].api_id
-    } : {},
-    # Opt-in per deployment (see read_slack_secrets_from_ssm in vars.tf). Off by default:
-    # this Lambda reads the plain secret variables exactly as it always has, unchanged. Only
-    # when explicitly enabled does it instead read the secrets from SSM itself at runtime,
-    # by name -- Terraform pre-creates those parameters with a placeholder (write-only,
-    # never stored in state) but never touches their real value once you've set one (see
-    # slack_ssm_secrets.tf for why).
-    var.read_slack_secrets_from_ssm ? {
-      SLACK_BOT_TOKEN_SSM_PARAMETER_NAME      = var.requester_slack_bot_token_ssm_parameter_name
-      SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME = var.requester_slack_signing_secret_ssm_parameter_name
-      } : {
-      SLACK_BOT_TOKEN      = var.slack_bot_token
-      SLACK_SIGNING_SECRET = var.slack_signing_secret
-    }
+    } : {}
   )
 
   allowed_triggers = merge(
@@ -336,52 +324,38 @@ data "aws_iam_policy_document" "slack_handler" {
       resources = [statement.value]
     }
   }
-  # Both statements only granted when read_slack_secrets_from_ssm is enabled (see
-  # slack_ssm_secrets.tf) -- otherwise this Lambda never calls SSM for its Slack secrets at
-  # all, and granting the permission anyway would just be unused surface.
-  dynamic "statement" {
-    for_each = var.read_slack_secrets_from_ssm ? [1] : []
-    content {
-      sid    = "AllowReadSlackSecretsFromSSM"
-      effect = "Allow"
-      actions = [
-        "ssm:GetParameter",
-      ]
-      resources = [
-        local.requester_slack_bot_token_ssm_parameter_arn,
-        local.requester_slack_signing_secret_ssm_parameter_arn,
-      ]
-    }
+  statement {
+    sid    = "AllowReadSlackSecretsFromSSM"
+    effect = "Allow"
+    actions = [
+      "ssm:GetParameter",
+    ]
+    resources = [
+      aws_ssm_parameter.slack_bot_token.arn,
+      aws_ssm_parameter.slack_signing_secret.arn,
+    ]
   }
-  # Needed to read the SecureString parameters. kms:ViaService scopes this to calls SSM makes
-  # on this Lambda's behalf; kms:EncryptionContext:PARAMETER_ARN further scopes it to only
-  # these two specific parameters (SSM automatically sets this context on every SecureString
-  # decrypt), rather than any SecureString parameter in the account that happens to share the
-  # same KMS key (found in review) -- Resource has to stay "*" regardless, since the AWS
-  # managed alias/aws/ssm key cannot be referenced by ARN, and a customer managed key's ARN
-  # isn't known here either way.
-  dynamic "statement" {
-    for_each = var.read_slack_secrets_from_ssm ? [1] : []
-    content {
-      sid    = "AllowDecryptSSMParameters"
-      effect = "Allow"
-      actions = [
-        "kms:Decrypt",
+  # Resource is "*" because the key may be alias/aws/ssm or a customer managed key the
+  # operator chose in put-parameter; the conditions limit it to SSM decrypting these parameters.
+  statement {
+    sid    = "AllowDecryptSlackSecrets"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values = [
+        aws_ssm_parameter.slack_bot_token.arn,
+        aws_ssm_parameter.slack_signing_secret.arn,
       ]
-      resources = ["*"]
-      condition {
-        test     = "StringEquals"
-        variable = "kms:ViaService"
-        values   = ["ssm.${data.aws_region.current.region}.amazonaws.com"]
-      }
-      condition {
-        test     = "StringEquals"
-        variable = "kms:EncryptionContext:PARAMETER_ARN"
-        values = [
-          local.requester_slack_bot_token_ssm_parameter_arn,
-          local.requester_slack_signing_secret_ssm_parameter_arn,
-        ]
-      }
     }
   }
 }

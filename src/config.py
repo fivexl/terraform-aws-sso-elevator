@@ -69,65 +69,20 @@ def load_approval_config_from_s3(s3_client: S3Client, bucket_name: str, s3_key: 
         raise
 
 
-def get_secret_from_ssm(ssm_client: SSMClient, parameter_name: str) -> str:
-    """Read one SecureString parameter's decrypted value from SSM Parameter Store.
+def get_slack_secret(ssm_client: SSMClient, env_var_name: str, *, degrade_on_failure: bool) -> str:
+    """Read the SecureString parameter named by the env_var_name environment variable.
 
-    Used for the handful of actual secrets (the Slack bot token and signing secret) that
-    Terraform used to push into a Lambda's plaintext environment variables -- and, before
-    that, into the Terraform state file, since a value passed through a Terraform variable
-    ends up there regardless of where it's ultimately written to. Terraform never creates,
-    reads, or manages the parameter this reads from at all (see slack_ssm_secrets.tf for why
-    that's deliberate, not an oversight): the parameter must already exist and be populated
-    by the time this runs, set up entirely out of band (console or CLI), before the
-    read_slack_secrets_from_ssm flag is ever turned on.
+    degrade_on_failure=True (revoker, attribute-syncer) logs and returns "" so an SSM failure
+    costs a Slack message, not a revocation or sync. The access-requester raises instead,
+    since it is useless without Slack.
     """
-    response = ssm_client.get_parameter(Name=parameter_name, WithDecryption=True)
-    return response["Parameter"]["Value"]
-
-
-def resolve_secret_from_ssm_env(env_var_name: str, *, degrade_on_failure: bool, ssm_client: SSMClient | None = None) -> str | None:
-    """Read a Slack secret from SSM when its *_SSM_PARAMETER_NAME environment variable is
-    set (opt-in per deployment -- see read_slack_secrets_from_ssm in vars.tf). Returns None
-    when the environment variable isn't set at all, so the caller can leave the corresponding
-    Config field at its normal (environment-variable-sourced) value.
-
-    ssm_client lets a caller resolving more than one secret (get_config(), for the
-    access-requester's two) share a single client/connection instead of this function
-    constructing a fresh one per secret; a caller resolving just one (attribute-syncer) can
-    leave it unset and get one built automatically.
-
-    degrade_on_failure controls what happens when SSM itself can't be reached (throttling, a
-    KMS/IAM denial, a transient AWS issue) -- there is no one right answer for every caller:
-
-    - True (revoker, attribute-syncer): their core job (revoking access / syncing group
-      membership) has nothing to do with Slack, so a failure here is caught and logged,
-      degrading to an empty secret, rather than blocking work that doesn't depend on it.
-    - False (the access-requester): its entire job *is* Slack, so there is no safe "keep
-      working without this secret" mode to protect -- an empty bot token makes
-      slack_bolt.App itself refuse to start (found in review: it still crashes, just via a
-      less informative error, defeating the point of degrading), and an empty signing secret
-      doesn't crash anything, it just silently rejects every genuine Slack request for the
-      Lambda's entire uptime with no clear signal pointing at the actual cause. Raising here
-      instead trades a crash for a *diagnosable* crash, which is the better of the two bad
-      outcomes for this Lambda specifically.
-    """
-    parameter_name = os.environ.get(env_var_name, "")
-    if not parameter_name:
-        return None
-    if ssm_client is None:
-        import boto3
-
-        ssm_client = boto3.client("ssm")
-
     try:
-        return get_secret_from_ssm(ssm_client, parameter_name)
-    except Exception as e:  # noqa: BLE001
+        response = ssm_client.get_parameter(Name=os.environ[env_var_name], WithDecryption=True)
+        return response["Parameter"]["Value"]
+    except Exception as e:
         if not degrade_on_failure:
-            raise RuntimeError(
-                f"Failed to read {env_var_name} ({parameter_name}) from SSM -- refusing to start with a missing "
-                f"or broken Slack secret rather than silently degrading: {e}"
-            ) from e
-        logger.exception(f"Failed to read {env_var_name} ({parameter_name}) from SSM -- continuing with an empty secret: {e}")
+            raise RuntimeError(f"Failed to read the Slack secret named by {env_var_name} from SSM: {e}") from e
+        logger.exception(f"Failed to read the Slack secret named by {env_var_name} from SSM, continuing without Slack: {e}")
         return ""
 
 
@@ -183,10 +138,6 @@ class Config(BaseSettings):
 
     post_update_to_slack: bool = False
     slack_channel_id: str
-    slack_bot_token: str
-    # Empty for the lambdas that do not verify inbound Slack webhook signatures (revoker,
-    # attribute-syncer) -- only the access-requester Lambda ever sets this to a real value.
-    slack_signing_secret: str = ""
 
     approver_renotification_initial_wait_time: int
     approver_renotification_backoff_multiplier: int
@@ -345,48 +296,8 @@ class Config(BaseSettings):
 _config: Optional[Config] = None
 
 
-def get_config(*, degrade_slack_secret_failures: bool = True) -> Config:
-    """degrade_slack_secret_failures should be False for the access-requester Lambda, whose
-    entire job is Slack -- see resolve_secret_from_ssm_env's own docstring for why that Lambda
-    needs the opposite default from revoker/attribute-syncer (which don't pass this at all)."""
+def get_config() -> Config:
     global _config  # noqa: PLW0603
     if _config is None:
-        overrides = {}
-        # One shared client for both lookups (found in review) -- the access-requester is the
-        # only Lambda resolving both secrets from SSM, and a fresh client per secret meant two
-        # separate connections/pools for what's otherwise two GetParameter calls on the same
-        # client.
-        ssm_client = None
-        if os.environ.get("SLACK_BOT_TOKEN_SSM_PARAMETER_NAME") or os.environ.get("SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME"):
-            import boto3
-
-            ssm_client = boto3.client("ssm")
-        slack_bot_token = resolve_secret_from_ssm_env(
-            "SLACK_BOT_TOKEN_SSM_PARAMETER_NAME", degrade_on_failure=degrade_slack_secret_failures, ssm_client=ssm_client
-        )
-        if slack_bot_token is not None:
-            overrides["slack_bot_token"] = slack_bot_token
-        slack_signing_secret = resolve_secret_from_ssm_env(
-            "SLACK_SIGNING_SECRET_SSM_PARAMETER_NAME", degrade_on_failure=degrade_slack_secret_failures, ssm_client=ssm_client
-        )
-        if slack_signing_secret is not None:
-            overrides["slack_signing_secret"] = slack_signing_secret
-        # Only the bot token is checked here, not the signing secret: every Lambda that calls
-        # get_config() uses a bot token, but only the access-requester ever uses a signing
-        # secret at all (revoker/attribute-syncer never reference cfg.slack_signing_secret --
-        # it's legitimately always empty for them, not "still on the deprecated path"). Warning
-        # here based on slack_signing_secret being None would wrongly nudge the revoker and
-        # attribute-syncer about a secret that was never applicable to them in the first place.
-        # main.py -- the only caller that actually uses the signing secret -- carries the
-        # equivalent warning for it (#208 review, "removing deprecation warnings is not
-        # right").
-        if slack_bot_token is None:
-            logger.warning(
-                "Slack bot token is being read from the plain SLACK_BOT_TOKEN environment "
-                "variable. This still works today, but the plain environment variable path is "
-                "expected to be deprecated in a future release -- consider migrating to SSM "
-                "Parameter Store (read_slack_secrets_from_ssm) to keep the real secret value "
-                "out of Terraform state."
-            )
-        _config = Config(**overrides)  # type: ignore # noqa: PGH003
+        _config = Config()  # type: ignore # noqa: PGH003
     return _config

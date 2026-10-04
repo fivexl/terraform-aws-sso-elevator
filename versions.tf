@@ -1,16 +1,11 @@
 terraform {
-  # >= 1.11.0 (not just "~> 1.0"), and the aws provider floor bumped to >= 5.87.0 below:
-  # both are required for write-only arguments (slack_ssm_secrets.tf's aws_ssm_parameter
-  # resources use value_wo/value_wo_version), which is what lets Terraform pre-create those
-  # parameters for an operator without ever persisting the real secret value to state --
-  # write-only support for aws_ssm_parameter specifically shipped in provider v5.87.0. This
-  # is a genuine breaking change for anyone on an older Terraform/provider, not something to
-  # silently widen later.
+  # Terraform 1.11 is the first with write-only arguments, which slack_ssm_secrets.tf relies on
+  # to keep the Slack secrets out of state. aws 6.0 adds data.aws_region's `region` attribute.
   required_version = ">= 1.11.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 5.87.0"
+      version = ">= 6.0"
     }
     external = {
       source  = "hashicorp/external"

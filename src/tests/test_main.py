@@ -9,7 +9,7 @@ behavior needed covering here).
 import json
 import sys
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import botocore.exceptions
 import pytest
@@ -134,17 +134,10 @@ def _cli_request_event(body: dict | None = None, user_arn: str | None = None, ap
     return event
 
 
-# ---------------------------------------------------------------------------
-# #176: Slack secrets read from SSM Parameter Store
-#
-# main.py itself no longer resolves these secrets -- it previously had its own duplicate
-# SSM lookup, which was a real bug (a second GetParameter call for the exact same value
-# config.get_config() already resolves into cfg.slack_bot_token/cfg.slack_signing_secret,
-# found in review). Now it's a plain `cfg.slack_bot_token or None` / `cfg.slack_signing_secret
-# or None` passed to slack_bolt.App, so the actual resolution (including SSM opt-in and
-# graceful degradation on failure) is fully covered by test_config.py's get_config() tests
-# instead.
-# ---------------------------------------------------------------------------
+def test_slack_app_gets_its_secrets_from_ssm(main_module):
+    get_parameter_calls = main_module.ssm_client.get_parameter.call_args_list
+    assert call(Name="/test/slack-bot-token", WithDecryption=True) in get_parameter_calls
+    assert call(Name="/test/slack-signing-secret", WithDecryption=True) in get_parameter_calls
 
 
 # ---------------------------------------------------------------------------
