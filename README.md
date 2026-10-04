@@ -489,6 +489,8 @@ The CLI route isn't currently usable outside the standard `aws` partition: this 
 
 The Lambdas read the Slack bot token and signing secret from two SSM SecureString parameters at runtime; no secret passes through Terraform. The module creates both parameters with the placeholder `REPLACE_ME` through the write-only `value_wo` argument, so neither the placeholder nor the real value is stored in Terraform state. The Lambdas treat the placeholder as an unset secret. Write-only arguments need Terraform >= 1.11 and the module needs hashicorp/aws >= 6.0.
 
+**Why you set the secrets by hand.** Terraform writes every value it manages into its state file in plain text, and that includes a SecureString parameter's `value`. Anyone who can read the state, or an old version of it in a versioned S3 backend, can read the secret. A write-only argument is the one kind of value Terraform never stores. So the module writes only a placeholder through `value_wo`, and you put the real secrets in with the AWS CLI. They never pass through Terraform. The procedures below are ordered to keep it that way.
+
 Later applies leave the value you set alone, with three exceptions: changing `slack_*_ssm_parameter_name` or moving the module to a new address without a `moved` block replaces the parameter with a fresh placeholder, and `terraform destroy` deletes it.
 
 | Variable | Default | Read by |
@@ -533,6 +535,8 @@ The v4 Lambdas keep their secrets in environment variables until step 5, so Slac
    ```
 
    If a parameter was already overwritten, `aws ssm get-parameter-history --with-decryption --name <name>` shows earlier values. You can also copy both secrets from the Slack app settings instead.
+
+   Don't `terraform import` the existing parameters instead. With no write-only value to go on, the import stores the decrypted secret in state. The next apply then writes `REPLACE_ME` over the real value. That apply does clear the secret from the current state, but the earlier state version still holds it, so you'd still be putting the values back by hand. Both behaviours were confirmed against hashicorp/aws 6.67.0.
 3. Create only the two parameters:
 
    ```sh
