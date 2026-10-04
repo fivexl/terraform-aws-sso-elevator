@@ -13,11 +13,12 @@ import re
 import subprocess
 import sys
 import tempfile
-import tomllib
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 SEVERITIES = ["low", "medium", "high", "critical"]
@@ -165,7 +166,7 @@ def parse_pins(files: dict[str, str]) -> dict[tuple[str, str, str], set[str]]:
                 pins[("pre-commit", repo, path)].add(rev)
         elif "/docker/Dockerfile" in path:
             for image, digest in re.findall(
-                r"^FROM\s+([^\s:@]+)(?::\S+)?@(sha256:[0-9a-f]{64})", text, re.M
+                r"^FROM\s+([^\s:@]+)(?::\S+)?@(sha256:[0-9a-f]{64})", text, re.MULTILINE
             ):
                 pins[("docker", image, "src/docker")].add(digest)
         elif path.endswith(".tf"):
@@ -206,7 +207,7 @@ def run(*cmd: str, cwd: Path = ROOT, env: dict | None = None) -> str:
     ).stdout
 
 
-def gh_json(path: str, *flags: str):  # noqa: ANN201
+def gh_json(path: str, *flags: str):
     return json.loads(run("gh", "api", *flags, path))
 
 
@@ -366,7 +367,9 @@ def go_versions(rev: str | None) -> dict[str, str]:
 
 
 def toolchain(rev: str | None) -> str | None:
-    found = re.search(r"^toolchain (go\S+)", read_file(rev, f"{GO_DIR}/go.mod"), re.M)
+    found = re.search(
+        r"^toolchain (go\S+)", read_file(rev, f"{GO_DIR}/go.mod"), re.MULTILINE
+    )
     return found and found[1]
 
 
@@ -402,7 +405,7 @@ def scope(row: dict) -> str:
         )
         return (
             "runtime"
-            if re.search(rf"^{re.escape(row['name'])}==", exported, re.M)
+            if re.search(rf"^{re.escape(row['name'])}==", exported, re.MULTILINE)
             else "dev"
         )
     return "dev" if row["scopes"] == {"development"} else "runtime"

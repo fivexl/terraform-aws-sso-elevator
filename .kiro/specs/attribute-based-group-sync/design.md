@@ -131,34 +131,38 @@ attribute_sync_schedule = "rate(1 hour)"
 @dataclass
 class AttributeCondition:
     """Single attribute condition (e.g., department = "Engineering")"""
+
     attribute_name: str
     expected_value: str
-    
+
     def matches(self, user_attributes: dict) -> bool:
         """Check if user attributes satisfy this condition"""
         pass
 
+
 @dataclass
 class AttributeMappingRule:
     """Complete mapping rule for a group"""
+
     group_name: str
     group_id: str  # Resolved at runtime
     conditions: list[AttributeCondition]
-    
+
     def matches(self, user_attributes: dict) -> bool:
         """Check if user matches ALL conditions (AND logic)"""
         pass
 
+
 class AttributeMapper:
     """Evaluates users against mapping rules"""
-    
+
     def __init__(self, rules: list[AttributeMappingRule]):
         self.rules = rules
-    
+
     def get_target_groups_for_user(self, user_attributes: dict) -> set[str]:
         """Return set of group IDs the user should belong to"""
         pass
-    
+
     def get_rule_for_group(self, group_id: str) -> AttributeMappingRule | None:
         """Get the mapping rule for a specific group"""
         pass
@@ -216,7 +220,9 @@ class SyncStateMa nager:
 
 ```python
 # Add to existing AuditEntry class
-audit_entry_type: Literal["account", "group", "sync_add", "sync_remove", "manual_detected"]
+audit_entry_type: Literal[
+    "account", "group", "sync_add", "sync_remove", "manual_detected"
+]
 
 # New fields for sync operations
 sync_operation: Optional[str] = None  # "attribute_sync"
@@ -238,24 +244,28 @@ sso_user_email: Optional[str] = None  # Human-readable email for the SSO user
 @dataclass
 class SyncConfiguration:
     """Complete sync configuration"""
+
     enabled: bool
     managed_group_names: list[str]  # Group names from config
     managed_group_ids: dict[str, str]  # Resolved name -> ID mapping
     mapping_rules: list[AttributeMappingRule]
     manual_assignment_policy: Literal["warn", "remove"]
     schedule_expression: str
-    
+
+
 def load_sync_config() -> SyncConfiguration:
     """Load sync configuration from environment/S3"""
     pass
 
+
 def resolve_group_names(
     group_names: list[str],
     identity_store_client: IdentityStoreClient,
-    identity_store_id: str
+    identity_store_id: str,
 ) -> dict[str, str]:
     """Resolve group names to IDs, returns name -> ID mapping"""
     pass
+
 
 def validate_sync_config(config: SyncConfiguration) -> list[str]:
     """Validate configuration and return list of errors"""
@@ -270,20 +280,21 @@ def validate_sync_config(config: SyncConfiguration) -> list[str]:
 @dataclass
 class UserWithAttributes:
     """User with their Identity Store attributes"""
+
     user_id: str  # Principal ID
     username: str
     email: str
     attributes: dict[str, str]  # All SCIM attributes
-    
+
     # Common attributes (for convenience)
     @property
     def department(self) -> str | None:
         return self.attributes.get("department")
-    
+
     @property
     def employee_type(self) -> str | None:
         return self.attributes.get("employeeType")
-    
+
     @property
     def cost_center(self) -> str | None:
         return self.attributes.get("costCenter")
@@ -295,10 +306,11 @@ class UserWithAttributes:
 @dataclass
 class SyncOperationResult:
     """Result of a sync operation"""
+
     start_time: datetime
     end_time: datetime
     success: bool
-    
+
     # Statistics
     users_evaluated: int
     groups_processed: int
@@ -307,7 +319,7 @@ class SyncOperationResult:
     manual_assignments_detected: int
     manual_assignments_removed: int
     errors: list[str]
-    
+
     def to_slack_message(self) -> str:
         """Format as Slack notification"""
         pass
@@ -847,7 +859,7 @@ user_attributes_strategy = st.dictionaries(
     keys=st.sampled_from(["department", "employeeType", "costCenter", "jobTitle"]),
     values=st.text(min_size=1, max_size=50),
     min_size=1,
-    max_size=4
+    max_size=4,
 )
 
 # Strategy for generating users
@@ -856,21 +868,21 @@ user_strategy = st.builds(
     user_id=st.uuids().map(str),
     username=st.text(min_size=3, max_size=20),
     email=st.emails(),
-    attributes=user_attributes_strategy
+    attributes=user_attributes_strategy,
 )
 
 # Strategy for generating attribute conditions
 condition_strategy = st.builds(
     AttributeCondition,
     attribute_name=st.sampled_from(["department", "employeeType", "costCenter"]),
-    expected_value=st.text(min_size=1, max_size=50)
+    expected_value=st.text(min_size=1, max_size=50),
 )
 
 # Strategy for generating mapping rules
 rule_strategy = st.builds(
     AttributeMappingRule,
     group_id=st.uuids().map(str),
-    conditions=st.lists(condition_strategy, min_size=1, max_size=3)
+    conditions=st.lists(condition_strategy, min_size=1, max_size=3),
 )
 ```
 
