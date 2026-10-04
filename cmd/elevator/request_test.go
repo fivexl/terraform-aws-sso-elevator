@@ -404,6 +404,18 @@ func TestValidateDurationMinutes(t *testing.T) {
 	}
 }
 
+func TestValidateReason(t *testing.T) {
+	for _, v := range []string{"x", strings.Repeat("x", 1000), strings.Repeat("é", 1000)} {
+		if err := validateReason(v); err != nil {
+			t.Errorf("validateReason(%d chars) = %v, want nil", len([]rune(v)), err)
+		}
+	}
+	err := validateReason(strings.Repeat("x", 1001))
+	if err == nil || err.Error() != "--reason must be 1000 characters or fewer" {
+		t.Errorf("validateReason(1001 chars) = %v, want the limit error", err)
+	}
+}
+
 func TestAccountIDRE(t *testing.T) {
 	for _, v := range []string{"123456789012", "000000000000"} {
 		if !accountIDRE.MatchString(v) {

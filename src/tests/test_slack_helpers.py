@@ -1,16 +1,15 @@
-"""Tests for the CLI provenance fields (request_source/verified_arn) added to
-RequestForAccess: that build_approval_request_message_blocks displays them,
-and that ButtonClickedPayload.validate_payload -- which reconstructs the
-request by scraping the posted Slack message's text rather than deserializing
-a stored object -- recovers them, defaulting to "slack"/"NA" for messages
-posted before this field existed.
-"""
+"""Tests for the request message: the one builder behind every state, the
+request carried as JSON in the button value, and the click payload that reads
+it back (rejecting messages posted before the redesign)."""
 
+import json
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+CLI_ARN = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/req@example.com"
 
 
 @pytest.fixture
@@ -28,245 +27,263 @@ def slack_helpers_module():
     sys.modules.pop("slack_helpers", None)
 
 
-def _content_fields(extra_texts: list[str] | None = None) -> list[dict]:
-    fields = [
-        {"text": "Requester: <@U_REQ>"},
-        {"text": "Account: 111111111111 #111111111111"},
-        {"text": "Role name: AdministratorAccess"},
-        {"text": "Reason: testing"},
-        {"text": "Permission duration: 1h 0m"},
-    ]
-    for text in extra_texts or []:
-        fields.append({"text": text})
-    return fields
+def _account_request(sh, **overrides):  # noqa: ANN001, ANN202, ANN003
+    fields = {
+        "permission_set_name": "ReadOnly",
+        "account_id": "222222222222",
+        "account_name": "aft",
+        "reason": "testing revoker",
+        "requester_slack_id": "U_REQ",
+        "permission_duration": timedelta(minutes=30),
+    }
+    return sh.RequestForAccess(**(fields | overrides))
 
 
-def _button_click_values(fields: list[dict]) -> dict:
+def _group_request(sh, **overrides):  # noqa: ANN001, ANN202, ANN003
+    fields = {
+        "group_id": "g-1234",
+        "group_name": "platform-admins",
+        "reason": "debugging",
+        "requester_slack_id": "U_REQ",
+        "permission_duration": timedelta(hours=1),
+    }
+    return sh.RequestForGroupAccess(**(fields | overrides))
+
+
+def _block(blocks: list[dict], block_id: str) -> dict:
+    return next(b for b in blocks if b.get("block_id") == block_id)
+
+
+def _click(blocks: list[dict], action_id: str = "approve") -> dict:
+    buttons = _block(blocks, "buttons")
+    value = next(e["value"] for e in buttons["elements"] if e["action_id"] == action_id)
     return {
-        "actions": [{"value": "approve"}],
+        "actions": [{"action_id": action_id, "value": value}],
         "user": {"id": "U_APPROVER"},
-        "message": {"ts": "12345.6789", "blocks": [{"block_id": "content", "fields": fields}]},
+        "message": {"ts": "12345.6789", "blocks": blocks},
         "channel": {"id": "C123"},
     }
 
 
-def test_find_in_fields_optional_returns_none_when_missing(slack_helpers_module):
+ENDS = datetime(2026, 10, 4, 16, 50, tzinfo=timezone.utc)
+
+
+def _states(sh):  # noqa: ANN001, ANN202
+    state = sh.RequestState
+    return {
+        "pending": state.pending(),
+        "processing": state.processing(sh.approved_by("U_APPROVER")),
+        "approved": state.approved(sh.approved_by("U_APPROVER"), ENDS, auto=False),
+        "auto_approved": state.approved("Self-approval allowed", ENDS, auto=True),
+        "discarded": state.discarded("U_APPROVER"),
+        "expired": state.expired(timedelta(hours=8)),
+        "failed": state.failed_with("Nobody can approve this request"),
+        "ended": state.ended(sh.approved_by("U_APPROVER"), ENDS),
+        "extended": state.extended(sh.approved_by("U_APPROVER"), "<https://x.slack.com/archives/C/p1|newer request>"),
+        "granted_not_scheduled": state.granted_not_scheduled(),
+    }
+
+
+EXPECTED_TITLES = {
+    "pending": ":closed_lock_with_key: *Pending · ReadOnly → aft #222222222222 for* <@U_REQ> *for 30 min*",
+    "processing": ":hourglass_flowing_sand: *Processing · ReadOnly → aft #222222222222 for* <@U_REQ>",
+    "approved": ":white_check_mark: *Approved · ReadOnly → aft #222222222222 for* <@U_REQ>",
+    "auto_approved": ":white_check_mark: *Auto-approved · ReadOnly → aft #222222222222 for* <@U_REQ>",
+    "discarded": ":wastebasket: *Discarded · ReadOnly → aft #222222222222 for* <@U_REQ>",
+    "expired": ":hourglass: *Expired · ReadOnly → aft #222222222222 for* <@U_REQ>",
+    "failed": ":x: *Failed · ReadOnly → aft #222222222222 for* <@U_REQ>",
+    "ended": ":lock: *Ended · ReadOnly → aft #222222222222 for* <@U_REQ>",
+    "extended": ":repeat: *Extended · ReadOnly → aft #222222222222 for* <@U_REQ>",
+    "granted_not_scheduled": ":warning: *Granted · ReadOnly → aft #222222222222 for* <@U_REQ>",
+}
+
+EXPECTED_STATUS = {
+    "processing": "Approved by <@U_APPROVER> · granting…",
+    "approved": "Approved by <@U_APPROVER> · access ends at <!date^1791132600^{time}|16:50 UTC>",
+    "auto_approved": "Self-approval allowed · access ends at <!date^1791132600^{time}|16:50 UTC>",
+    "discarded": "Discarded by <@U_APPROVER>",
+    "expired": "No decision within 8 hours",
+    "failed": "Nobody can approve this request · details in thread",
+    "ended": "Approved by <@U_APPROVER> · access ended at <!date^1791132600^{time}|16:50 UTC>",
+    "extended": "Approved by <@U_APPROVER> · extended by <https://x.slack.com/archives/C/p1|newer request>",
+    "granted_not_scheduled": "Access is live; the inconsistency check will remove it, or revoke manually · details in thread",
+}
+
+
+@pytest.mark.parametrize("state_name", list(EXPECTED_TITLES))
+def test_builder_renders_every_state(slack_helpers_module, state_name):
     sh = slack_helpers_module
-    fields = _content_fields()
-    assert sh.find_in_fields_optional(fields, "Source") is None
+    card = sh.RequestCard.for_request(_account_request(sh))
+    title, blocks = sh.build_request_message(card, _states(sh)[state_name])
+
+    assert title == EXPECTED_TITLES[state_name]
+    assert [b["block_id"] for b in blocks] == ["title", "reason", "buttons" if state_name == "pending" else "status", "source"]
+    assert _block(blocks, "title")["text"]["text"] == title
+    assert _block(blocks, "reason")["text"]["text"] == ">testing revoker"
+    assert _block(blocks, "source")["elements"][0]["text"] == "Requested via Slack"
+    assert not any(b["type"] in ("divider", "header") for b in blocks)
+    if state_name != "pending":
+        assert _block(blocks, "status")["elements"][0]["text"] == EXPECTED_STATUS[state_name]
 
 
-def test_find_in_fields_optional_returns_value_when_present(slack_helpers_module):
+def test_group_title_names_the_group_without_its_id(slack_helpers_module):
     sh = slack_helpers_module
-    fields = _content_fields(["Source: CLI"])
-    assert sh.find_in_fields_optional(fields, "Source") == "CLI"
+    title, _ = sh.build_request_message(sh.RequestCard.for_request(_group_request(sh)), sh.RequestState.pending())
+    assert title == ":closed_lock_with_key: *Pending · group platform-admins for* <@U_REQ> *for 1 hour*"
+    assert "g-1234" not in title
 
 
-def test_button_clicked_payload_defaults_to_slack_for_messages_without_source_field(slack_helpers_module):
-    """Regression test: an approval message posted before request_source/
-    verified_arn/verified_user_id existed has none of those fields at all --
-    validate_payload must not raise, and must fall back to the pre-CLI
-    defaults rather than losing the click entirely."""
+def test_cli_request_shows_only_its_verified_source_line(slack_helpers_module):
     sh = slack_helpers_module
-    values = _button_click_values(_content_fields())
-    payload = sh.ButtonClickedPayload.model_validate(values)
-    assert payload.request.request_source == "slack"
-    assert payload.request.verified_arn == "NA"
-    assert payload.request.verified_user_id == "NA"
+    request = _account_request(
+        sh, request_source="cli", verified_arn=CLI_ARN, verified_user_id="u-verified", verified_email="req@example.com"
+    )
+    _, blocks = sh.build_request_message(sh.RequestCard.for_request(request), sh.RequestState.pending())
+    assert _block(blocks, "source")["elements"][0]["text"] == "Requested via CLI · :lock: identity verified via AWS SigV4"
+    visible = json.dumps([b for b in blocks if b["block_id"] != "buttons"])
+    for secret in (CLI_ARN, "u-verified", "req@example.com"):
+        assert secret not in visible
 
 
-def test_button_clicked_payload_recovers_cli_provenance(slack_helpers_module):
+def test_secondary_domain_warning_sits_between_reason_and_buttons(slack_helpers_module):
     sh = slack_helpers_module
-    arn = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com"
-    user_id = "1b24287b-5a72-844d-0161-9f0382b0eb44"
-    values = _button_click_values(_content_fields(["Source: CLI", f"Verified ARN: {arn}", f"Verified UserId: {user_id}"]))
-    payload = sh.ButtonClickedPayload.model_validate(values)
+    _, blocks = sh.build_request_message(sh.RequestCard.for_request(_account_request(sh), True), sh.RequestState.pending())
+    assert [b["block_id"] for b in blocks] == ["title", "reason", "warning", "buttons", "source"]
+    assert "verify this is really <@U_REQ>" in _block(blocks, "warning")["text"]["text"]
+
+
+def test_reason_is_escaped_quoted_and_cut_to_fit_a_section(slack_helpers_module):
+    sh = slack_helpers_module
+    card = sh.RequestCard.for_request(_account_request(sh, reason="<!channel> AT&T\nsecond line"))
+    assert _block(card.body, "reason")["text"]["text"] == ">&lt;!channel&gt; AT&amp;T\n>second line"
+    long_card = sh.RequestCard.for_request(_account_request(sh, reason="&" * 1000))
+    assert len(_block(long_card.body, "reason")["text"]["text"]) <= 3000  # noqa: PLR2004
+
+
+@pytest.mark.parametrize("make_request", [_account_request, _group_request])
+def test_button_value_round_trips_the_request(slack_helpers_module, make_request):
+    sh = slack_helpers_module
+    request = make_request(sh, reason='quotes " and <!here> & newlines\nkept')
+    _, blocks = sh.build_request_message(sh.RequestCard.for_request(request), sh.RequestState.pending())
+
+    for action_id in ("approve", "discard"):
+        payload = sh.ButtonClickedPayload.model_validate(_click(blocks, action_id))
+        assert payload.request == request
+        assert payload.action.value == action_id
+    assert sh.pending_request({"blocks": blocks}) == request
+
+
+def test_cli_identity_round_trips_through_the_button_value(slack_helpers_module):
+    sh = slack_helpers_module
+    request = _account_request(
+        sh, request_source="cli", verified_arn=CLI_ARN, verified_user_id="u-verified", verified_email="req@example.com"
+    )
+    _, blocks = sh.build_request_message(sh.RequestCard.for_request(request), sh.RequestState.pending())
+    payload = sh.ButtonClickedPayload.model_validate(_click(blocks))
     assert payload.request.request_source == "cli"
-    assert payload.request.verified_arn == arn
-    assert payload.request.verified_user_id == user_id
+    assert payload.request.verified_user_id == "u-verified"
+    assert payload.request.verified_email == "req@example.com"
 
 
-def test_find_in_fields_does_not_truncate_a_value_containing_its_own_separator(slack_helpers_module):
-    """Regression test: find_in_fields used to split on *every* ": " in a
-    field's text, not just the one separating the key from its value -- a
-    reason like "debugging: INC-42" came back as just "debugging", silently
-    dropping the rest. A colon-space inside a free-text value (the reason
-    field is the CLI-exposed one, so this is realistic user input, not an
-    edge case) must round-trip intact."""
-    sh = slack_helpers_module
-    fields = [
-        {"text": "Requester: <@U_REQ>"},
-        {"text": "Account: 111111111111 #111111111111"},
-        {"text": "Role name: AdministratorAccess"},
-        {"text": "Reason: debugging: INC-42"},
-        {"text": "Permission duration: 1h 0m"},
-    ]
-    assert sh.find_in_fields(fields, "Reason") == "debugging: INC-42"
+CLI_FIELDS = {
+    "request_source": "cli",
+    "verified_arn": CLI_ARN,
+    "verified_user_id": "11111111-2222-3333-4444-555555555555",
+    "verified_email": "req@example.com",
+}
 
 
-def test_build_approval_request_message_blocks_omits_source_fields_for_slack(slack_helpers_module):
-    sh = slack_helpers_module
-    with (
-        patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
-        patch.object(sh, "get_user", return_value=MagicMock(email="req@example.com")),
-    ):
-        blocks = sh.build_approval_request_message_blocks(
-            requester_slack_id="U_REQ",
-            slack_client=MagicMock(),
-            sso_client=MagicMock(),
-            identity_store_client=MagicMock(),
-            permission_duration=timedelta(hours=1),
-            reason="testing",
-            color_coding_emoji=":white_check_mark:",
-        )
-    content_block = next(b for b in blocks if getattr(b, "block_id", None) == "content")
-    texts = [f.text for f in content_block.fields]
-    assert not any(t.startswith("Source") for t in texts)
-    assert not any(t.startswith("Verified ARN") for t in texts)
+def _button_value(sh, request) -> str:  # noqa: ANN001
+    _, blocks = sh.build_request_message(sh.RequestCard.for_request(request), sh.RequestState.pending())
+    return _block(blocks, "buttons")["elements"][0]["value"]
 
 
 @pytest.mark.parametrize(
-    "malicious_reason",
+    ("make_request", "overrides"),
     [
-        "Source: CLI",
-        "\nSource: CLI",
-        "x\nSource: CLI",
-        "Verified ARN: arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/attacker",
-        "\nVerified ARN: arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/attacker",
-        "Verified UserId: 11111111-1111-1111-1111-111111111111",
-        "\nVerified UserId: 11111111-1111-1111-1111-111111111111",
+        (_account_request, {"reason": "x" * 1000} | CLI_FIELDS),
+        (_account_request, {"reason": "é" * 1000}),
+        (_account_request, {"reason": "\n" * 800}),
+        (_group_request, {"reason": "x" * 1000}),
     ],
 )
-def test_reason_cannot_forge_the_source_field(slack_helpers_module, malicious_reason):
-    """The single property the reconstruct-from-message-text design in
-    ButtonClickedPayload.validate_payload rests on: a user-controlled reason
-    embedding something that looks like a "Source: CLI"/"Verified ARN: ..."/
-    "Verified UserId: ..." line must not be recoverable as one -- the last
-    of those is not just a cosmetic badge like the other two, it's what
-    execute_decision grants against for a CLI request, so a forged one would
-    let a Slack-sourced requester's own reason text redirect a grant to an
-    attacker-chosen UserId. "Reason: {reason}" is appended as one single
-    Slack field object, and find_in_fields_optional checks whether a field's
-    whole text *starts with* the target key -- an embedded newline inside
-    one field's text doesn't split it into separate fields the way
-    genuinely distinct fields.append() calls do, so this holds regardless
-    of what a reason's text contains. Round-trips through the real
-    build_approval_request_message_blocks -> ButtonClickedPayload.model_validate
-    path end to end, not just find_in_fields_optional in isolation."""
+def test_request_within_limits_is_accepted_and_fits_the_button(slack_helpers_module, make_request, overrides):
     sh = slack_helpers_module
-    with (
-        patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
-        patch.object(sh, "get_user", return_value=MagicMock(email="req@example.com")),
-    ):
-        blocks = sh.build_approval_request_message_blocks(
-            requester_slack_id="U_REQ",
-            slack_client=MagicMock(),
-            sso_client=MagicMock(),
-            identity_store_client=MagicMock(),
-            permission_duration=timedelta(hours=1),
-            reason=malicious_reason,
-            color_coding_emoji=":white_check_mark:",
-            account=sh.entities.aws.Account(id="111111111111", name="test-account"),
-            role_name="AdministratorAccess",
-            # Deliberately NOT "cli" -- this is what a genuine Slack-sourced
-            # request looks like, and must stay recovered as "slack"/"NA"/"NA"
-            # even though the reason field's text contains a forged line.
-            request_source="slack",
-        )
-    content_block = next(b for b in blocks if getattr(b, "block_id", None) == "content")
-    fields = [{"text": f.text} for f in content_block.fields]
-
-    values = _button_click_values(fields)
-    payload = sh.ButtonClickedPayload.model_validate(values)
-    assert payload.request.request_source == "slack"
-    assert payload.request.verified_arn == "NA"
-    assert payload.request.verified_user_id == "NA"
+    request = make_request(sh, **overrides)
+    assert sh.request_rejection(request) is None
+    assert len(_button_value(sh, request)) <= 2000  # noqa: PLR2004
 
 
-def test_escape_mrkdwn_and_unescape_mrkdwn_round_trip(slack_helpers_module):
+def test_reason_over_the_cap_is_rejected(slack_helpers_module):
     sh = slack_helpers_module
-    for original in ["plain text", "AT&T issue", "<!channel> please approve", "a & b < c > d", "&lt; already escaped &gt;"]:
-        assert sh.unescape_mrkdwn(sh.escape_mrkdwn(original)) == original
+    assert sh.request_rejection(_account_request(sh, reason="x" * 1001)) == "Reason must be 1000 characters or fewer"
 
 
-def test_reason_containing_mrkdwn_special_characters_is_escaped_and_recovered_intact(slack_helpers_module):
-    """Regression test: reason is interpolated raw into a MarkdownTextObject
-    field, so a reason like "<!channel> urgent" used to be emitted as Slack's
-    literal broadcast-mention syntax rather than as inert text -- up to 2000
-    characters of attacker-chosen mrkdwn from any SSO principal in the org,
-    landing in the approvals channel. escape_mrkdwn neutralizes it on the way
-    into the Slack field; unescape_mrkdwn must recover the exact original
-    text on the way back out (at approval time, via
-    ButtonClickedPayload.validate_payload), not a permanently HTML-entity-
-    escaped version that then gets written into the audit log."""
+@pytest.mark.parametrize(
+    ("make_request", "overrides"),
+    [
+        # Within the reason cap, but JSON escaping doubles the quotes; long names and a verified identity add the rest.
+        (
+            _account_request,
+            {
+                "reason": '"' * 498 + "x" * 502,
+                "account_name": "a-rather-long-production-account-name",
+                "permission_set_name": "AWSAdministratorAccessExtended",
+            }
+            | CLI_FIELDS
+            | {"verified_arn": CLI_ARN + "x" * 60, "verified_email": "someone.with.a.long.name@subdomain.example.com"},
+        ),
+        (_account_request, {"reason": "x" * 1000, "account_name": "n" * 1000}),
+        (_group_request, {"reason": "x" * 1000, "group_name": "n" * 1000}),
+    ],
+)
+def test_request_too_large_for_the_button_is_rejected(slack_helpers_module, make_request, overrides):
     sh = slack_helpers_module
-    reason = "<!channel> urgent -- AT&T & Smith <ceo@example.com>"
-    with (
-        patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
-        patch.object(sh, "get_user", return_value=MagicMock(email="req@example.com")),
-    ):
-        blocks = sh.build_approval_request_message_blocks(
-            requester_slack_id="U_REQ",
-            slack_client=MagicMock(),
-            sso_client=MagicMock(),
-            identity_store_client=MagicMock(),
-            permission_duration=timedelta(hours=1),
-            reason=reason,
-            color_coding_emoji=":white_check_mark:",
-            account=sh.entities.aws.Account(id="111111111111", name="test-account"),
-            role_name="AdministratorAccess",
-        )
-    content_block = next(b for b in blocks if getattr(b, "block_id", None) == "content")
-    reason_field_text = next(f.text for f in content_block.fields if f.text.startswith("Reason"))
-    # The raw field text posted to Slack must not contain the literal
-    # broadcast-mention/mention syntax -- this is what actually neutralizes it.
-    assert "<!channel>" not in reason_field_text
-    assert "<ceo@example.com>" not in reason_field_text
-
-    fields = [{"text": f.text} for f in content_block.fields]
-    values = _button_click_values(fields)
-    payload = sh.ButtonClickedPayload.model_validate(values)
-    # But the reason actually used for the grant/audit trail must be the
-    # exact original text, not the permanently-escaped Slack-display form.
-    assert payload.request.reason == reason
+    request = make_request(sh, **overrides)
+    assert len(_button_value(sh, request)) > 2000  # noqa: PLR2004
+    assert sh.request_rejection(request) == "Request is too large for Slack; shorten the reason"
 
 
-def test_build_approval_request_message_blocks_adds_cli_badge(slack_helpers_module):
+@pytest.mark.parametrize("old_value", ["approve", "discard"])
+def test_pre_upgrade_button_value_is_rejected(slack_helpers_module, old_value):
+    """A message posted before the redesign carries a bare word, not a request;
+    there is no text-scraping fallback, the click is rejected."""
     sh = slack_helpers_module
-    arn = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_Admin/req@example.com"
-    user_id = "1b24287b-5a72-844d-0161-9f0382b0eb44"
-    with (
-        patch.object(sh.sso, "get_user_principal_id_by_email", return_value=("p-1", False)),
-        patch.object(sh, "get_user", return_value=MagicMock(email="req@example.com")),
-    ):
-        blocks = sh.build_approval_request_message_blocks(
-            requester_slack_id="U_REQ",
-            slack_client=MagicMock(),
-            sso_client=MagicMock(),
-            identity_store_client=MagicMock(),
-            permission_duration=timedelta(hours=1),
-            reason="testing",
-            color_coding_emoji=":white_check_mark:",
-            request_source="cli",
-            verified_arn=arn,
-            verified_user_id=user_id,
-        )
-    # CLI provenance now lives in its own "provenance" context block, not
-    # in "content"'s fields (moved out to stay clear of fields' 10-item
-    # Slack limit, and so a full ARN doesn't wrap across content's
-    # two-column grid) -- content itself must stay limited to the
-    # decision-relevant info.
-    content_block = next(b for b in blocks if getattr(b, "block_id", None) == "content")
-    content_texts = [f.text for f in content_block.fields]
-    assert not any(t.startswith(("Source:", "Verified ARN:", "Verified UserId:")) for t in content_texts)
+    body = {
+        "actions": [{"action_id": old_value, "value": old_value}],
+        "user": {"id": "U_APPROVER"},
+        "message": {"ts": "1.2", "blocks": [{"block_id": "content", "fields": [{"text": "Requester: <@U_REQ>"}]}]},
+        "channel": {"id": "C123"},
+    }
+    with pytest.raises(sh.ValidationError):
+        sh.ButtonClickedPayload.model_validate(body)
+    assert sh.pending_request({"blocks": [{"block_id": "buttons", "elements": [{"value": old_value}]}]}) is None
 
-    provenance_block = next(b for b in blocks if getattr(b, "block_id", None) == "provenance")
-    provenance_texts = [e.text for e in provenance_block.elements]
-    assert "Source: CLI" in provenance_texts
-    # Backtick-wrapped for display (inline code, avoids Slack linkifying
-    # part of the ARN) -- the raw ARN is still present, just wrapped.
-    assert f"Verified ARN: `{arn}`" in provenance_texts
-    assert f"Verified UserId: {user_id}" in provenance_texts
+
+def test_from_message_keeps_reason_warning_and_source_blocks(slack_helpers_module):
+    sh = slack_helpers_module
+    request = _account_request(sh, request_source="cli", verified_user_id="u", verified_email="e@x.com")
+    _, posted = sh.build_request_message(sh.RequestCard.for_request(request, True), sh.RequestState.pending())
+    card = sh.RequestCard.from_message({"blocks": posted}, "ReadOnly → aft #222222222222", "U_REQ")
+    _, ended = sh.build_request_message(card, sh.RequestState.ended(sh.approved_by("U_APPROVER"), ENDS))
+    assert [b["block_id"] for b in ended] == ["title", "reason", "warning", "status", "source"]
+    assert _block(ended, "source") == _block(posted, "source")
+
+
+def test_get_message_from_timestamp_fetches_exactly_that_message(slack_helpers_module):
+    sh = slack_helpers_module
+    client = MagicMock()
+    client.conversations_history.return_value = {"messages": [{"ts": "1.5"}]}
+    assert sh.get_message_from_timestamp("C1", "1.5", client) == {"ts": "1.5"}
+    client.conversations_history.assert_called_once_with(channel="C1", latest="1.5", inclusive=True, limit=1)
+    assert sh.get_message_from_timestamp("C1", "1.6", client) is None
+
+
+def test_format_duration(slack_helpers_module):
+    sh = slack_helpers_module
+    assert sh.format_duration(timedelta(minutes=30)) == "30 min"
+    assert sh.format_duration(timedelta(hours=1)) == "1 hour"
+    assert sh.format_duration(timedelta(hours=25, minutes=15)) == "1 day 1 hour 15 min"
 
 
 def test_find_approvers_in_slack_treats_users_not_found_as_the_expected_case(slack_helpers_module):

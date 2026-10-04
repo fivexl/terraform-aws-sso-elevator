@@ -29,12 +29,27 @@ class AmbiguousSSOUser(ConfigurationError):
     case told the user the opposite of what actually happened."""
 
 
+class PostGrantError(Exception):
+    """Access was granted, but recording it or scheduling its revocation failed.
+    replaced: revoke events of earlier requests whose schedules were already deleted."""
+
+    def __init__(self, message: str, replaced: list | None = None) -> None:  # noqa: ANN101
+        super().__init__(message)
+        self.replaced = replaced or []
+
+
+class ShownOnRequest(Exception):
+    """A failure the request's own Slack message already shows; not re-posted to the channel."""
+
+
 logger = config.get_logger(service="errors")
 cfg = config.get_config()
 
 
 def error_handler(client: WebClient, e: Exception, logger: Logger, context: BoltContext, cfg: config.Config) -> None:
     logger.exception("An error occurred:", exc_info=e)
+    if isinstance(e, ShownOnRequest):
+        return
     user_id = context.get("user_id", "UNKNOWN_USER")
 
     if isinstance(e, AmbiguousSSOUser):

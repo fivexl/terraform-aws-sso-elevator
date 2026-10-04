@@ -13,6 +13,7 @@ from pydantic import ValidationError
 import config
 import entities
 import sso
+from errors import PostGrantError
 from events import (
     ApproverNotificationEvent,
     DiscardButtonsEvent,
@@ -110,15 +111,18 @@ def delete_schedule(client: EventBridgeSchedulerClient, schedule_name: str) -> N
 def get_and_delete_scheduled_revoke_event_if_already_exist(
     client: EventBridgeSchedulerClient,
     event: sso.UserAccountAssignment | sso.GroupAssignment,
-) -> None:
+) -> list[RevokeEvent | GroupRevokeEvent]:
+    """Deletes the revoke schedules for this exact assignment and returns their events."""
+    replaced: list[RevokeEvent | GroupRevokeEvent] = []
     for scheduled_event in get_scheduled_events(client):
         logger.debug("Checking if schedule already exist", extra={"scheduled_event": scheduled_event})
-        if isinstance(scheduled_event, ScheduledRevokeEvent) and scheduled_event.revoke_event.user_account_assignment == event:
+        if (isinstance(scheduled_event, ScheduledRevokeEvent) and scheduled_event.revoke_event.user_account_assignment == event) or (
+            isinstance(scheduled_event, ScheduledGroupRevokeEvent) and scheduled_event.revoke_event.group_assignment == event
+        ):
             logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
             delete_schedule(client, scheduled_event.revoke_event.schedule_name)
-        if isinstance(scheduled_event, ScheduledGroupRevokeEvent) and scheduled_event.revoke_event.group_assignment == event:
-            logger.info("Schedule already exist, deleting it", extra={"schedule_name": scheduled_event.revoke_event.schedule_name})
-            delete_schedule(client, scheduled_event.revoke_event.schedule_name)
+            replaced.append(scheduled_event.revoke_event)
+    return replaced
 
 
 def event_bridge_schedule_after(td: timedelta) -> str:
@@ -126,51 +130,68 @@ def event_bridge_schedule_after(td: timedelta) -> str:
     return f"at({(now + td).replace(microsecond=0).isoformat().replace('+00:00', '')})"
 
 
-def schedule_revoke_event(
+def _create_revoke_schedule(
+    schedule_client: EventBridgeSchedulerClient,
+    action: str,
+    revoke_event: RevokeEvent | GroupRevokeEvent,
+    replaced: list[RevokeEvent | GroupRevokeEvent],
+) -> None:
+    logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
+    try:
+        schedule_client.create_schedule(
+            ActionAfterCompletion="DELETE",
+            FlexibleTimeWindow={"Mode": "OFF"},
+            Name=revoke_event.schedule_name,
+            GroupName=cfg.schedule_group_name,
+            ScheduleExpression=event_bridge_schedule_after(revoke_event.permission_duration),
+            State="ENABLED",
+            Target=scheduler_type_defs.TargetTypeDef(
+                Arn=cfg.revoker_function_arn,
+                RoleArn=cfg.schedule_policy_arn,
+                Input=json.dumps({"action": action, "revoke_event": revoke_event.json()}),
+            ),
+        )
+    except Exception as e:
+        # The replaced schedules are deleted already: the caller must still mark their requests Extended.
+        raise PostGrantError(str(e), replaced) from e
+
+
+def schedule_revoke_event(  # noqa: PLR0913
     schedule_client: EventBridgeSchedulerClient,
     permission_duration: timedelta,
     approver: entities.slack.User,
     requester: entities.slack.User,
     user_account_assignment: sso.UserAccountAssignment,
-) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
+    channel_id: str,
+    message_ts: str,
+) -> list[RevokeEvent | GroupRevokeEvent]:
+    """Returns the revoke events this one replaced."""
     logger.info("Scheduling revoke event")
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
-    get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, user_account_assignment)
+    replaced = get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, user_account_assignment)
     revoke_event = RevokeEvent(
         schedule_name=schedule_name,
         approver=approver,
         requester=requester,
         user_account_assignment=user_account_assignment,
         permission_duration=permission_duration,
+        channel_id=channel_id,
+        message_ts=message_ts,
     )
-    logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
-    return schedule_client.create_schedule(
-        ActionAfterCompletion="DELETE",
-        FlexibleTimeWindow={"Mode": "OFF"},
-        Name=schedule_name,
-        GroupName=cfg.schedule_group_name,
-        ScheduleExpression=event_bridge_schedule_after(permission_duration),
-        State="ENABLED",
-        Target=scheduler_type_defs.TargetTypeDef(
-            Arn=cfg.revoker_function_arn,
-            RoleArn=cfg.schedule_policy_arn,
-            Input=json.dumps(
-                {
-                    "action": "event_bridge_revoke",
-                    "revoke_event": revoke_event.json(),
-                },
-            ),
-        ),
-    )
+    _create_revoke_schedule(schedule_client, "event_bridge_revoke", revoke_event, replaced)
+    return replaced
 
 
-def schedule_group_revoke_event(
+def schedule_group_revoke_event(  # noqa: PLR0913
     schedule_client: EventBridgeSchedulerClient,
     permission_duration: timedelta,
     approver: entities.slack.User,
     requester: entities.slack.User,
     group_assignment: sso.GroupAssignment,
-) -> scheduler_type_defs.CreateScheduleOutputTypeDef:
+    channel_id: str,
+    message_ts: str,
+) -> list[RevokeEvent | GroupRevokeEvent]:
+    """Returns the revoke events this one replaced."""
     logger.info("Scheduling revoke event")
     schedule_name = f"{cfg.revoker_function_name}" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     revoke_event = GroupRevokeEvent(
@@ -179,27 +200,12 @@ def schedule_group_revoke_event(
         requester=requester,
         group_assignment=group_assignment,
         permission_duration=permission_duration,
+        channel_id=channel_id,
+        message_ts=message_ts,
     )
-    get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, group_assignment)
-    logger.debug("Creating schedule", extra={"revoke_event": revoke_event})
-    return schedule_client.create_schedule(
-        ActionAfterCompletion="DELETE",
-        FlexibleTimeWindow={"Mode": "OFF"},
-        Name=schedule_name,
-        GroupName=cfg.schedule_group_name,
-        ScheduleExpression=event_bridge_schedule_after(permission_duration),
-        State="ENABLED",
-        Target=scheduler_type_defs.TargetTypeDef(
-            Arn=cfg.revoker_function_arn,
-            RoleArn=cfg.schedule_policy_arn,
-            Input=json.dumps(
-                {
-                    "action": "event_bridge_group_revoke",
-                    "revoke_event": revoke_event.json(),
-                },
-            ),
-        ),
-    )
+    replaced = get_and_delete_scheduled_revoke_event_if_already_exist(schedule_client, group_assignment)
+    _create_revoke_schedule(schedule_client, "event_bridge_group_revoke", revoke_event, replaced)
+    return replaced
 
 
 def schedule_discard_buttons_event(

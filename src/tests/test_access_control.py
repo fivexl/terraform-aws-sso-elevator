@@ -39,6 +39,8 @@ def execute_decision_info():
         "request_source": "slack",
         "verified_arn": "NA",
         "verified_user_id": "NA",
+        "channel_id": "C123",
+        "message_ts": "123.456",
     }
 
 
@@ -1105,7 +1107,7 @@ def test_execute_access_request_decision(
     execute_decision_info,
 ):
     if test_cases_for_access_request_decision["out"].grant is not True:
-        assert execute_decision(decision=test_cases_for_access_request_decision["out"], **execute_decision_info) is False
+        assert execute_decision(decision=test_cases_for_access_request_decision["out"], **execute_decision_info) is None
 
 
 def test_execute_approve_request_decision(
@@ -1113,7 +1115,7 @@ def test_execute_approve_request_decision(
     execute_decision_info,
 ):
     if test_cases_for_approve_request_decision["out"].grant is not True:
-        assert execute_decision(decision=test_cases_for_approve_request_decision["out"], **execute_decision_info) is False
+        assert execute_decision(decision=test_cases_for_approve_request_decision["out"], **execute_decision_info) is None
 
 
 def test_make_and_excute_access_request_decision(
@@ -1122,7 +1124,7 @@ def test_make_and_excute_access_request_decision(
 ):
     decision = make_decision_on_access_request(**test_cases_for_access_request_decision["in"])
     if decision.grant is not True:
-        assert execute_decision(decision=decision, **execute_decision_info) is False
+        assert execute_decision(decision=decision, **execute_decision_info) is None
 
 
 def test_make_and_excute_approve_request_decision(
@@ -1131,7 +1133,7 @@ def test_make_and_excute_approve_request_decision(
 ):
     decision = make_decision_on_approve_request(**test_cases_for_approve_request_decision["in"])
     if decision.grant is not True:
-        assert execute_decision(decision=decision, **execute_decision_info) is False
+        assert execute_decision(decision=decision, **execute_decision_info) is None
 
 
 def test_execute_decision_grants_against_verified_user_id_for_cli_requests_without_reresolving_email(execute_decision_info):
@@ -1180,7 +1182,7 @@ def test_execute_decision_grants_against_verified_user_id_for_cli_requests_witho
             },
         )
 
-    assert result is True
+    assert result is not None
     mock_resolve_by_email.assert_not_called()
     account_assignment = mock_create_assignment.call_args.args[1]
     assert account_assignment.user_principal_id == verified_user_id
@@ -1223,7 +1225,7 @@ def test_execute_decision_still_resolves_by_email_for_slack_requests(execute_dec
     ):
         result = execute_decision(decision=decision, **execute_decision_info)
 
-    assert result is True
+    assert result is not None
     mock_resolve_by_email.assert_called_once()
     account_assignment = mock_create_assignment.call_args.args[1]
     assert account_assignment.user_principal_id == resolved_user_id
@@ -1273,6 +1275,66 @@ def test_execute_decision_fails_closed_for_a_cli_request_missing_verified_user_i
 
     mock_resolve_by_email.assert_not_called()
     mock_create_assignment.assert_not_called()
+
+
+def _grant_patches(schedule_side_effect):  # noqa: ANN001, ANN202
+    return (
+        patch.object(
+            access_control.sso,
+            "describe_sso_instance",
+            return_value=SimpleNamespace(arn="arn:aws:sso:::instance/ssoins-1", identity_store_id="d-1234"),
+        ),
+        patch.object(access_control.sso, "get_permission_set_by_name", return_value=SimpleNamespace(arn="ps-arn", name="ps")),
+        patch.object(access_control.sso, "get_user_principal_id_by_email", return_value=("u-1", False)),
+        patch.object(access_control.sso, "create_account_assignment_and_wait_for_result", return_value=SimpleNamespace(request_id="r")),
+        patch.object(access_control.s3, "log_operation"),
+        patch.object(access_control.schedule, "schedule_revoke_event", side_effect=schedule_side_effect),
+    )
+
+
+def test_execute_decision_schedules_the_revoke_against_the_request_message(execute_decision_info):
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    replaced = [object()]
+    patches = _grant_patches(lambda **_: replaced)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as mock_schedule:
+        assert execute_decision(decision=decision, **execute_decision_info) is replaced
+
+    assert mock_schedule.call_args.kwargs["channel_id"] == "C123"
+    assert mock_schedule.call_args.kwargs["message_ts"] == "123.456"
+
+
+def test_execute_decision_reports_a_failure_after_the_assignment_as_post_grant(execute_decision_info):
+    """The assignment exists, so the caller must not show this as a failed grant."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+
+    def _throttled(**_kwargs):  # noqa: ANN202, ANN003
+        raise RuntimeError("ThrottlingException")
+
+    patches = _grant_patches(_throttled)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], pytest.raises(access_control.PostGrantError):
+        execute_decision(decision=decision, **execute_decision_info)
+
+
+def test_execute_decision_carries_the_replaced_events_when_the_new_schedule_fails(execute_decision_info):
+    """The older schedules are deleted before the new one fails; the caller still needs them to mark those requests Extended."""
+    decision = AccessRequestDecision(grant=True, reason=DecisionReason.SelfApproval, based_on_statements=frozenset())
+    old_event = object()
+    patches = _grant_patches(None)
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patch.object(access_control.schedule, "get_and_delete_scheduled_revoke_event_if_already_exist", return_value=[old_event]),
+        patch.object(access_control, "schedule_client") as mock_schedule_client,
+        pytest.raises(access_control.PostGrantError) as raised,
+    ):
+        mock_schedule_client.create_schedule.side_effect = RuntimeError("ThrottlingException")
+        execute_decision(decision=decision, **execute_decision_info)
+
+    assert raised.value.replaced == [old_event]
+    assert str(raised.value) == "ThrottlingException"
 
 
 def test_get_requester_group_ids_uses_verified_user_id_directly_for_cli_requests():

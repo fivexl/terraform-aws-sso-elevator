@@ -90,7 +90,7 @@ elevator --account 123456789012 --permission-set ReadOnly --duration 120 --reaso
 - `--account` — AWS account ID to request access to (required)
 - `--permission-set` — Permission set name to request (required)
 - `--duration` — How long access is needed, as a positive integer number of minutes (required). Any whole number of minutes is valid, up to whatever maximum this deployment allows — not limited to the specific options the Slack request modal's dropdown shows.
-- `--reason` — Reason for the access request (required)
+- `--reason` — Reason for the access request (required, at most 1000 characters)
 - `--endpoint` — SSO Elevator API invoke URL for this call only, overriding `ELEVATOR_ENDPOINT` and the saved config file (see [Configure](#configure))
 - `--region` — AWS region for SigV4 signing; if omitted, it's parsed from `--endpoint`'s own hostname when that's a standard `execute-api.<region>.amazonaws.com` URL, else the resolved AWS config region, falling back to `us-east-1`
 

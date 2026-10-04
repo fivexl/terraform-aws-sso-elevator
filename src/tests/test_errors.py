@@ -86,3 +86,19 @@ def test_error_handler_falls_back_to_unknown_user_when_context_has_none():
 
     text = client.chat_postMessage.call_args.kwargs["text"]
     assert "<@UNKNOWN_USER>" in text
+
+
+def test_error_handler_does_not_repost_a_failure_the_request_already_shows():
+    client = MagicMock()
+    logger = MagicMock()
+
+    errors.error_handler(
+        client=client,
+        e=errors.ShownOnRequest("Granting access failed: boom"),
+        logger=logger,
+        context={"user_id": "U123"},
+        cfg=MagicMock(slack_channel_id="C123"),
+    )
+
+    logger.exception.assert_called_once()
+    client.chat_postMessage.assert_not_called()

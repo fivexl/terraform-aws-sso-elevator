@@ -1,19 +1,17 @@
 import datetime
+import json
 import time
 from datetime import timedelta, timezone
-from typing import Literal, Optional, TypeVar, Union
+from typing import Annotated, Literal, Optional, TypeVar, Union
 
 import jmespath as jp
 import slack_sdk.errors
 from mypy_boto3_identitystore import IdentityStoreClient
 from mypy_boto3_sso_admin import SSOAdminClient
-from pydantic import model_validator
+from pydantic import Field, TypeAdapter, ValidationError, model_validator
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import (
-    ActionsBlock,
     Block,
-    ButtonElement,
-    ContextBlock,
     DividerBlock,
     InputBlock,
     MarkdownTextObject,
@@ -25,10 +23,12 @@ from slack_sdk.models.blocks import (
 )
 from slack_sdk.models.views import View
 
+import access_control
 import config
 import entities
 import sso
 from entities import BaseModel
+from errors import PostGrantError, ShownOnRequest
 
 # ruff: noqa: ANN102, PGH003
 
@@ -37,43 +37,23 @@ cfg = config.get_config()
 
 
 class RequestForAccess(BaseModel):
+    kind: Literal["account"] = "account"
     permission_set_name: str
     account_id: str
+    # Display-only, set once the account is described at intake; it rides in the
+    # button value so later states can render the title without another AWS call.
+    account_name: str = ""
     reason: str
     requester_slack_id: str
     permission_duration: timedelta
-    # Which intake path this came through, and (for "cli") the SigV4-verified
-    # ARN cli_auth.extract_identity resolved it from -- threaded into
-    # AuditEntry so a disputed self-approved grant doesn't read identically
-    # to a Slack one, and approvers reviewing history can tell the two apart.
+    # Which intake path this came through; for "cli", the SigV4-verified ARN
+    # (audit only), plus the Identity Store UserId and email verified at
+    # submission. execute_decision grants against verified_user_id and approval
+    # re-checks eligibility against verified_email, so neither drifts with the
+    # requester's Slack profile. "NA" for "slack" requests.
     request_source: Literal["slack", "cli"] = "slack"
     verified_arn: str = "NA"
-    # The Identity Store UserId the CLI's SigV4-verified session was actually
-    # checked against at submission time (cli_auth.extract_identity, then
-    # cross-checked again by handle_cli_access_request's email round-trip) --
-    # NOT just audit metadata like verified_arn above. execute_decision uses
-    # this directly as the grant's principal for a "cli" request, instead of
-    # re-resolving requester.email through a second, independent Identity
-    # Store lookup at approval time that could disagree with the identity
-    # actually verified at submission (a directory change in between, or a
-    # primary-email lookup that legitimately falls through to a different
-    # person via the secondary-domain fallback). "NA" for "slack" requests,
-    # which have no equivalent submission-time identity verification to
-    # thread through -- execute_decision falls back to the pre-existing
-    # email-based resolution for those, unchanged.
     verified_user_id: str = "NA"
-    # The email cli_auth verified this request's identity_user_id against at
-    # submission time (#194 B4). handle_button_click re-fetches the
-    # requester's Slack profile at approval time, which can be minutes or
-    # hours later -- if that profile's email (or the groups it belongs to)
-    # changed in between, computing requester_group_ids/the approve decision
-    # from that freshly-fetched email would evaluate eligibility against a
-    # different identity than the one execute_decision actually grants
-    # against (verified_user_id, pinned at submission time for the same
-    # reason). Threading this through lets the approval-time eligibility
-    # check use the same pinned identity as the grant, closing that drift
-    # window, instead of pinning only the grant target. "NA" for "slack"
-    # requests, same as verified_arn/verified_user_id above.
     verified_email: str = "NA"
 
 
@@ -123,16 +103,7 @@ class RequestForAccessView:
                         action_id=cls.REASON_ACTION_ID,
                         placeholder=PlainTextObject(text="Reason will be saved in audit logs. Please be specific."),
                         multiline=True,
-                        # A first line of defense, not the authoritative
-                        # check -- Slack enforces this client-side in the
-                        # modal itself (an inline "too long" error before
-                        # submission is even possible), but max_length is a
-                        # plain character count with no idea that
-                        # escape_mrkdwn can expand some of those characters
-                        # up to 5x. The submission handler's own
-                        # reason_fits_slack_field check is what actually
-                        # guarantees the posted field fits.
-                        max_length=REASON_MODAL_MAX_LENGTH,
+                        max_length=REASON_MAX_LENGTH,
                     ),
                 ),
                 DividerBlock(),
@@ -248,207 +219,407 @@ def insert_blocks(blocks: list[T], blocks_to_insert: list[Block], after_block_id
     return blocks[: index + 1] + blocks_to_insert + blocks[index + 1 :]  # type: ignore
 
 
-def humanize_timedelta(td: timedelta) -> str:
-    # 1d 12h 0m
-    total_hours = td.days * 24 + td.seconds // 3600
-    minutes = (td.seconds % 3600) // 60
-
-    if total_hours < 24:  # noqa: PLR2004
-        return f"{total_hours}h {minutes}m"
-    days = total_hours // 24
-    hours = total_hours % 24
-    if hours > 0 or minutes > 0:
-        return f"{days}d {hours}h {minutes}m"
-    else:
-        return f"{days}d"
-
-
 def escape_mrkdwn(text: str) -> str:
-    """Escape the three characters Slack's mrkdwn parser treats specially,
-    per Slack's own documented escaping rule. Only ever needed for text a
-    requester actually typed (the reason field) -- every other field this
-    module builds is either a fixed string or a `<@ID>`/`<!...>` mention
-    this code constructs itself, and escaping those would break them.
-    `&` must be replaced first, or escaping `<`/`>` into `&lt;`/`&gt;` would
-    have its own `&` re-escaped into `&amp;lt;`/`&amp;gt;` a second time."""
+    """Escape the three characters Slack's mrkdwn treats specially. `&` goes
+    first, or the `&` in `&lt;`/`&gt;` would be escaped a second time."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-# Slack's section-block text fields cap at 2000 chars, and build_approval_
-# request_message_blocks embeds reason in one as "Reason: {escaped}" -- the
-# cap has to subtract that prefix, and has to be checked against the
-# *escaped* length, not the raw one (escape_mrkdwn can expand a reason up to
-# 5x, e.g. an all-"&" string). Originally only enforced on the CLI path
-# (src/main.py); the Slack/group modals had no cap of any kind, so a pasted
-# stack trace or XML fragment (real "<"/">" content) could produce an
-# oversized field there too, reaching chat_postMessage and being rejected
-# with invalid_blocks -- caught live against a real deployment, reported by
-# Andrey Devyatkin. This is shared by both intake paths now, not duplicated.
-REASON_PREFIX = "Reason: "
-MAX_REASON_LENGTH = 2000 - len(REASON_PREFIX)
+REASON_MAX_LENGTH = 1000
+REASON_TOO_LONG = f"Reason must be {REASON_MAX_LENGTH} characters or fewer"
+# The whole request rides as JSON in the buttons' value, which Slack caps at 2000 characters.
+_BUTTON_VALUE_MAX_LENGTH = 2000
+REQUEST_TOO_LARGE = "Request is too large for Slack; shorten the reason"
 
 
-def reason_fits_slack_field(reason: str) -> bool:
-    return len(escape_mrkdwn(reason)) <= MAX_REASON_LENGTH
+def request_rejection(request: "RequestForAccess | RequestForGroupAccess") -> str | None:
+    """Why the request cannot be posted, or None. Check it once account_name/group_name are set."""
+    if len(request.reason) > REASON_MAX_LENGTH:
+        return REASON_TOO_LONG
+    if len(request.model_dump_json()) > _BUTTON_VALUE_MAX_LENGTH:
+        return REQUEST_TOO_LARGE
+    return None
 
 
-# The modal input's own client-side max_length -- a plain character count,
-# so it can't know escape_mrkdwn might expand some of those characters up to
-# 5x. Set comfortably below MAX_REASON_LENGTH so a real-world reason (mostly
-# plain text, the occasional stray "&"/"<"/">") has headroom to still pass
-# reason_fits_slack_field's authoritative, escape-aware check after
-# submission -- not tight enough to guarantee it for an adversarial input
-# (a reason that's *all* "&"), which is exactly why that server-side check
-# still exists and must not be removed.
-REASON_MODAL_MAX_LENGTH = 1000
+def dm_rejection(client: WebClient, requester_slack_id: str, rejection: str) -> None:
+    """The modal closed on submit, so a DM is all that is left to tell the requester."""
+    logger.info(f"Rejected access request: {rejection}", extra={"requester_slack_id": requester_slack_id})
+    client.chat_postMessage(channel=requester_slack_id, text=f"Your access request wasn't submitted: {rejection}.")
 
 
-def unescape_mrkdwn(text: str) -> str:
-    """Inverse of escape_mrkdwn, for recovering the original reason text
-    when ButtonClickedPayload/ButtonGroupClickedPayload reconstruct a
-    request by scraping it back out of the posted message. `&amp;` must be
-    unescaped last, or an original `&lt;` (which was escaped to `&amp;lt;`)
-    would unescape to `&lt;` instead of `<`."""
-    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+def format_duration(td: timedelta) -> str:
+    days, minutes = divmod(int(td.total_seconds()) // 60, 24 * 60)
+    hours, minutes = divmod(minutes, 60)
+    parts = [f"{days} day{'s' * (days != 1)}"] if days else []
+    if hours:
+        parts.append(f"{hours} hour{'s' * (hours != 1)}")
+    if minutes:
+        parts.append(f"{minutes} min")
+    return " ".join(parts) or "0 min"
 
 
-def unhumanize_timedelta(td_str: str) -> timedelta:
-    days, hours, minutes = 0, 0, 0
-    components = td_str.split()
-    for component in components:
-        if "d" in component:
-            days = int(component.removesuffix("d"))
-        elif "h" in component:
-            hours = int(component.removesuffix("h"))
-        elif "m" in component:
-            minutes = int(component.removesuffix("m"))
-    total_hours = days * 24 + hours
-    return timedelta(hours=total_hours, minutes=minutes)
+def slack_time(moment: datetime.datetime) -> str:
+    """Rendered by Slack in each viewer's own timezone; the fallback is UTC."""
+    return f"<!date^{int(moment.timestamp())}^{{time}}|{moment.astimezone(timezone.utc):%H:%M} UTC>"
 
 
-def build_approval_request_message_blocks(  # noqa: PLR0913
-    requester_slack_id: str,
-    slack_client: WebClient,
-    sso_client: SSOAdminClient,
-    identity_store_client: IdentityStoreClient,
-    permission_duration: timedelta,
-    reason: str,
-    color_coding_emoji: str,
-    account: Optional[entities.aws.Account] = None,
-    group: Optional[entities.aws.SSOGroup] = None,
-    role_name: Optional[str] = None,
-    show_buttons: bool = True,
-    request_source: Literal["slack", "cli"] = "slack",
-    verified_arn: str = "NA",
-    verified_user_id: str = "NA",
-    verified_email: str = "NA",
-) -> list[Block]:
-    fields = [
-        MarkdownTextObject(text=f"Requester: <@{requester_slack_id}>"),
-        MarkdownTextObject(text=f"Reason: {escape_mrkdwn(reason)}"),
-        MarkdownTextObject(text=f"Permission duration: {humanize_timedelta(permission_duration)}"),
-    ]
-    # In their own context block below (a footer-style, full-width, greyed
-    # line), not in `fields` alongside the decision-relevant info above --
-    # a full role ARN wraps across several lines in fields' two-column
-    # grid and strands a dead gap in the other column, visually outweighing
-    # the who/account/role/reason an approver is actually deciding on with
-    # provenance detail that matters for the audit trail, not the decision
-    # (an actual Andrey Devyatkin review comment on this PR). fields also
-    # has a hard 10-item Slack limit; with account/role/reason/duration/
-    # requester plus these, a request was one more field away from
-    # breaking at serialization -- moving these four out restores headroom.
-    # Still one element per key, not combined onto shared lines: each
-    # element's text must independently start with its own key for
-    # ButtonClickedPayload.validate_payload's find_in_fields/
-    # find_in_fields_optional to recover request_source/verified_arn/
-    # verified_user_id/verified_email when it reconstructs the request --
-    # combining keys onto one line (as text after the line's own start)
-    # would make that scrape silently stop finding them.
-    provenance_elements = []
-    if request_source == "cli":
-        provenance_elements.append(MarkdownTextObject(text="Source: CLI"))
-        provenance_elements.append(MarkdownTextObject(text=f"Verified ARN: `{verified_arn}`"))
-        provenance_elements.append(MarkdownTextObject(text=f"Verified UserId: {verified_user_id}"))
-        provenance_elements.append(MarkdownTextObject(text=f"Verified Email: {verified_email}"))
-    _, secondary_domain_was_used = sso.get_user_principal_id_by_email(
-        identity_store_client=identity_store_client,
-        identity_store_id=sso.describe_sso_instance(sso_client, cfg.sso_instance_arn).identity_store_id,
-        email=get_user(slack_client, id=requester_slack_id).email,
-        cfg=cfg,
-    )
-
-    if secondary_domain_was_used:
-        fields.append(
-            MarkdownTextObject(
-                text=(
-                    ":warning: *Attention: Secondary Domain Fallback Used*\n"
-                    "The requester's Slack email did not match any AWS SSO user.\n"
-                    "A secondary fallback domain was used to locate the user in AWS SSO.\n"
-                    "Proceed with caution and consider verifying the user's identity to mitigate potential security risks.\n"
-                    "We do not recommend relying on this feature."
-                )
-            )
-        )
-    if group:
-        fields.insert(1, MarkdownTextObject(text=f"Group: {group.name} #{group.id}"))
-    elif account and role_name:
-        fields.insert(1, MarkdownTextObject(text=f"Account: {account.name} #{account.id}"))
-        fields.insert(2, MarkdownTextObject(text=f"Role name: {role_name}"))
-
-    blocks: list[Block] = [
-        HeaderSectionBlock.new(color_coding_emoji),
-        SectionBlock(block_id="content", fields=fields),
-    ]
-    if provenance_elements:
-        blocks.append(ContextBlock(block_id="provenance", elements=provenance_elements))
-    if show_buttons:
-        blocks.append(
-            ActionsBlock(
-                block_id="buttons",
-                elements=[
-                    ButtonElement(
-                        action_id=entities.ApproverAction.Approve.value,
-                        text=PlainTextObject(text="Approve"),
-                        style="primary",
-                        value=entities.ApproverAction.Approve.value,
-                    ),
-                    ButtonElement(
-                        action_id=entities.ApproverAction.Discard.value,
-                        text=PlainTextObject(text="Discard"),
-                        style="danger",
-                        value=entities.ApproverAction.Discard.value,
-                    ),
-                ],
-            )
-        )
-    return blocks
+def account_subject(permission_set_name: str, account_name: str, account_id: str) -> str:
+    return f"{escape_mrkdwn(permission_set_name)} → {escape_mrkdwn(account_name)} #{account_id}"
 
 
-class HeaderSectionBlock:
-    block_id = "header"
+def group_subject(group_name: str) -> str:
+    return f"group {escape_mrkdwn(group_name)}"
+
+
+def request_subject(request: "RequestForAccess | RequestForGroupAccess") -> str:
+    if isinstance(request, RequestForGroupAccess):
+        return group_subject(request.group_name)
+    return account_subject(request.permission_set_name, request.account_name, request.account_id)
+
+
+def approved_by(approver_slack_id: str) -> str:
+    return f"Approved by <@{approver_slack_id}>"
+
+
+AUTO_APPROVAL_LABELS = {
+    access_control.DecisionReason.SelfApproval: "Self-approval allowed",
+    access_control.DecisionReason.ApprovalNotRequired: "Approval not required",
+}
+
+_SECTION_TEXT_LIMIT = 3000
+
+
+def _section(block_id: str, text: str) -> dict:
+    return {"type": "section", "block_id": block_id, "text": {"type": "mrkdwn", "text": text}}
+
+
+def _context(block_id: str, text: str) -> dict:
+    return {"type": "context", "block_id": block_id, "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+def _quote(reason: str) -> str:
+    """Reason as a mrkdwn quote, cut to fit a section: escaping can grow it 5x.
+    Only the display copy is cut -- the request keeps the full text."""
+    quote = "\n".join(f">{escape_mrkdwn(line)}" for line in reason.splitlines() or [""])
+    return quote if len(quote) <= _SECTION_TEXT_LIMIT else quote[: _SECTION_TEXT_LIMIT - 1] + "…"
+
+
+def _buttons(request_json: str) -> dict:
+    def button(action: entities.ApproverAction, style: str) -> dict:
+        text = {"type": "plain_text", "text": action.name}
+        return {"type": "button", "action_id": action.value, "text": text, "style": style, "value": request_json}
+
+    return {
+        "type": "actions",
+        "block_id": "buttons",
+        "elements": [button(entities.ApproverAction.Approve, "primary"), button(entities.ApproverAction.Discard, "danger")],
+    }
+
+
+class RequestCard(BaseModel):
+    """What a request message shows besides its state."""
+
+    requester_slack_id: str
+    subject: str
+    body: list[dict]  # reason quote, plus the secondary-domain warning when it applies
+    source: dict
+    duration: Optional[timedelta] = None  # pending only
+    request_json: Optional[str] = None  # pending only: the button value
 
     @classmethod
-    def new(cls, color_coding_emoji: str) -> SectionBlock:
-        return SectionBlock(
-            block_id=cls.block_id, text=MarkdownTextObject(text=f"{color_coding_emoji} | AWS account access request | {color_coding_emoji}")
+    def for_request(cls, request: "RequestForAccess | RequestForGroupAccess", secondary_domain_used: bool = False) -> "RequestCard":
+        body = [_section("reason", _quote(request.reason))]
+        if secondary_domain_used:
+            body.append(
+                _section(
+                    "warning",
+                    ":warning: Matched to AWS SSO via the secondary domain fallback — "
+                    f"verify this is really <@{request.requester_slack_id}> before approving.",
+                )
+            )
+        if isinstance(request, RequestForAccess) and request.request_source == "cli":
+            source = "Requested via CLI · :lock: identity verified via AWS SigV4"
+        else:
+            source = "Requested via Slack"
+        return cls(
+            requester_slack_id=request.requester_slack_id,
+            subject=request_subject(request),
+            body=body,
+            source=_context("source", source),
+            duration=request.permission_duration,
+            request_json=request.model_dump_json(),
         )
 
-    @staticmethod
-    def set_color_coding(blocks: list[dict], color_coding_emoji: str) -> list[dict]:
-        blocks = remove_blocks(blocks, block_ids=[HeaderSectionBlock.block_id])
-        b = HeaderSectionBlock.new(color_coding_emoji)
-        blocks.insert(0, b.to_dict())
-        return blocks
+    @classmethod
+    def from_message(cls, message: dict, subject: str, requester_slack_id: str) -> "RequestCard":
+        """For a request already posted: keeps its reason, warning and source blocks as they are."""
+        blocks = message.get("blocks") or []
+        return cls(
+            requester_slack_id=requester_slack_id,
+            subject=subject,
+            body=[b for b in blocks if b.get("block_id") in ("reason", "warning")],
+            source=next((b for b in blocks if b.get("block_id") == "source"), _context("source", "Requested via Slack")),
+        )
 
 
-def button_click_info_block(action: entities.ApproverAction, approver_slack_id: str) -> SectionBlock:
-    return SectionBlock(
-        block_id="footer",
-        text=MarkdownTextObject(
-            text=f"<@{approver_slack_id}> pressed {action.value} button",
-        ),
-    )
+class RequestState(BaseModel):
+    icon: str
+    word: str
+    status: Optional[str] = None  # None only for Pending, which shows buttons instead
+
+    @property
+    def is_pending(self) -> bool:  # noqa: ANN101
+        return self.status is None
+
+    @property
+    def is_failed(self) -> bool:  # noqa: ANN101
+        return self.word == "Failed"
+
+    @classmethod
+    def pending(cls) -> "RequestState":
+        return cls(icon=":closed_lock_with_key:", word="Pending")
+
+    @classmethod
+    def processing(cls, decided_by: str) -> "RequestState":
+        return cls(icon=":hourglass_flowing_sand:", word="Processing", status=f"{decided_by} · granting…")
+
+    @classmethod
+    def approved(cls, decided_by: str, ends_at: datetime.datetime, auto: bool) -> "RequestState":
+        word = "Auto-approved" if auto else "Approved"
+        return cls(icon=":white_check_mark:", word=word, status=f"{decided_by} · access ends at {slack_time(ends_at)}")
+
+    @classmethod
+    def discarded(cls, approver_slack_id: str) -> "RequestState":
+        return cls(icon=":wastebasket:", word="Discarded", status=f"Discarded by <@{approver_slack_id}>")
+
+    @classmethod
+    def expired(cls, after: timedelta) -> "RequestState":
+        return cls(icon=":hourglass:", word="Expired", status=f"No decision within {format_duration(after)}")
+
+    @classmethod
+    def failed_with(cls, reason: str) -> "RequestState":
+        return cls(icon=":x:", word="Failed", status=f"{reason} · details in thread")
+
+    @classmethod
+    def ended(cls, decided_by: str, ended_at: datetime.datetime) -> "RequestState":
+        return cls(icon=":lock:", word="Ended", status=f"{decided_by} · access ended at {slack_time(ended_at)}")
+
+    @classmethod
+    def extended(cls, decided_by: str, newer_request: str) -> "RequestState":
+        return cls(icon=":repeat:", word="Extended", status=f"{decided_by} · extended by {newer_request}")
+
+    @classmethod
+    def granted_not_scheduled(cls) -> "RequestState":
+        status = "Access is live; the inconsistency check will remove it, or revoke manually · details in thread"
+        return cls(icon=":warning:", word="Granted", status=status)
+
+
+def build_request_message(card: RequestCard, state: RequestState) -> tuple[str, list[dict]]:
+    """Every state of a request message comes from here. Returns the title (also
+    the notification fallback text) and the blocks."""
+    title = f"{state.icon} *{state.word} · {card.subject} for* <@{card.requester_slack_id}>"
+    if state.status is None:
+        if card.duration is None or card.request_json is None:
+            raise ValueError("A pending request message needs the request itself")
+        title += f" *for {format_duration(card.duration)}*"
+        decision = _buttons(card.request_json)
+    else:
+        decision = _context("status", state.status)
+    return title, [_section("title", title), *card.body, decision, card.source]
+
+
+def update_request_message(client: WebClient, channel_id: str, ts: str, card: RequestCard, state: RequestState) -> bool:
+    """Best-effort: a failed update is logged, not raised."""
+    text, blocks = build_request_message(card, state)
+    try:
+        client.chat_update(channel=channel_id, ts=ts, blocks=blocks, text=text)
+        return True
+    except Exception as e:
+        logger.exception(f"Failed to update request message {ts} to {state.word}: {e}")
+        return False
+
+
+def post_thread_reply(client: WebClient, channel_id: str, ts: str, text: str) -> bool:
+    """Best-effort: a failed reply is logged, not raised."""
+    try:
+        client.chat_postMessage(channel=channel_id, thread_ts=ts, text=text)
+        return True
+    except Exception as e:
+        logger.exception(f"Failed to reply in the thread of request message {ts}: {e}")
+        return False
+
+
+def should_dm(client: WebClient, requester_slack_id: str) -> bool:
+    """Whether the requester needs DMs, being outside the channel. A failed
+    membership check counts as outside: an extra DM beats a missing one."""
+    if not cfg.send_dm_if_user_not_in_channel:
+        return False
+    try:
+        return not check_if_user_is_in_channel(client, cfg.slack_channel_id, requester_slack_id)
+    except Exception as e:
+        logger.exception(f"Failed to check channel membership; assuming not in channel so the DM still goes out: {e}")
+        return True
+
+
+def send_dm(client: WebClient, user_slack_id: str, text: str) -> None:
+    """Best-effort: a failed DM is logged, not raised."""
+    try:
+        client.chat_postMessage(
+            channel=user_slack_id,
+            text=f"{text}\nYou are receiving this in a DM because you are not a member of <#{cfg.slack_channel_id}>.",
+        )
+    except Exception as e:
+        logger.exception(f"Failed to DM {user_slack_id}: {e}")
+
+
+class IntakeOutcome(BaseModel):
+    state: RequestState
+    thread_reply: Optional[str] = None
+    dm: Optional[str] = None
+
+
+def intake_outcome(client: WebClient, decision: access_control.AccessRequestDecision, requester_slack_id: str) -> IntakeOutcome:
+    """The state a new request is posted in, plus what to say in its thread and to the requester."""
+    reasons = access_control.DecisionReason
+    match decision.reason:
+        case reasons.SelfApproval | reasons.ApprovalNotRequired:
+            return IntakeOutcome(state=RequestState.processing(AUTO_APPROVAL_LABELS[decision.reason]))
+        case reasons.RequiresApproval:
+            approvers, approver_emails_not_found = find_approvers_in_slack(client, decision.approvers)  # type: ignore # noqa: PGH003
+            if not approvers:
+                text = "None of the approvers from configuration could be found in Slack. Check the module configuration."
+                return IntakeOutcome(state=RequestState.failed_with("No approvers found in Slack"), thread_reply=text, dm=text)
+            mentions = " ".join(f"<@{approver.id}>" for approver in approvers)
+            text = f"{mentions}: waiting for your approval"
+            if approver_emails_not_found:
+                text += (
+                    f"\nNote: some approvers ({', '.join(approver_emails_not_found)}) could not be found in Slack. "
+                    "Check the module configuration."
+                )
+            return IntakeOutcome(
+                state=RequestState.pending(), thread_reply=text, dm=f"Your request is waiting for approval from {mentions}."
+            )
+        case reasons.NoApprovers:
+            text = "Nobody can approve this request."
+            return IntakeOutcome(state=RequestState.failed_with("Nobody can approve this request"), thread_reply=text, dm=text)
+        case reasons.NoStatements:
+            text = "No statement in the configuration covers this request."
+            return IntakeOutcome(state=RequestState.failed_with("No statement covers this request"), thread_reply=text, dm=text)
+        case reasons.RequesterNotAllowed:
+            return IntakeOutcome(
+                state=RequestState.failed_with("Requester is not allowed to request this"),
+                thread_reply=f"<@{requester_slack_id}> is not allowed to request this access.",
+                dm="You are not allowed to request this access.",
+            )
+    raise ValueError(f"Unhandled decision reason: {decision.reason}")
+
+
+def report_grant_outcome(  # noqa: PLR0913
+    client: WebClient,
+    channel_id: str,
+    ts: str,
+    card: RequestCard,
+    decided_by: str,
+    auto: bool,
+    duration: timedelta,
+    replaced: list,
+    error: Exception | None,
+    dm_requester: bool,
+) -> None:
+    """Shows how a grant ended on its request message, in the thread and by DM.
+    Raises ShownOnRequest for a failed grant once the request shows it."""
+    requester = card.requester_slack_id
+    if error is None:
+        ends_at = datetime.datetime.now(timezone.utc) + duration
+        update_request_message(client, channel_id, ts, card, RequestState.approved(decided_by, ends_at, auto))
+        # Sent even when the update failed, so a stale card is never the only signal.
+        post_thread_reply(client, channel_id, ts, f"<@{requester}> access granted, ends at {slack_time(ends_at)}")
+        if dm_requester:
+            send_dm(client, requester, f"Access granted: {card.subject}, ends at {slack_time(ends_at)}.")
+        mark_requests_extended(client, replaced, card.subject, channel_id, ts)
+        return
+    if isinstance(error, PostGrantError):
+        text = (
+            f"<@{requester}> access granted, but its automatic revocation could not be scheduled: {error}. "
+            "The inconsistency check will remove it, or revoke it manually."
+        )
+        update_request_message(client, channel_id, ts, card, RequestState.granted_not_scheduled())
+        post_thread_reply(client, channel_id, ts, text)
+        if dm_requester:
+            send_dm(client, requester, text)
+        # The older requests' schedules may be gone already, so they no longer end when they say.
+        mark_requests_extended(client, error.replaced, card.subject, channel_id, ts)
+        return
+    text = f"Granting access failed: {error}"
+    updated = update_request_message(client, channel_id, ts, card, RequestState.failed_with("Granting access failed"))
+    replied = post_thread_reply(client, channel_id, ts, text)
+    if dm_requester:
+        send_dm(client, requester, text)
+    if updated or replied:
+        raise ShownOnRequest(text) from error
+    raise error
+
+
+def discard_request(  # noqa: PLR0913
+    client: WebClient, channel_id: str, ts: str, card: RequestCard, approver_slack_id: str, requester_slack_id: str, dm_requester: bool
+) -> None:
+    """Tells the requester only once the request shows Discarded; else its buttons are still live."""
+    if not update_request_message(client, channel_id, ts, card, RequestState.discarded(approver_slack_id)):
+        post_thread_reply(client, channel_id, ts, f"<@{approver_slack_id}> the discard did not go through, please try again.")
+        return
+    if dm_requester:
+        send_dm(client, requester_slack_id, f"Your request was discarded by <@{approver_slack_id}>.")
+
+
+def mark_requests_extended(client: WebClient, replaced: list, subject: str, channel_id: str, newer_ts: str) -> None:
+    """A new grant replaced these revoke events' schedules: point each one's request at the newer request."""
+    for event in replaced:
+        if not (event.channel_id and event.message_ts):
+            continue
+        try:
+            permalink = client.chat_getPermalink(channel=channel_id, message_ts=newer_ts)["permalink"]
+            message = get_message_from_timestamp(event.channel_id, event.message_ts, client)
+            if message is None:
+                logger.warning("Extended request message not found", extra={"message_ts": event.message_ts})
+                continue
+            card = RequestCard.from_message(message, subject, event.requester.id)
+            state = RequestState.extended(approved_by(event.approver.id), f"<{permalink}|newer request>")
+            update_request_message(client, event.channel_id, event.message_ts, card, state)
+        except Exception as e:
+            logger.exception(f"Failed to mark request {event.message_ts} as extended: {e}")
+
+
+def end_request_message(  # noqa: PLR0913
+    client: WebClient, channel_id: str, message_ts: str, subject: str, requester_slack_id: str, approver_slack_id: str, reply: str
+) -> bool:
+    """Revocation: flip the request to Ended and say so in its thread. False when the message is gone."""
+    message = get_message_from_timestamp(channel_id, message_ts, client)
+    if message is None:
+        return False
+    card = RequestCard.from_message(message, subject, requester_slack_id)
+    state = RequestState.ended(approved_by(approver_slack_id), datetime.datetime.now(timezone.utc))
+    text, blocks = build_request_message(card, state)
+    client.chat_update(channel=channel_id, ts=message_ts, blocks=blocks, text=text)
+    post_thread_reply(client, channel_id, message_ts, reply)
+    return True
+
+
+def pending_request(message: dict) -> "RequestForAccess | RequestForGroupAccess | None":
+    """The request a pending message's buttons carry; None for a message posted before they carried one."""
+    buttons = next((b for b in message.get("blocks") or [] if b.get("block_id") == "buttons"), None)
+    try:
+        return request_adapter.validate_json(buttons["elements"][0]["value"])  # type: ignore # noqa: PGH003
+    except ValidationError, KeyError, IndexError, TypeError:
+        return None
+
+
+OLD_REQUEST_REPLY = "This request was made before an Elevator upgrade — please request again"
+
+
+def strip_buttons(client: WebClient, channel_id: str, message: dict) -> None:
+    """Retire a pre-upgrade pending message, whose buttons can no longer be acted on."""
+    blocks = remove_blocks(message.get("blocks") or [], block_ids=["buttons"])
+    client.chat_update(channel=channel_id, ts=message["ts"], blocks=blocks, text=OLD_REQUEST_REPLY)
 
 
 def check_if_user_is_in_channel(client: WebClient, channel_id: str, user_id: str) -> bool:
@@ -459,110 +630,6 @@ def check_if_user_is_in_channel(client: WebClient, channel_id: str, user_id: str
     members = jp.search("members", response.data)
     logger.debug(f"Members in channel {channel_id}: {members}")
     return user_id in members
-
-
-def find_in_fields(fields: list[dict[str, str]], key: str) -> str:
-    # split(..., 1), not a bare split(": ") -- the latter splits on
-    # *every* ": " in the field's text, not just the one separating the
-    # key from its value, so e.g. "Reason: debugging: INC-42" used to
-    # come back as just "debugging" (index [1] of a 3-element split),
-    # silently dropping the rest of a free-text value like a reason.
-    #
-    # Module-level, not a staticmethod on one payload class (#194
-    # duplication cleanup): ButtonClickedPayload and ButtonGroupClickedPayload
-    # both parse the same "Key: value" field-list shape from their own
-    # posted messages, and used to each carry a byte-for-byte identical copy
-    # of this function -- the same split(": ") -> split(": ", 1) fix
-    # previously had to be applied twice for that reason.
-    for field in fields:
-        if field["text"].startswith(key):
-            return field["text"].split(": ", 1)[1].strip()
-    raise ValueError(f"Failed to parse message. Could not find {key} in fields: {fields}")
-
-
-def find_in_fields_optional(fields: list[dict[str, str]], key: str) -> str | None:
-    for field in fields:
-        if field["text"].startswith(key):
-            return field["text"].split(": ", 1)[1].strip()
-    return None
-
-
-class ButtonClickedPayload(BaseModel):
-    action: entities.ApproverAction
-    approver_slack_id: str
-    thread_ts: str
-    channel_id: str
-    message: dict
-    request: RequestForAccess
-
-    @model_validator(mode="before")
-    @classmethod
-    def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
-        message = values["message"]
-        fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
-        # Source/Verified ARN/Verified UserId/Verified Email now live in
-        # their own "provenance" context block, not in `content`'s fields
-        # (moved out to stay clear of fields' 10-item Slack limit -- see
-        # build_approval_request_message_blocks). find_in_fields/
-        # find_in_fields_optional just scan whatever list they're given
-        # for an item whose text starts with the requested key, so folding
-        # both blocks' items into one combined list before searching finds
-        # either kind without needing two separate lookup passes.
-        provenance_elements = jp.search("message.blocks[?block_id == 'provenance'].elements[]", values) or []
-        fields_and_provenance = fields + provenance_elements
-        requester_mention = find_in_fields(fields, "Requester")
-        requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
-        humanized_permission_duration = find_in_fields(fields, "Permission duration")
-        permission_duration = unhumanize_timedelta(humanized_permission_duration)
-        account = find_in_fields(fields, "Account")
-        account_id = account.split("#")[-1]
-        # "Source"/"Verified ARN"/"Verified UserId"/"Verified Email" are only
-        # present on messages built after each field was added -- default to
-        # "slack"/"NA"/"NA"/"NA" so approval clicks on already-posted messages
-        # don't fail to parse.
-        request_source = find_in_fields_optional(fields_and_provenance, "Source") or "slack"
-        # Backtick-wrapped in the message itself (renders as inline code,
-        # and stops Slack from linkifying/smart-quoting parts of the ARN)
-        # -- stripped back off here so the stored value is the real ARN,
-        # not the display-formatted one.
-        verified_arn = (find_in_fields_optional(fields_and_provenance, "Verified ARN") or "NA").strip("`")
-        verified_user_id = find_in_fields_optional(fields_and_provenance, "Verified UserId") or "NA"
-        verified_email = find_in_fields_optional(fields_and_provenance, "Verified Email") or "NA"
-        return {
-            "action": jp.search("actions[0].value", values),
-            "approver_slack_id": jp.search("user.id", values),
-            "thread_ts": jp.search("message.ts", values),
-            "channel_id": jp.search("channel.id", values),
-            "message": message,
-            "request": RequestForAccess(
-                requester_slack_id=requester_slack_id,
-                account_id=account_id,
-                permission_set_name=find_in_fields(fields, "Role name"),
-                # Known, accepted gap (#194 documentation fix): unlike
-                # Source/Verified ARN/Verified UserId/Verified Email above,
-                # which each explicitly default for a message posted before
-                # that field existed, this has no equivalent version-skew
-                # handling -- escaping reason text at all (escape_mrkdwn,
-                # above in build_approval_request_message_blocks) is itself
-                # new versus the pre-escaping version of this module, and
-                # there's no reliable marker on an old message distinguishing
-                # "this reason was never escaped" from "this reason really
-                # contains a literal &lt;/&amp; the user typed". A still-
-                # pending pre-upgrade approval whose reason happens to
-                # contain one of those substrings will have it incorrectly
-                # rewritten here. Narrow (requires a request pending across
-                # exactly this upgrade, with that specific substring in its
-                # reason) and left as a known, accepted limitation rather
-                # than solved with a heuristic that could misfire the other
-                # way just as easily.
-                reason=unescape_mrkdwn(find_in_fields(fields, "Reason")),
-                permission_duration=permission_duration,
-                request_source="cli" if request_source == "CLI" else "slack",
-                verified_arn=verified_arn,
-                verified_user_id=verified_user_id,
-                verified_email=verified_email,
-            ),
-        }
 
 
 def parse_user(user: dict) -> entities.slack.User:
@@ -578,14 +645,8 @@ def get_user(client: WebClient, id: str) -> entities.slack.User:
 
 def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
     logger.info(f"Getting slack user by email: {email}")
-    # start is computed once, before the loop -- not re-computed on every
-    # attempt (found in a final pre-delivery review): this used to retry by
-    # *recursing*, and each recursive call recomputed its own fresh `start`,
-    # so `now - start` could never reach timeout_seconds no matter how long
-    # the retries had actually been running. A sustained "ratelimited"
-    # response looped effectively forever (until the Lambda's own execution
-    # timeout killed it) instead of the intended clean, bounded 30s retry
-    # window ending in a real, catchable error.
+    # start is set once, before the loop, so rate-limit retries stop after
+    # timeout_seconds in total and raise, instead of retrying until the Lambda times out.
     start = datetime.datetime.now(timezone.utc)
     timeout_seconds = 30
     while True:
@@ -603,16 +664,6 @@ def get_user_by_email(client: WebClient, email: str) -> entities.slack.User:
             time.sleep(3)
 
 
-def remove_buttons_from_message_blocks(
-    slack_message_blocks: list[Block],
-    action: entities.ApproverAction,
-    approver: entities.slack.User,
-) -> list[Block]:
-    blocks = remove_blocks(slack_message_blocks, block_ids=["buttons"])
-    blocks.append(button_click_info_block(action, approver.id))
-    return blocks
-
-
 def create_slack_mention_by_principal_id(
     sso_user_id: str,
     sso_client: SSOAdminClient,
@@ -626,30 +677,19 @@ def create_slack_mention_by_principal_id(
         sso_instance.identity_store_id,
         sso_user_id,
     )
-    user_name = None
-
     for email in aws_user_emails:
         try:
-            slack_user = get_user_by_email(slack_client, email)
-            user_name = slack_user.real_name
-        except Exception as e:
+            return f"<@{get_user_by_email(slack_client, email).id}>"
+        except Exception as e:  # noqa: BLE001
             logger.info(f"Failed to get slack user by email {email}. {e}")
-            continue
-
-    return f"{user_name}" if user_name is not None else aws_user_emails[0]
+    return aws_user_emails[0]
 
 
 def get_message_from_timestamp(channel_id: str, message_ts: str, slack_client: slack_sdk.WebClient) -> dict | None:
-    response = slack_client.conversations_history(channel=channel_id)
-
-    if response["ok"]:
-        messages = response.get("messages")
-        if messages is not None:
-            for message in messages:
-                if "ts" in message and message["ts"] == message_ts:
-                    return message
-
-    return None
+    # latest + inclusive + limit=1 fetches exactly this message, however old it is.
+    response = slack_client.conversations_history(channel=channel_id, latest=message_ts, inclusive=True, limit=1)
+    messages = response.get("messages") or []
+    return messages[0] if messages and messages[0].get("ts") == message_ts else None
 
 
 # Plain text object supports only 99 options
@@ -657,16 +697,8 @@ def get_message_from_timestamp(channel_id: str, message_ts: str, slack_client: s
 def get_max_duration_block(cfg: config.Config) -> list[Option]:
     if cfg.permission_duration_list_override:
         elements = cfg.permission_duration_list_override
-        # Slack's StaticSelectElement caps at 99 options (same limit
-        # build_select_account_input_block enforces above), not 100 --
-        # `elements[:99] + elements[-1:]` used to keep 99 elements *plus*
-        # the last one for 100 total, one over the real limit, which
-        # `chat_postMessage`/the modal would reject with invalid_blocks the
-        # moment an operator configured exactly 101+ override entries
-        # (found in a final pre-delivery review). `elements[:98]`, not 99,
-        # preserves the apparent original intent of always keeping the
-        # last (typically longest-duration) entry visible even when
-        # truncating, while landing on the real 99-item cap.
+        # Slack's StaticSelectElement caps at 99 options: keep the first 98
+        # plus the last (typically longest) entry.
         if len(elements) > 99:  # noqa: PLR2004
             elements = elements[:98] + elements[-1:]
         return [Option(text=PlainTextObject(text=s), value=s) for s in elements]
@@ -687,18 +719,9 @@ def find_approvers_in_slack(client: WebClient, approver_emails: list[str]) -> tu
             approver = get_user_by_email(client, email)
             approvers.append(approver)
         except slack_sdk.errors.SlackApiError as e:
-            # Only "users_not_found" -- a configured approver email with no
-            # matching Slack account -- is the expected, routine case this
-            # loop exists to handle (found in a final pre-delivery review:
-            # a bare `except Exception:` here used to catch every OTHER
-            # Slack error the same way, with no exception object logged at
-            # all). A rotated/revoked bot token (invalid_auth), a dropped
-            # OAuth scope (missing_scope), or a Slack outage would silently
-            # turn every configured approver into "not found in Slack" --
-            # process_access_request's own "none of the approvers... could
-            # be found" rejection then reads as a config problem when the
-            # real cause is the Slack integration itself being down, with
-            # nothing above a bare, exception-free warning to reveal that.
+            # Only "users_not_found" means the approver is missing from Slack; any
+            # other error (invalid_auth, missing_scope, an outage) is the integration
+            # failing and must raise, not read as "no approvers found".
             if e.response.get("error") != "users_not_found":
                 logger.exception(f"Unexpected Slack error while looking up approver {email}: {e}")
                 raise
@@ -708,20 +731,19 @@ def find_approvers_in_slack(client: WebClient, approver_emails: list[str]) -> tu
     return approvers, approver_emails_not_found
 
 
-# Group
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-# -----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----#-----
-
-
 class RequestForGroupAccess(entities.BaseModel):
+    kind: Literal["group"] = "group"
     group_id: str
+    # Display-only, set at intake; see RequestForAccess.account_name.
+    group_name: str = ""
     reason: str
     requester_slack_id: str
     permission_duration: timedelta
+
+
+# What a request button's value holds; "kind" routes the click.
+Request = Annotated[Union[RequestForAccess, RequestForGroupAccess], Field(discriminator="kind")]
+request_adapter: TypeAdapter[Request] = TypeAdapter(Request)
 
 
 class RequestForGroupAccessView:
@@ -767,16 +789,7 @@ class RequestForGroupAccessView:
                         action_id=cls.REASON_ACTION_ID,
                         placeholder=PlainTextObject(text="Reason will be saved in audit logs. Please be specific."),
                         multiline=True,
-                        # A first line of defense, not the authoritative
-                        # check -- Slack enforces this client-side in the
-                        # modal itself (an inline "too long" error before
-                        # submission is even possible), but max_length is a
-                        # plain character count with no idea that
-                        # escape_mrkdwn can expand some of those characters
-                        # up to 5x. The submission handler's own
-                        # reason_fits_slack_field check is what actually
-                        # guarantees the posted field fits.
-                        max_length=REASON_MODAL_MAX_LENGTH,
+                        max_length=REASON_MAX_LENGTH,
                     ),
                 ),
                 DividerBlock(),
@@ -852,52 +865,24 @@ class RequestForGroupAccessView:
         )
 
 
-class ButtonGroupClickedPayload(BaseModel):
+class ButtonClickedPayload(BaseModel):
     action: entities.ApproverAction
     approver_slack_id: str
     thread_ts: str
     channel_id: str
     message: dict
-    request: RequestForGroupAccess
+    request: Request
 
     @model_validator(mode="before")
     @classmethod
     def validate_payload(cls, values: dict) -> dict:  # noqa: ANN101
-        message = values["message"]
-        fields = jp.search("message.blocks[?block_id == 'content'].fields[]", values)
-        requester_mention = find_in_fields(fields, "Requester")
-        requester_slack_id = requester_mention.removeprefix("<@").removesuffix(">")
-        humanized_permission_duration = find_in_fields(fields, "Permission duration")
-        permission_duration = unhumanize_timedelta(humanized_permission_duration)
-        group = find_in_fields(fields, "Group")
-        group_id = group.split("#")[-1]
+        # action_id says Approve or Discard; the value carries the request. A
+        # pre-upgrade message's value is a bare word, which fails validation here.
         return {
-            "action": jp.search("actions[0].value", values),
+            "action": jp.search("actions[0].action_id", values),
             "approver_slack_id": jp.search("user.id", values),
             "thread_ts": jp.search("message.ts", values),
             "channel_id": jp.search("channel.id", values),
-            "message": message,
-            "request": RequestForGroupAccess(
-                requester_slack_id=requester_slack_id,
-                group_id=group_id,
-                # Known, accepted gap (#194 documentation fix): unlike
-                # Source/Verified ARN/Verified UserId/Verified Email above,
-                # which each explicitly default for a message posted before
-                # that field existed, this has no equivalent version-skew
-                # handling -- escaping reason text at all (escape_mrkdwn,
-                # above in build_approval_request_message_blocks) is itself
-                # new versus the pre-escaping version of this module, and
-                # there's no reliable marker on an old message distinguishing
-                # "this reason was never escaped" from "this reason really
-                # contains a literal &lt;/&amp; the user typed". A still-
-                # pending pre-upgrade approval whose reason happens to
-                # contain one of those substrings will have it incorrectly
-                # rewritten here. Narrow (requires a request pending across
-                # exactly this upgrade, with that specific substring in its
-                # reason) and left as a known, accepted limitation rather
-                # than solved with a heuristic that could misfire the other
-                # way just as easily.
-                reason=unescape_mrkdwn(find_in_fields(fields, "Reason")),
-                permission_duration=permission_duration,
-            ),
+            "message": values["message"],
+            "request": json.loads(jp.search("actions[0].value", values)),
         }

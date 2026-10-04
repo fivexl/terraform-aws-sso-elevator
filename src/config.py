@@ -219,12 +219,6 @@ class Config(BaseSettings):
     # uses (#194 High #5, found by Andrey Devyatkin).
     config_bucket_kms_key_arn: str = ""
 
-    good_result_emoji: str = ":large_green_circle:"
-
-    waiting_result_emoji: str = ":large_yellow_circle:"
-    bad_result_emoji: str = ":red_circle:"
-    discarded_result_emoji: str = ":white_circle:"
-
     @model_validator(mode="before")
     @classmethod
     def get_accounts_and_permission_sets(cls, values: dict) -> dict:  # noqa: ANN101

@@ -151,7 +151,7 @@ Flags (for the default request-submission command):
   --duration          How long access is needed, in minutes (required) —
                       any positive whole number, not limited to the specific
                       options the Slack request modal's dropdown shows
-  --reason            Reason for the access request (required)
+  --reason            Reason for the access request (required, at most 1000 characters)
   --endpoint          SSO Elevator API invoke URL — overrides the saved
                       config file and ELEVATOR_ENDPOINT for this call only
   --region            AWS region for SigV4 signing — if omitted, parsed from

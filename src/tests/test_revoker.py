@@ -1,11 +1,15 @@
-"""Revoker tests: per-invocation Slack token read, and loop paths surviving Slack failures."""
+"""Revoker tests: per-invocation Slack token read, loop paths surviving Slack failures,
+and how revocations and expiry show on the request message."""
 
 import sys
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import config
+import entities
+import events
 import sso
 
 
@@ -93,3 +97,186 @@ def test_group_revocation_loop_continues_after_slack_failure(revoker):
 
     assert [c.args[1] for c in mock_remove.call_args_list] == ["m-1", "m-2"]
     assert slack_client.chat_postMessage.call_count == 2
+
+
+def _users():  # noqa: ANN202
+    return {
+        "approver": entities.slack.User(id="U_APP", email="a@x.com", real_name="A"),
+        "requester": entities.slack.User(id="U_REQ", email="r@x.com", real_name="R"),
+    }
+
+
+def _revoke_event(**overrides) -> events.RevokeEvent:  # noqa: ANN003
+    fields = {
+        "schedule_name": "s",
+        "user_account_assignment": sso.UserAccountAssignment(
+            instance_arn="i", account_id="222222222222", permission_set_arn="ps", user_principal_id="u"
+        ),
+        "permission_duration": timedelta(minutes=30),
+        "channel_id": "C1",
+        "message_ts": "100.1",
+    }
+    return events.RevokeEvent(**(_users() | fields | overrides))
+
+
+def _group_revoke_event(**overrides) -> events.GroupRevokeEvent:  # noqa: ANN003
+    fields = {
+        "schedule_name": "s",
+        "group_assignment": sso.GroupAssignment(
+            group_name="admins", group_id="g-1", user_principal_id="u", membership_id="m-1", identity_store_id="d-1"
+        ),
+        "permission_duration": timedelta(hours=1),
+        "channel_id": "C1",
+        "message_ts": "100.1",
+    }
+    return events.GroupRevokeEvent(**(_users() | fields | overrides))
+
+
+APPROVED_MESSAGE = {
+    "ts": "100.1",
+    "blocks": [
+        {"block_id": "title", "type": "section", "text": {"type": "mrkdwn", "text": "old title"}},
+        {"block_id": "reason", "type": "section", "text": {"type": "mrkdwn", "text": ">testing revoker"}},
+        {"block_id": "status", "type": "context", "elements": [{"type": "mrkdwn", "text": "old status"}]},
+        {"block_id": "source", "type": "context", "elements": [{"type": "mrkdwn", "text": "Requested via Slack"}]},
+    ],
+}
+
+
+def _revoke_account(revoker, slack_client, revoke_event, post_update_to_slack=True):  # noqa: ANN001, ANN202
+    with (
+        patch.object(revoker.sso, "delete_account_assignment_and_wait_for_result", return_value=MagicMock(request_id="r")),
+        patch.object(revoker.sso, "describe_permission_set", return_value=MagicMock()) as mock_ps,
+        patch.object(revoker.s3, "log_operation"),
+        patch.object(revoker.schedule, "delete_schedule"),
+        patch.object(revoker.organizations, "describe_account", return_value=entities.aws.Account(id="222222222222", name="aft")),
+    ):
+        mock_ps.return_value.name = "ReadOnly"
+        revoker.handle_scheduled_account_assignment_deletion(
+            revoke_event=revoke_event,
+            sso_client=MagicMock(),
+            cfg=MagicMock(post_update_to_slack=post_update_to_slack, slack_channel_id="C1"),
+            scheduler_client=MagicMock(),
+            org_client=MagicMock(),
+            slack_client=slack_client,
+        )
+
+
+def test_scheduled_revocation_ends_its_request_message_and_replies_in_thread(revoker):
+    slack_client = MagicMock()
+    slack_client.conversations_history.return_value = {"messages": [APPROVED_MESSAGE]}
+
+    _revoke_account(revoker, slack_client, _revoke_event(), post_update_to_slack=False)
+
+    update = slack_client.chat_update.call_args.kwargs
+    assert update["ts"] == "100.1"
+    assert update["text"] == ":lock: *Ended · ReadOnly → aft #222222222222 for* <@U_REQ>"
+    assert [b["block_id"] for b in update["blocks"]] == ["title", "reason", "status", "source"]
+    status = update["blocks"][2]["elements"][0]["text"]
+    assert status.startswith("Approved by <@U_APP> · access ended at <!date^")
+    slack_client.chat_postMessage.assert_called_once_with(
+        channel="C1", thread_ts="100.1", text="Access ended: ReadOnly removed from aft #222222222222"
+    )
+
+
+@pytest.mark.parametrize(
+    ("revoke_event", "history"),
+    [
+        (_revoke_event(channel_id=None, message_ts=None), {"messages": []}),  # scheduled before events carried the request
+        (_revoke_event(), {"messages": []}),  # request message deleted
+    ],
+)
+def test_scheduled_revocation_falls_back_to_a_standalone_notice(revoker, revoke_event, history):
+    slack_client = MagicMock()
+    slack_client.conversations_history.return_value = history
+
+    _revoke_account(revoker, slack_client, revoke_event)
+
+    slack_client.chat_update.assert_not_called()
+    slack_client.chat_postMessage.assert_called_once_with(
+        channel="C1", text=":broom: Revoked untracked access · ReadOnly → aft #222222222222 for <@U_REQ>"
+    )
+
+
+def test_scheduled_revocation_never_fails_on_slack_errors(revoker):
+    slack_client = MagicMock()
+    slack_client.conversations_history.side_effect = RuntimeError("invalid_auth")
+    slack_client.chat_postMessage.side_effect = RuntimeError("invalid_auth")
+
+    _revoke_account(revoker, slack_client, _revoke_event())  # must not raise
+
+
+def test_scheduled_group_revocation_ends_its_request_message(revoker):
+    slack_client = MagicMock()
+    slack_client.conversations_history.return_value = {"messages": [APPROVED_MESSAGE]}
+    with (
+        patch.object(revoker.sso, "remove_user_from_group"),
+        patch.object(revoker.s3, "log_operation"),
+        patch.object(revoker.schedule, "delete_schedule"),
+    ):
+        revoker.handle_scheduled_group_assignment_deletion(
+            group_revoke_event=_group_revoke_event(),
+            cfg=MagicMock(post_update_to_slack=True, slack_channel_id="C1"),
+            scheduler_client=MagicMock(),
+            slack_client=slack_client,
+            identitystore_client=MagicMock(),
+        )
+
+    assert slack_client.chat_update.call_args.kwargs["text"] == ":lock: *Ended · group admins for* <@U_REQ>"
+    slack_client.chat_postMessage.assert_called_once_with(channel="C1", thread_ts="100.1", text="Access ended: removed from group admins")
+
+
+def test_discard_buttons_event_expires_a_pending_request(revoker):
+    import slack_helpers
+
+    request = slack_helpers.RequestForAccess(
+        permission_set_name="ReadOnly",
+        account_id="222222222222",
+        account_name="aft",
+        reason="testing",
+        requester_slack_id="U_REQ",
+        permission_duration=timedelta(minutes=30),
+    )
+    _, blocks = slack_helpers.build_request_message(slack_helpers.RequestCard.for_request(request), slack_helpers.RequestState.pending())
+    slack_client = MagicMock()
+    slack_client.conversations_history.return_value = {"messages": [{"ts": "1", "blocks": blocks}]}
+
+    with patch.object(revoker.schedule, "delete_schedule"):
+        revoker.handle_discard_buttons_event(
+            event=events.DiscardButtonsEvent(**_discard_event()), slack_client=slack_client, scheduler_client=MagicMock()
+        )
+
+    update = slack_client.chat_update.call_args.kwargs
+    assert update["text"] == ":hourglass: *Expired · ReadOnly → aft #222222222222 for* <@U_REQ>"
+    assert [b["block_id"] for b in update["blocks"]] == ["title", "reason", "status", "source"]
+    assert update["blocks"][2]["elements"][0]["text"] == "No decision within 8 hours"
+
+
+def test_discard_buttons_event_strips_a_pre_upgrade_request(revoker):
+    old_blocks = [{"block_id": "content", "fields": []}, {"block_id": "buttons", "elements": [{"value": "approve"}]}]
+    slack_client = MagicMock()
+    slack_client.conversations_history.return_value = {"messages": [{"ts": "1", "text": "old", "blocks": old_blocks}]}
+
+    with patch.object(revoker.schedule, "delete_schedule"):
+        revoker.handle_discard_buttons_event(
+            event=events.DiscardButtonsEvent(**_discard_event()), slack_client=slack_client, scheduler_client=MagicMock()
+        )
+
+    assert [b["block_id"] for b in slack_client.chat_update.call_args.kwargs["blocks"]] == ["content"]
+
+
+def test_approvers_renotification_skips_a_message_without_blocks(revoker):
+    slack_client = MagicMock()
+    slack_client.conversations_history.return_value = {"messages": [{"ts": "1", "text": "plain"}]}
+    event = events.ApproverNotificationEvent(
+        action="approvers_renotification", schedule_name="s", time_stamp="1", channel_id="C1", time_to_wait_in_seconds=60
+    )
+
+    with (
+        patch.object(revoker.schedule, "delete_schedule"),
+        patch.object(revoker.schedule, "schedule_approver_notification_event") as mock_next,
+    ):
+        revoker.handle_approvers_renotification_event(event=event, slack_client=slack_client, scheduler_client=MagicMock())
+
+    slack_client.chat_postMessage.assert_not_called()
+    mock_next.assert_not_called()

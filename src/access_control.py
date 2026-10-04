@@ -10,6 +10,8 @@ import s3
 import schedule
 import sso
 from entities import BaseModel
+from errors import PostGrantError
+from events import GroupRevokeEvent, RevokeEvent
 from statement import GroupStatement, Statement, get_affected_group_statements, get_affected_statements, requester_allowed
 
 logger = config.get_logger("access_control")
@@ -362,11 +364,16 @@ def execute_decision(  # noqa: PLR0913
     request_source: Literal["slack", "cli"],
     verified_arn: str,
     verified_user_id: str,
-) -> bool:
+    channel_id: str,
+    message_ts: str,
+) -> list[RevokeEvent | GroupRevokeEvent] | None:
+    """Grants the access. Returns None when the decision grants nothing, else the
+    revoke events of earlier requests this grant replaced. Raises PostGrantError
+    when the assignment exists but recording it or scheduling its revocation failed."""
     logger.info("Executing decision")
     if not decision.grant:
         logger.info("Access request denied")
-        return False  # Temporary solution for testing
+        return None
 
     sso_instance = sso.describe_sso_instance(sso_client, cfg.sso_instance_arn)
     permission_set = sso.get_permission_set_by_name(sso_client, sso_instance.arn, permission_set_name)
@@ -384,22 +391,11 @@ def execute_decision(  # noqa: PLR0913
         # create_account_assignment_and_wait_for_result below fails outright
         # rather than silently substituting a different, currently-resolvable
         # user -- fail closed instead of granting to the wrong person.
-        #
-        # A "cli" request with verified_user_id still "NA" (#194 B6) is not
-        # treated as "no verification available, fall back to the email
-        # lookup" -- that would silently re-enable, for a message explicitly
-        # labeled "Source: CLI", the exact fuzzy email-based resolution
-        # (secondary-domain fallback included) the CLI path exists to avoid
-        # trusting. The only way this combination occurs is a pending
-        # request message posted before verified_user_id existed on this
-        # field; failing closed here means such a request must be
-        # re-submitted after upgrade rather than silently granted through
-        # the weaker mechanism. This is a deliberate, narrow behavior change
-        # from earlier versions, not an oversight.
+        # A "cli" request without one fails closed (#194 B6) rather than falling
+        # back to the email lookup the CLI path exists to avoid trusting.
         if verified_user_id == "NA":
             raise ValueError(
-                "CLI-sourced request has no verified UserId to grant against "
-                "(likely a pending request from before this field existed) -- refusing to fall back to email-based resolution."
+                "CLI-sourced request has no verified UserId to grant against -- refusing to fall back to email-based resolution."
             )
         sso_user_principal_id = verified_user_id
         secondary_domain_was_used = False
@@ -422,39 +418,39 @@ def execute_decision(  # noqa: PLR0913
         account_assignment,
     )
 
-    s3.log_operation(
-        audit_entry=s3.AuditEntry(
-            account_id=account_id,
-            role_name=permission_set.name,
-            reason=reason,
-            requester_slack_id=requester.id,
-            requester_email=requester.email,
-            approver_slack_id=approver.id,
-            approver_email=approver.email,
-            request_id=account_assignment_status.request_id,
-            operation_type="grant",
+    try:
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                account_id=account_id,
+                role_name=permission_set.name,
+                reason=reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                request_id=account_assignment_status.request_id,
+                operation_type="grant",
+                permission_duration=permission_duration,
+                sso_user_principal_id=sso_user_principal_id,
+                audit_entry_type="account",
+                secondary_domain_was_used=secondary_domain_was_used,
+                request_source=request_source,
+                verified_arn=verified_arn,
+            ),
+        )
+        return schedule.schedule_revoke_event(
             permission_duration=permission_duration,
-            sso_user_principal_id=sso_user_principal_id,
-            audit_entry_type="account",
-            secondary_domain_was_used=secondary_domain_was_used,
-            request_source=request_source,
-            verified_arn=verified_arn,
-        ),
-    )
-
-    schedule.schedule_revoke_event(
-        permission_duration=permission_duration,
-        schedule_client=schedule_client,
-        approver=approver,
-        requester=requester,
-        user_account_assignment=sso.UserAccountAssignment(
-            instance_arn=sso_instance.arn,
-            account_id=account_id,
-            permission_set_arn=permission_set.arn,
-            user_principal_id=sso_user_principal_id,
-        ),
-    )
-    return True  # Temporary solution for testing
+            schedule_client=schedule_client,
+            approver=approver,
+            requester=requester,
+            user_account_assignment=account_assignment,
+            channel_id=channel_id,
+            message_ts=message_ts,
+        )
+    except PostGrantError:
+        raise
+    except Exception as e:
+        raise PostGrantError(str(e)) from e
 
 
 def execute_decision_on_group_request(  # noqa: PLR0913
@@ -465,11 +461,14 @@ def execute_decision_on_group_request(  # noqa: PLR0913
     requester: entities.slack.User,
     reason: str,
     identity_store_id: str,
-) -> bool:
+    channel_id: str,
+    message_ts: str,
+) -> list[RevokeEvent | GroupRevokeEvent] | None:
+    """Same contract as execute_decision, for group membership."""
     logger.info("Executing decision")
     if not decision.grant:
         logger.info("Access request denied")
-        return False  # Temporary solution for testing
+        return None
 
     sso_user_principal_id, secondary_domain_was_used = sso.get_user_principal_id_by_email(
         identity_store_client=identitystore_client,
@@ -493,34 +492,39 @@ def execute_decision_on_group_request(  # noqa: PLR0913
             "User added to the group", extra={"group_id": group.id, "user_id": sso_user_principal_id, "membership_id": membership_id}
         )
 
-    s3.log_operation(
-        audit_entry=s3.AuditEntry(
-            group_name=group.name,
-            group_id=group.id,
-            reason=reason,
-            requester_slack_id=requester.id,
-            requester_email=requester.email,
-            approver_slack_id=approver.id,
-            approver_email=approver.email,
-            operation_type="grant",
+    try:
+        s3.log_operation(
+            audit_entry=s3.AuditEntry(
+                group_name=group.name,
+                group_id=group.id,
+                reason=reason,
+                requester_slack_id=requester.id,
+                requester_email=requester.email,
+                approver_slack_id=approver.id,
+                approver_email=approver.email,
+                operation_type="grant",
+                permission_duration=permission_duration,
+                audit_entry_type="group",
+                sso_user_principal_id=sso_user_principal_id,
+                secondary_domain_was_used=secondary_domain_was_used,
+            ),
+        )
+        return schedule.schedule_group_revoke_event(
             permission_duration=permission_duration,
-            audit_entry_type="group",
-            sso_user_principal_id=sso_user_principal_id,
-            secondary_domain_was_used=secondary_domain_was_used,
-        ),
-    )
-
-    schedule.schedule_group_revoke_event(
-        permission_duration=permission_duration,
-        schedule_client=schedule_client,
-        approver=approver,
-        requester=requester,
-        group_assignment=sso.GroupAssignment(
-            identity_store_id=identity_store_id,
-            group_name=group.name,
-            group_id=group.id,
-            user_principal_id=sso_user_principal_id,
-            membership_id=membership_id,
-        ),
-    )
-    return  # type: ignore # noqa: PGH003
+            schedule_client=schedule_client,
+            approver=approver,
+            requester=requester,
+            group_assignment=sso.GroupAssignment(
+                identity_store_id=identity_store_id,
+                group_name=group.name,
+                group_id=group.id,
+                user_principal_id=sso_user_principal_id,
+                membership_id=membership_id,
+            ),
+            channel_id=channel_id,
+            message_ts=message_ts,
+        )
+    except PostGrantError:
+        raise
+    except Exception as e:
+        raise PostGrantError(str(e)) from e
