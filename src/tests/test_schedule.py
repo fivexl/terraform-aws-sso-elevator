@@ -63,3 +63,11 @@ def test_revoke_schedule_created_before_the_request_source_still_parses():
     payload["revoke_event"] = json.dumps(revoke_event)
 
     assert Event.model_validate(payload).root.revoke_event.request_source == "NA"
+
+
+def test_revoke_schedule_with_an_unknown_request_source_still_parses():
+    """A rolled-back revoker must still see a newer schedule, or its sweep revokes that grant early."""
+    payload = _schedule_revoke("slack")
+    payload["revoke_event"] = json.dumps(json.loads(payload["revoke_event"]) | {"request_source": "api"})
+
+    assert Event.model_validate(payload).root.revoke_event.request_source == "api"

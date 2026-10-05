@@ -1,6 +1,7 @@
 """Revoker tests: per-invocation Slack token read, loop paths surviving Slack failures,
 and how revocations and expiry show on the request message."""
 
+import json
 import sys
 from datetime import timedelta
 from unittest.mock import ANY, MagicMock, patch
@@ -354,6 +355,31 @@ def test_scheduled_revocation_audits_the_source_of_its_request(revoker, revoke_e
         _revoke_account(revoker, MagicMock(), revoke_event, post_update_to_slack=False)
 
     assert mock_log.call_args.args[0].request_source == request_source
+
+
+def test_scheduled_revocation_of_a_cli_grant_audits_cli_from_the_schedule_payload(revoker):
+    """End to end: the payload schedule_revoke_event writes is what the revoker records."""
+    client = MagicMock()
+    with (
+        patch.object(revoker.schedule, "cfg", MagicMock(revoker_function_name="revoker")),
+        patch.object(revoker.schedule, "get_and_delete_scheduled_revoke_event_if_already_exist", return_value=[]),
+    ):
+        revoker.schedule.schedule_revoke_event(
+            schedule_client=client,
+            permission_duration=timedelta(minutes=30),
+            user_account_assignment=_revoke_event().user_account_assignment,
+            channel_id="C1",
+            message_ts="100.1",
+            request_source="cli",
+            **_users(),
+        )
+    payload = json.loads(client.create_schedule.call_args.kwargs["Target"]["Input"])
+    parsed = revoker.Event.model_validate(payload).root
+
+    with patch.object(revoker.s3, "log_operation_best_effort") as mock_log:
+        _revoke_account(revoker, MagicMock(), parsed.revoke_event, post_update_to_slack=False)
+
+    assert mock_log.call_args.args[0].request_source == "cli"
 
 
 def test_scheduled_revocation_never_fails_on_slack_errors(revoker):

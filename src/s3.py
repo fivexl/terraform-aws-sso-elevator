@@ -38,9 +38,9 @@ class AuditEntry:
     # New fields for attribute sync operations
     sync_operation: str = "NA"  # "attribute_sync" for sync operations
     matched_attributes: dict | None = None  # Attributes that triggered the match
-    # Intake path of the request behind the entry: "slack" or "cli" (plus the
-    # SigV4-verified ARN for "cli"); "revoker" when the revoker's sweep removed
-    # access no request accounts for; "NA" when unknown, e.g. a revocation scheduled before it was recorded.
+    # Request behind the entry: "slack" or "cli" (plus the SigV4-verified ARN for "cli"); "revoker" for sweep
+    # removals no request accounts for; "attribute_sync" for attribute-syncer entries; "NA" when unknown,
+    # e.g. a revocation scheduled before this field existed.
     request_source: str = "NA"
     verified_arn: str = "NA"
     sso_user_email: str = "NA"  # Human-readable email for the SSO user

@@ -19,7 +19,8 @@ class RevokeEvent(BaseModel):
     channel_id: Optional[str] = None
     message_ts: Optional[str] = None
     # The request's intake path, for the revoke audit entry. "NA" on events scheduled before they carried it.
-    request_source: Literal["slack", "cli", "NA"] = "NA"
+    # A free str: a value an older revoker doesn't know must not fail the schedule's parsing.
+    request_source: str = "NA"
 
 
 class GroupRevokeEvent(BaseModel):
