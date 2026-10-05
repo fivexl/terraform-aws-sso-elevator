@@ -83,9 +83,10 @@ module "attribute_syncer" {
 
   # Disable Lambda's retries after function errors (the module applies this only with
   # create_async_event_config). EventBridge invokes the unqualified ARN, so only $LATEST needs it.
-  create_async_event_config                 = true
-  create_current_version_async_event_config = false
-  maximum_retry_attempts                    = 0
+  create_async_event_config                   = true
+  create_unqualified_alias_async_event_config = true
+  create_current_version_async_event_config   = false
+  maximum_retry_attempts                      = 0
 
   cloudwatch_logs_retention_in_days = var.logs_retention_in_days
 

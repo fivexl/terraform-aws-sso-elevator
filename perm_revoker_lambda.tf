@@ -91,7 +91,7 @@ module "access_revoker" {
   attach_dead_letter_policy = var.aws_sns_topic_subscription_email != "" ? true : false
 
   # Deliberately keeps Lambda's default async retries: revocation is idempotent and fails toward
-  # less access, so a retry minutes later beats waiting for the nightly sweep after a transient failure.
+  # less access, so a retry minutes later beats waiting for the next sweep after a transient failure.
 
   cloudwatch_logs_retention_in_days = var.logs_retention_in_days
 
