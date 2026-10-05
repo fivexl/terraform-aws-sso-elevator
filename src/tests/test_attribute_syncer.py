@@ -577,16 +577,25 @@ def test_lambda_handler_reads_slack_bot_token_from_ssm_in_degrade_mode(monkeypat
     mock_web_client.assert_called_once_with(token="xoxb-from-ssm")
 
 
-def _sync_context(describe_user_side_effect: object, policy: str = "remove"):  # noqa: ANN202
-    """A SyncContext over a fake Identity Store: both users are in Engineering, so both match the rule."""
+_DEFAULT_LIST_USERS = ({"UserId": "u-ok", "UserName": "ok"}, {"UserId": "u-broken", "UserName": "broken"})
+
+
+def _sync_context(  # noqa: ANN202
+    describe_user_side_effect: object,
+    policy: str = "remove",
+    list_users: tuple[dict, ...] = _DEFAULT_LIST_USERS,
+    members: tuple[str, ...] = ("u-broken",),
+    rule_attributes: dict[str, str] | None = None,
+):
+    """A SyncContext over a fake Identity Store with one managed group, Engineering."""
     from attribute_syncer import SyncContext
     from sync_config import SyncConfiguration
 
     pages = {
         "list_groups": [{"Groups": [{"GroupId": "g-eng", "DisplayName": "Engineering"}]}],
-        "list_users": [{"Users": [{"UserId": "u-ok", "UserName": "ok"}, {"UserId": "u-broken", "UserName": "broken"}]}],
+        "list_users": [{"Users": list(list_users)}],
         "list_group_memberships": [
-            {"GroupMemberships": [{"MembershipId": "m-broken", "MemberId": {"UserId": "u-broken"}}]},
+            {"GroupMemberships": [{"MembershipId": f"m-{user_id}", "MemberId": {"UserId": user_id}} for user_id in members]},
         ],
     }
     client = MagicMock()
@@ -596,7 +605,7 @@ def _sync_context(describe_user_side_effect: object, policy: str = "remove"):  #
         enabled=True,
         managed_group_names=("Engineering",),
         managed_group_ids={},
-        mapping_rules=({"group_name": "Engineering", "attributes": {"department": "Engineering"}},),
+        mapping_rules=({"group_name": "Engineering", "attributes": rule_attributes or {"department": "Engineering"}},),
         manual_assignment_policy=policy,  # type: ignore[arg-type]
         schedule_expression="rate(1 hour)",
     )
@@ -640,11 +649,51 @@ def test_user_whose_attributes_cannot_be_read_is_neither_added_nor_removed():
     added = [c.kwargs["MemberId"]["UserId"] for c in ctx.identity_store_client.create_group_membership.call_args_list]
     assert added == ["u-ok"]
     assert result.users_removed == 0
-    assert len(result.errors) == 1
-    assert "broken" in result.errors[0]
-    assert "throttled" in result.errors[0]
+    assert result.errors == ["Failed to read attributes of u-broken, skipped this run: throttled"]
     assert result.to_summary().errors == result.errors
     assert result.success is False
+
+
+def test_unread_non_member_is_not_added_even_if_list_users_record_matches():
+    """The rule is on a core attribute the ListUsers record carries, so the record alone would match."""
+    from attribute_syncer import perform_sync
+
+    list_users = ({"UserId": "u-broken", "UserName": "broken", "Title": "Engineer"},)
+    ctx = _sync_context(_describe_user_failing_for_broken, list_users=list_users, members=(), rule_attributes={"title": "Engineer"})
+    with patch("attribute_syncer.s3_module.log_operation"), patch("attribute_syncer.send_notification_for_action"):
+        result = perform_sync(ctx)
+
+    ctx.identity_store_client.create_group_membership.assert_not_called()
+    assert result.users_added == 0
+    assert len(result.errors) == 1
+
+
+def test_unread_member_gets_no_manual_assignment_warning_under_warn_policy():
+    from attribute_syncer import perform_sync
+
+    ctx = _sync_context(_describe_user_failing_for_broken, policy="warn", list_users=(_DEFAULT_LIST_USERS[1],))
+    with (
+        patch("attribute_syncer.s3_module.log_operation") as log_operation,
+        patch("attribute_syncer.send_notification_for_action") as notify,
+    ):
+        result = perform_sync(ctx)
+
+    assert result.manual_assignments_detected == 0
+    log_operation.assert_not_called()
+    notify.assert_not_called()
+    ctx.identity_store_client.delete_group_membership.assert_not_called()
+    assert len(result.errors) == 1
+
+
+def test_lookup_error_names_the_user_by_email_when_list_users_has_one():
+    from attribute_syncer import perform_sync
+
+    list_users = ({"UserId": "u-broken", "UserName": "broken", "Emails": [{"Value": "broken@example.com", "Primary": True}]},)
+    ctx = _sync_context(_describe_user_failing_for_broken, list_users=list_users)
+    with patch("attribute_syncer.s3_module.log_operation"), patch("attribute_syncer.send_notification_for_action"):
+        result = perform_sync(ctx)
+
+    assert result.errors == ["Failed to read attributes of broken@example.com, skipped this run: throttled"]
 
 
 def test_sync_audit_write_failure_logs_full_entry_and_sync_continues():
@@ -667,4 +716,6 @@ def test_sync_audit_write_failure_logs_full_entry_and_sync_continues():
     assert [e["operation_type"] for e in entries] == ["sync_add", "sync_remove"]
     assert {e["sso_user_principal_id"] for e in entries} == {"u-ok", "u-broken"}
     assert all(e["request_source"] == "attribute_sync" for e in entries)
-    assert put_object.call_args.kwargs["Bucket"] == "bucket"
+    for call in put_object.call_args_list:
+        assert call.kwargs["Bucket"] == "bucket"
+        assert call.kwargs["Key"].startswith("audit/")

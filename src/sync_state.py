@@ -463,7 +463,7 @@ def _fetch_users_from_identity_store(
                     Extensions=["aws:identitystore:enterprise"],
                 )
             except Exception as e:
-                # The ListUsers record lacks enterprise attributes, so judging this user by it would wrongly add or remove them.
+                # The ListUsers record lacks enterprise attributes, so judging this user by it would wrongly remove (or warn about) them.
                 logger.exception(f"Failed to describe user {user_id}, skipping them this run: {e}")
                 errors.append(f"Failed to read attributes of {_extract_user_email(user) or user_id}, skipped this run: {e}")
                 continue
