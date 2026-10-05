@@ -285,9 +285,10 @@ def _log_audit_entry(action: SyncAction, bucket_name: str, bucket_prefix: str) -
             matched_attributes=action.matched_attributes,
         )
         audit_entry = s3_module.create_sync_audit_entry(audit_params)
-        s3_module.log_operation(audit_entry, bucket_name, bucket_prefix)
     except Exception as e:
-        logger.exception(f"Failed to log audit entry for action {action.action_type}: {e}")
+        logger.exception(f"Failed to build audit entry for action {action.action_type}: {e}")
+        return
+    s3_module.log_operation_best_effort(audit_entry, bucket_name, bucket_prefix)
 
 
 @dataclass
@@ -392,11 +393,12 @@ def perform_sync(ctx: SyncContext) -> SyncOperationResult:  # noqa: PLR0912, PLR
         # Step 3: Get users with attributes
         logger.info("Fetching users with attributes")
         try:
-            users = get_users_with_attributes(
+            users, user_errors = get_users_with_attributes(
                 identity_store_client=ctx.identity_store_client,
                 identity_store_id=ctx.identity_store_id,
             )
             result.users_evaluated = len(users)
+            result.errors.extend(user_errors)
         except Exception as e:
             logger.exception(f"Failed to fetch users: {e}")
             result.errors.append(f"Failed to fetch users: {e}")

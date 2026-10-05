@@ -207,6 +207,7 @@ class SyncStateManager:
             manual_assignments = state.current_members - desired_members
             for user_id in manual_assignments:
                 user = users_by_id.get(user_id)
+                # A member missing from users (e.g. their attributes could not be read) is left alone.
                 if user:
                     expected_attrs = self._get_expected_attributes(rule) if rule else None
                     # Determine action based on policy
@@ -430,7 +431,7 @@ def _extract_external_ids(external_ids: list, attributes: dict[str, str]) -> Non
 def _fetch_users_from_identity_store(
     identity_store_client: IdentityStoreClient,
     identity_store_id: str,
-) -> list[dict]:
+) -> tuple[list[dict], list[str]]:
     """Fetch all users with their attributes from Identity Store.
 
     Uses list_users to get user IDs, then describe_user with Extensions
@@ -441,9 +442,10 @@ def _fetch_users_from_identity_store(
         identity_store_id: The Identity Store ID.
 
     Returns:
-        List of user dictionaries with attributes.
+        User dictionaries with attributes, and one error message per user whose attributes could not be read.
     """
     users: list[dict] = []
+    errors: list[str] = []
 
     # First, list all users to get their IDs
     paginator = identity_store_client.get_paginator("list_users")
@@ -461,8 +463,10 @@ def _fetch_users_from_identity_store(
                     Extensions=["aws:identitystore:enterprise"],
                 )
             except Exception as e:
-                logger.exception(f"Failed to describe user {user_id}: {e}")
-                full_user = user
+                # The ListUsers record lacks enterprise attributes, so judging this user by it would wrongly add or remove them.
+                logger.exception(f"Failed to describe user {user_id}, skipping them this run: {e}")
+                errors.append(f"Failed to read attributes of {_extract_user_email(user) or user_id}, skipped this run: {e}")
+                continue
 
             extracted_attrs = _extract_user_attributes(full_user)
             user_email = _extract_user_email(full_user)
@@ -481,7 +485,7 @@ def _fetch_users_from_identity_store(
             )
 
     logger.info(f"Fetched {len(users)} users from Identity Store")
-    return users
+    return users, errors
 
 
 def _fetch_groups_from_identity_store(
@@ -514,7 +518,7 @@ def _fetch_groups_from_identity_store(
 def get_users_with_attributes(
     identity_store_client: IdentityStoreClient,
     identity_store_id: str,
-) -> list[UserInfo]:
+) -> tuple[list[UserInfo], list[str]]:
     """Get all users with their attributes from Identity Store.
 
     Args:
@@ -522,12 +526,12 @@ def get_users_with_attributes(
         identity_store_id: The Identity Store ID.
 
     Returns:
-        List of UserInfo objects with user attributes.
+        UserInfo objects for users whose attributes were read, and one error message per user whose
+        attributes could not be read. Those users are left out, so the sync neither adds nor removes them.
     """
-    users_data = _fetch_users_from_identity_store(identity_store_client, identity_store_id)
+    users_data, errors = _fetch_users_from_identity_store(identity_store_client, identity_store_id)
 
-    # Convert dictionaries to UserInfo objects
-    return [
+    users = [
         UserInfo(
             user_id=user["user_id"],
             email=user["email"],
@@ -535,6 +539,7 @@ def get_users_with_attributes(
         )
         for user in users_data
     ]
+    return users, errors
 
 
 def get_all_groups(

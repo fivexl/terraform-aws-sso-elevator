@@ -107,11 +107,15 @@ def audit_record(audit_entry: AuditEntry, now: datetime | None = None) -> dict:
     return audit_entry_dict
 
 
-def log_operation_best_effort(audit_entry: AuditEntry) -> Exception | None:
+def log_operation_best_effort(
+    audit_entry: AuditEntry,
+    bucket_name: str | None = None,
+    bucket_prefix: str | None = None,
+) -> Exception | None:
     """For entries whose loss must not fail the caller's flow. Returns the write error, if any.
     The log record then carries the full entry, so CloudWatch alone can reconstruct it."""
     try:
-        log_operation(audit_entry=audit_entry)
+        log_operation(audit_entry=audit_entry, bucket_name=bucket_name, bucket_prefix=bucket_prefix)
     except Exception as e:
         logger.exception(f"Failed to write {audit_entry.operation_type} audit entry: {e}", extra={"audit_entry": audit_record(audit_entry)})
         return e
@@ -151,4 +155,5 @@ def create_sync_audit_entry(params: SyncAuditParams) -> AuditEntry:
         sync_operation="attribute_sync",
         matched_attributes=params.matched_attributes,
         sso_user_email=params.sso_user_email,
+        request_source="attribute_sync",
     )

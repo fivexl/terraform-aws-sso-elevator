@@ -466,14 +466,14 @@ class TestErrorResilience:
         with patch("attribute_syncer.s3_module") as mock_s3:
             mock_s3.SyncAuditParams = MagicMock()
             mock_s3.create_sync_audit_entry = MagicMock()
-            mock_s3.log_operation = MagicMock()
+            mock_s3.log_operation_best_effort = MagicMock()
 
             _log_audit_entry(action, "test-bucket", "audit")
 
             # Verify audit entry was created
             mock_s3.SyncAuditParams.assert_called_once()
             mock_s3.create_sync_audit_entry.assert_called_once()
-            mock_s3.log_operation.assert_called_once()
+            mock_s3.log_operation_best_effort.assert_called_once()
 
             # Verify the operation type mapping
             call_kwargs = mock_s3.SyncAuditParams.call_args[1]
@@ -575,3 +575,96 @@ def test_lambda_handler_reads_slack_bot_token_from_ssm_in_degrade_mode(monkeypat
         attribute_syncer._ssm_client, attribute_syncer.SLACK_BOT_TOKEN_PARAMETER_ENV, degrade_on_failure=True
     )
     mock_web_client.assert_called_once_with(token="xoxb-from-ssm")
+
+
+def _sync_context(describe_user_side_effect: object, policy: str = "remove"):  # noqa: ANN202
+    """A SyncContext over a fake Identity Store: both users are in Engineering, so both match the rule."""
+    from attribute_syncer import SyncContext
+    from sync_config import SyncConfiguration
+
+    pages = {
+        "list_groups": [{"Groups": [{"GroupId": "g-eng", "DisplayName": "Engineering"}]}],
+        "list_users": [{"Users": [{"UserId": "u-ok", "UserName": "ok"}, {"UserId": "u-broken", "UserName": "broken"}]}],
+        "list_group_memberships": [
+            {"GroupMemberships": [{"MembershipId": "m-broken", "MemberId": {"UserId": "u-broken"}}]},
+        ],
+    }
+    client = MagicMock()
+    client.get_paginator.side_effect = lambda name: MagicMock(paginate=MagicMock(return_value=pages[name]))
+    client.describe_user.side_effect = describe_user_side_effect
+    config = SyncConfiguration(
+        enabled=True,
+        managed_group_names=("Engineering",),
+        managed_group_ids={},
+        mapping_rules=({"group_name": "Engineering", "attributes": {"department": "Engineering"}},),
+        manual_assignment_policy=policy,  # type: ignore[arg-type]
+        schedule_expression="rate(1 hour)",
+    )
+    return SyncContext(
+        identity_store_client=client,
+        identity_store_id="d-123",
+        s3_client=MagicMock(),
+        slack_client=MagicMock(),
+        config=config,
+        slack_channel_id="C123",
+        audit_bucket_name="bucket",
+        audit_bucket_prefix="audit",
+    )
+
+
+def _described_user(user_id: str, department: str) -> dict:
+    return {
+        "UserId": user_id,
+        "UserName": user_id,
+        "Emails": [{"Value": f"{user_id}@example.com", "Primary": True}],
+        "Extensions": {"aws:identitystore:enterprise": {"department": department}},
+    }
+
+
+def _describe_user_failing_for_broken(UserId: str, **_: object) -> dict:  # noqa: N803
+    if UserId == "u-broken":
+        raise RuntimeError("throttled")
+    return _described_user(UserId, "Engineering")
+
+
+def test_user_whose_attributes_cannot_be_read_is_neither_added_nor_removed():
+    """A failed DescribeUser leaves only the ListUsers record, which has no department; under "remove"
+    that used to remove a member who does match. The user must be skipped and the failure reported."""
+    from attribute_syncer import perform_sync
+
+    ctx = _sync_context(_describe_user_failing_for_broken)
+    with patch("attribute_syncer.s3_module.log_operation"), patch("attribute_syncer.send_notification_for_action"):
+        result = perform_sync(ctx)
+
+    ctx.identity_store_client.delete_group_membership.assert_not_called()
+    added = [c.kwargs["MemberId"]["UserId"] for c in ctx.identity_store_client.create_group_membership.call_args_list]
+    assert added == ["u-ok"]
+    assert result.users_removed == 0
+    assert len(result.errors) == 1
+    assert "broken" in result.errors[0]
+    assert "throttled" in result.errors[0]
+    assert result.to_summary().errors == result.errors
+    assert result.success is False
+
+
+def test_sync_audit_write_failure_logs_full_entry_and_sync_continues():
+    """While S3 is down the syncer's audit entry must reach CloudWatch whole, as the requester's and revoker's do."""
+    import s3 as s3_module
+    from attribute_syncer import perform_sync
+
+    ctx = _sync_context(lambda UserId, **_: _described_user(UserId, "Engineering" if UserId == "u-ok" else "Sales"))  # noqa: N803
+    with (
+        patch.object(s3_module.s3, "put_object", side_effect=RuntimeError("s3 down")) as put_object,
+        patch.object(s3_module.logger, "exception") as log_exception,
+        patch("attribute_syncer.send_notification_for_action"),
+    ):
+        result = perform_sync(ctx)
+
+    # One add (u-ok matches) and one remove (u-broken is in Sales): both executed despite S3 failing.
+    assert put_object.call_count == 2  # noqa: PLR2004
+    assert (result.users_added, result.users_removed) == (1, 1)
+    entries = [c.kwargs["extra"]["audit_entry"] for c in log_exception.call_args_list]
+    assert [e["operation_type"] for e in entries] == ["sync_add", "sync_remove"]
+    assert {e["sso_user_principal_id"] for e in entries} == {"u-ok", "u-broken"}
+    assert all(e["request_source"] == "attribute_sync" for e in entries)
+    assert put_object.call_args.kwargs["Bucket"] == "bucket"
