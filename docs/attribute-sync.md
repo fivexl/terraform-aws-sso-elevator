@@ -109,6 +109,8 @@ The syncer posts to `slack_channel_id`: one message per user added, per manual a
 
 An error on one user or group does not stop the run; it is counted and reported in the summary. When the syncer cannot read a user's attributes (a failed `DescribeUser` call), it neither adds, removes nor warns about that user that run, and counts the failure in the summary and the error notification.
 
+A run that fails with a function error is not retried (`maximum_retry_attempts = 0`); the next scheduled run picks up the work. Lambda still redelivers the event after throttling or a Lambda system error.
+
 ## Do not overlap with `group_config`
 
 A managed group must not also appear in `group_config`. The revoker treats every member of a `group_config` group that it has no scheduled revocation for as an inconsistent assignment: it reports it in Slack and removes it on its scheduled revocation run. The syncer then adds the user back on its next run, and the two keep undoing each other. The module does not catch this: its overlap check compares `group_config` resources (group IDs) with managed group names, so it never matches.

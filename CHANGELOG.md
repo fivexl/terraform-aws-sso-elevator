@@ -49,6 +49,7 @@ Breaking release with downtime. Follow [UPGRADE-5.0.md](UPGRADE-5.0.md).
 - The attribute syncer skips a user whose attributes it cannot read, and reports the failure in its run summary. Before, under the `remove` policy, it could remove a member who matched their group's rule.
 - The attribute syncer's audit entries go to CloudWatch in full while S3 is down, as the requester's and revoker's do; they were lost before. They now hold `request_source` `attribute_sync`.
 - Group entries and revoker entries record `request_source`, so a filter on `slack` or `cli` no longer drops them. A scheduled revocation records the source of the request it ends, and a sweep removal records `revoker`.
+- The attribute syncer's `maximum_retry_attempts = 0` now applies; before, it ran with Lambda's default of 2 async retries after a function error. The apply creates one `aws_lambda_function_event_invoke_config` on the syncer, which replaces any async invoke settings configured on that function outside Terraform. The revoker keeps the default retries on purpose.
 
 ## Older versions
 
