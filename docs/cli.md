@@ -40,4 +40,4 @@ The Lambda then checks, in `src/cli_auth.py`:
 - the assumed role's name starts with `AWSReservedSSO_`. IAM reserves this prefix in every account: `aws iam create-role --role-name AWSReservedSSO_ForgeTest_0000000000000000 ...` with administrator permissions fails with `InvalidInput: The role name 'AWSReservedSSO_ForgeTest_0000000000000000' is reserved for AWS use`. So the name proves the session comes from IAM Identity Center;
 - the session name matches a real Identity Store user, as above.
 
-An old CLI without a proof gets `400` asking to upgrade, an invalid proof gets the generic `403`, and an STS or Organizations outage gets `503`. A proof can be replayed for about 90 seconds, re-submitting the identical request; see [accepted risks](accepted-risks.md#a-cli-proof-can-be-replayed-for-about-90-seconds).
+An old CLI without a proof gets `400` asking to upgrade, an invalid proof gets the generic `403`, and a transient error from STS, Organizations or the Identity Store gets `503`. A proof can be replayed for about 90 seconds, re-submitting the identical request; see [accepted risks](accepted-risks.md#a-cli-proof-can-be-replayed-for-about-90-seconds).

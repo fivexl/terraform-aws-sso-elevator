@@ -34,6 +34,8 @@ aws sts get-caller-identity          # with the profile you will sign with
   from `elevator configure`. If neither exists, ask the user for the
   `requester_api_endpoint_url_cli` value; do not guess a URL. A custom-domain
   endpoint also needs the API id (`ELEVATOR_API_ID` or `--api-id`).
+- The user's Identity Store primary email must belong to a Slack user in the
+  workspace. You cannot check this; a `403` may mean it does not.
 
 ## 2. Build the Request with the User
 
