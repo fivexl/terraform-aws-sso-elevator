@@ -46,6 +46,8 @@ Breaking release with downtime. Follow [UPGRADE-5.0.md](UPGRADE-5.0.md).
 - The reconciliation sweep skips a group membership that is already gone instead of failing the whole run (#246).
 - The revoker's group sweep and inconsistency check use the Identity Store client they are given (#245).
 - A Slack failure in the revoker's batch revocation no longer stops the remaining revocations.
+- The attribute syncer skips a user whose attributes it cannot read, and reports the failure in its run summary. Before, under the `remove` policy, it could remove a member who matched their group's rule.
+- The attribute syncer's audit entries go to CloudWatch in full while S3 is down, as the requester's and revoker's do; they were lost before. They now hold `request_source` `attribute_sync`.
 
 ## Older versions
 

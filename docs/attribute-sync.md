@@ -107,7 +107,7 @@ Each action is written to the audit bucket with one of these operation types:
 
 The syncer posts to `slack_channel_id`: one message per user added, per manual assignment detected, and per manual assignment removed, plus a summary and any errors at the end of a run that changed something or hit an error. Runs with no changes post nothing.
 
-An error on one user or group does not stop the run; it is counted and reported in the summary. A failed `DescribeUser` call is the exception: it is only logged, and the syncer judges that user from their `ListUsers` record, which lacks the enterprise attributes such as `department`. Under `remove`, a member who matched on those attributes can be removed that run.
+An error on one user or group does not stop the run; it is counted and reported in the summary. When the syncer cannot read a user's attributes (a failed `DescribeUser` call), it neither adds, removes nor warns about that user that run, and counts the failure in the summary and the error notification.
 
 ## Do not overlap with `group_config`
 
