@@ -86,8 +86,8 @@ Upgrade and install:
       apply replaces the requester function cleanly, with no dependency cycle or
       "function in use" error.
 - [ ] Fresh install, then upgrade a 4.4.x deployment by following [UPGRADE-5.0.md](../UPGRADE-5.0.md)
-      verbatim, with `ecr_repo_tag` on a 5.x image (`main` or `pr-<N>-<sha>`) until the release PR
-      bumps its default. Expect: Slack and the CLI work again once the Slack, CLI and cross-account steps
+      verbatim, with `ecr_repo_tag` on a pre-release image (`main` or `pr-<N>-<sha>`). The default `5.0.0`
+      image exists only after the tag is pushed. Expect: Slack and the CLI work again once the Slack, CLI and cross-account steps
       after the apply are done; the 4.x requester versions are gone after the version-deletion step.
 - [ ] Slack: the access shortcut opens the modal, submitting it posts the request, and Approve
       and Deny both work (lazy listeners invoked through the `live` alias).

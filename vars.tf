@@ -9,7 +9,7 @@ variable "ecr_repo_tag" {
   type        = string
   # Repository releases use one version for the module, Elevator CLI, and
   # pre-built images. Keep this default aligned with the next release tag.
-  default = "4.4.3"
+  default = "5.0.0"
 }
 
 variable "use_pre_created_image" {
