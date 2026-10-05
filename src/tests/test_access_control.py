@@ -1176,7 +1176,7 @@ def test_execute_decision_grants_against_verified_user_id_for_cli_requests_witho
         patch.object(
             access_control.sso, "create_account_assignment_and_wait_for_result", return_value=SimpleNamespace(request_id="req-1")
         ) as mock_create_assignment,
-        patch.object(access_control.schedule, "schedule_revoke_event"),
+        patch.object(access_control.schedule, "schedule_revoke_event") as mock_schedule,
         patch.object(access_control.s3, "log_operation") as mock_log_operation,
     ):
         result = execute_decision(
@@ -1190,6 +1190,8 @@ def test_execute_decision_grants_against_verified_user_id_for_cli_requests_witho
         )
 
     assert result is not None
+    # The revoker's entry for the expiry records the source the schedule carries.
+    assert mock_schedule.call_args.kwargs["request_source"] == "cli"
     mock_resolve_by_email.assert_not_called()
     account_assignment = mock_create_assignment.call_args.args[1]
     assert account_assignment.user_principal_id == verified_user_id
@@ -1593,6 +1595,7 @@ def test_execute_decision_on_group_request_logs_declined_entry_for_terminal_deni
     assert audit_entry.operation_type == "declined"
     assert audit_entry.decision_reason == denial_reason.value
     assert audit_entry.audit_entry_type == "group"
+    assert audit_entry.request_source == "slack"
     assert audit_entry.group_id == "g-1234"
     assert (audit_entry.approver_slack_id, audit_entry.approver_email) == ("NA", "NA")
 
@@ -1645,6 +1648,7 @@ def test_execute_decision_on_group_request_logs_grant_then_incomplete_when_revok
     assert group_grant_mocks["add_user_to_a_group"].called is not already_in_group
     entries = [c.kwargs["audit_entry"] for c in group_grant_mocks["log_operation"].call_args_list]
     assert [e.operation_type for e in entries] == ["grant", "incomplete"]
+    assert [e.request_source for e in entries] == ["slack", "slack"]
     assert entries[0].group_membership_id == entries[1].group_membership_id == "m-1"
     assert entries[1].error_message == "granted but revoke scheduling failed: scheduler throttled"
 

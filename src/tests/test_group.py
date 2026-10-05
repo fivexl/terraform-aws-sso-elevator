@@ -144,7 +144,7 @@ def test_group_submission_audits_a_refusal_as_declined(group_module, slack_clien
 
     audit_entry = mock_log_operation.call_args.kwargs["audit_entry"]
     assert (audit_entry.operation_type, audit_entry.decision_reason) == ("declined", "RequesterNotAllowed")
-    assert (audit_entry.audit_entry_type, audit_entry.group_id) == ("group", GROUP.id)
+    assert (audit_entry.audit_entry_type, audit_entry.group_id, audit_entry.request_source) == ("group", GROUP.id, "slack")
 
 
 def test_group_self_approval_is_shown_as_auto_approved_after_the_grant(group_module, slack_client):

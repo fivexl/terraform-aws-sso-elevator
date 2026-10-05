@@ -1,6 +1,7 @@
 """Revoker tests: per-invocation Slack token read, loop paths surviving Slack failures,
 and how revocations and expiry show on the request message."""
 
+import json
 import sys
 from datetime import timedelta
 from unittest.mock import ANY, MagicMock, patch
@@ -202,6 +203,15 @@ def test_sweep_skips_a_group_membership_that_is_already_gone(revoker):
     assert [c.kwargs["audit_entry"].audit_entry_type for c in log_operation.call_args_list] == ["group", "account", "account"]
 
 
+def test_sweep_entries_name_the_revoker_as_their_source(revoker):
+    """No request stands behind access the sweep removes, so its entries say "revoker" rather than "NA"."""
+    log_operation = MagicMock()
+
+    _sweep(revoker, log_operation)
+
+    assert [c.kwargs["audit_entry"].request_source for c in log_operation.call_args_list] == ["revoker"] * 4
+
+
 def test_sweep_still_raises_a_real_removal_failure(revoker):
     """Only the audit write is guarded: a failed removal must not read as done."""
     with (
@@ -332,6 +342,46 @@ def test_scheduled_revocation_falls_back_to_a_standalone_notice(revoker, revoke_
     )
 
 
+@pytest.mark.parametrize(
+    ("revoke_event", "request_source"),
+    [
+        (_revoke_event(request_source="cli"), "cli"),
+        (_revoke_event(request_source="slack"), "slack"),
+        (_revoke_event(), "NA"),  # scheduled before events carried the source
+    ],
+)
+def test_scheduled_revocation_audits_the_source_of_its_request(revoker, revoke_event, request_source):
+    with patch.object(revoker.s3, "log_operation_best_effort") as mock_log:
+        _revoke_account(revoker, MagicMock(), revoke_event, post_update_to_slack=False)
+
+    assert mock_log.call_args.args[0].request_source == request_source
+
+
+def test_scheduled_revocation_of_a_cli_grant_audits_cli_from_the_schedule_payload(revoker):
+    """End to end: the payload schedule_revoke_event writes is what the revoker records."""
+    client = MagicMock()
+    with (
+        patch.object(revoker.schedule, "cfg", MagicMock(revoker_function_name="revoker")),
+        patch.object(revoker.schedule, "get_and_delete_scheduled_revoke_event_if_already_exist", return_value=[]),
+    ):
+        revoker.schedule.schedule_revoke_event(
+            schedule_client=client,
+            permission_duration=timedelta(minutes=30),
+            user_account_assignment=_revoke_event().user_account_assignment,
+            channel_id="C1",
+            message_ts="100.1",
+            request_source="cli",
+            **_users(),
+        )
+    payload = json.loads(client.create_schedule.call_args.kwargs["Target"]["Input"])
+    parsed = revoker.Event.model_validate(payload).root
+
+    with patch.object(revoker.s3, "log_operation_best_effort") as mock_log:
+        _revoke_account(revoker, MagicMock(), parsed.revoke_event, post_update_to_slack=False)
+
+    assert mock_log.call_args.args[0].request_source == "cli"
+
+
 def test_scheduled_revocation_never_fails_on_slack_errors(revoker):
     slack_client = MagicMock()
     slack_client.conversations_history.side_effect = RuntimeError("invalid_auth")
@@ -346,7 +396,7 @@ def test_scheduled_group_revocation_ends_its_request_message(revoker, audit_erro
     slack_client.conversations_history.return_value = {"messages": [APPROVED_MESSAGE]}
     with (
         patch.object(revoker.sso, "remove_user_from_group"),
-        patch.object(revoker.s3, "log_operation", side_effect=audit_error),
+        patch.object(revoker.s3, "log_operation", side_effect=audit_error) as mock_log_operation,
         patch.object(revoker.schedule, "delete_schedule") as mock_delete_schedule,
     ):
         revoker.handle_scheduled_group_assignment_deletion(
@@ -358,6 +408,7 @@ def test_scheduled_group_revocation_ends_its_request_message(revoker, audit_erro
         )
 
     mock_delete_schedule.assert_called_once_with(ANY, "s")
+    assert mock_log_operation.call_args.kwargs["audit_entry"].request_source == "slack"
     assert slack_client.chat_update.call_args.kwargs["text"] == ":lock: *Ended · group admins for* <@U_REQ>"
     slack_client.chat_postMessage.assert_called_once_with(channel="C1", thread_ts="100.1", text="Access ended: removed from group admins")
 
@@ -508,6 +559,7 @@ def test_expired_request_writes_one_declined_expired_entry(revoker, group):
     assert entry.permission_duration == timedelta(hours=2)
     if group:
         assert (entry.audit_entry_type, entry.group_id, entry.group_name) == ("group", "g-1234", "Admins")
+        assert entry.request_source == "slack"
     else:
         assert (entry.audit_entry_type, entry.account_id, entry.role_name) == ("account", "111111111111", "Admin")
         assert entry.request_source == "cli"

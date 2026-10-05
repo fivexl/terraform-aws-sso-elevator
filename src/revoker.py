@@ -196,6 +196,7 @@ def handle_account_assignment_deletion(  # noqa: PLR0913
             permission_duration="NA",
             sso_user_principal_id=account_assignment.user_principal_id,
             audit_entry_type="account",
+            request_source="revoker",
         ),
     )
 
@@ -339,6 +340,7 @@ def handle_scheduled_account_assignment_deletion(  # noqa: PLR0913
             permission_duration=revoke_event.permission_duration,
             sso_user_principal_id=user_account_assignment.user_principal_id,
             audit_entry_type="account",
+            request_source=revoke_event.request_source,
         ),
     )
     schedule.delete_schedule(scheduler_client, revoke_event.schedule_name)
@@ -392,6 +394,7 @@ def handle_scheduled_group_assignment_deletion(
             permission_duration=group_revoke_event.permission_duration,
             sso_user_principal_id=group_assignment.user_principal_id,
             audit_entry_type="group",
+            request_source="slack",  # group requests have no CLI path
         ),
     )
     schedule.delete_schedule(scheduler_client, group_revoke_event.schedule_name)
@@ -569,6 +572,7 @@ def handle_sso_elevator_group_scheduled_revocation(  # noqa: PLR0913
                     permission_duration="NA",
                     audit_entry_type="group",
                     sso_user_principal_id=group_assignment.user_principal_id,
+                    request_source="revoker",
                 ),
             )
             if cfg.post_update_to_slack:
@@ -708,7 +712,12 @@ def _log_expired_request(
         logger.exception(f"Failed to look up requester for expired request audit entry: {e}")
         requester_email = "NA"
     if isinstance(request, slack_helpers.RequestForGroupAccess):
-        target = {"group_id": request.group_id, "group_name": request.group_name or "NA", "audit_entry_type": "group"}
+        target = {
+            "group_id": request.group_id,
+            "group_name": request.group_name or "NA",
+            "audit_entry_type": "group",
+            "request_source": "slack",
+        }
     else:
         target = {
             "account_id": request.account_id,
