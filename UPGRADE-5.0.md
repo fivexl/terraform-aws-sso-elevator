@@ -6,9 +6,9 @@ This guide takes a 4.x deployment to 5.0.0. For what is new, see the [changelog]
 
 5.0.0 replaces the HTTP API with one REST API that serves Slack and the CLI. The full apply destroys the old API, so both URLs change, and Slack and the CLI are down until you finish the steps after the apply. Pick a quiet window.
 
-**No rollback to 4.x.** Until the full apply you can stop at any step, and Slack keeps working on 4.x, as long as nobody runs a full `terraform apply` in between. Don't push the step 7 module edit to a branch your CI applies until step 10 is done. A full apply before then can destroy the old HTTP API, and with it the Slack URL, while creating the parameters fails, or switch the Lambdas to parameters that still hold `REPLACE_ME`. After the full apply, fix forward.
+**No rollback to 4.x.** Until the full apply you can stop at any step, and Slack keeps working on 4.x, as long as nobody runs a full `terraform apply` in between. Do not push the step 7 module edit to a branch your CI applies until step 10 is done. A full apply before then can destroy the old HTTP API and its Slack URL and then fail to create the parameters. It can also switch the Lambdas to parameters that still hold `REPLACE_ME`. After the full apply, fix forward.
 
-## Breaking changes
+## Breaking Changes
 
 | What changed | Who is affected | What to do |
 | --- | --- | --- |
@@ -34,13 +34,13 @@ This guide takes a 4.x deployment to 5.0.0. For what is new, see the [changelog]
 - From before 4.4.0: if two Identity Store users share an email, case-insensitively, every request from either of them fails with an "email collision" error. Before, it resolved to whichever came first. Fix the duplicate in Identity Store.
 - From before 4.4.0: `max_permissions_duration_time` must be greater than 0. Terraform rejects other values at plan.
 
-## Before the apply
+## Before the Apply
 
 Nothing in this section touches the running deployment.
 
-1. **SnapStart.** `snap_start` is on by default. Lambda does not offer SnapStart for every region and package type, and the apply fails where it is missing: check [Lambda SnapStart](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html) for Python 3.14 in your region, for container images (`use_pre_created_image = true`, the default) or zip. Where it is not offered, set `snap_start = false`.
+1. **SnapStart.** `snap_start` is on by default. Lambda does not offer SnapStart in every region and for every package type, and the apply fails where it is missing. Check [Lambda SnapStart](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html) for Python 3.14 in your region and your package type: container image (`use_pre_created_image = true`, the default) or zip. Where it is not offered, set `snap_start = false`.
 2. **Image.** If you leave `ecr_repo_tag` unset, the module uses the image built for its own release. If you pin `ecr_repo_tag` or host images yourself (`ecr_repo_name`, `ecr_owner_account_id`), point it at a 5.x image. With `use_pre_created_image = false` the module builds from source and needs nothing here.
-3. **Organization.** Unless you set `enable_access_requester_cli = false`, check that the deployment account is in an AWS Organization and that the principal running Terraform has the Organizations read permissions in [docs/cli.md](docs/cli.md).
+3. **Organization.** Skip this if you set `enable_access_requester_cli = false`. Otherwise check that the deployment account is in an AWS Organization and that the principal running Terraform has the Organizations read permissions in [docs/cli.md](docs/cli.md).
 4. **Old logs.** If you need the HTTP API's access logs, export them now. The apply deletes the log group; the plan shows it as destroyed under `module.http_api`.
 5. **SSM parameters.** Check whether parameters already exist at the default names:
 
@@ -49,12 +49,12 @@ Nothing in this section touches the running deployment.
      --parameter-filters 'Key=Name,Values=/sso-elevator/slack-bot-token,/sso-elevator/slack-signing-secret'
    ```
 
-   If they exist and only this deployment reads them, you delete and recreate them in step 8. If anything else owns or reads them, keep them and set new names instead, for example `slack_bot_token_ssm_parameter_name = "/sso-elevator/v5/slack-bot-token"`. That applies when any Terraform configuration manages them as resources, including this root module, another deployment or tool reads them, or a KMS key policy names them. Two deployments in one account and region always need different names.
+   If they exist and only this deployment reads them, you delete and recreate them in step 8. If anything else owns or reads them, keep them and set new names instead, for example `slack_bot_token_ssm_parameter_name = "/sso-elevator/v5/slack-bot-token"`. That applies when a Terraform configuration manages them as resources (this root module included), when another deployment or tool reads them, or when a KMS key policy names them. Two deployments in one account and region always need different names.
 
    If the output shows a customer managed key in `KeyId`, add `--key-id <key-arn>` to the `put-parameter` commands in step 10. For what that key's policy needs, see [Slack secrets in SSM Parameter Store](docs/slack.md#slack-secrets-in-ssm-parameter-store).
 6. **WAF** (optional). To put AWS WAF in front of the API, set `waf_enabled = true` or `waf_web_acl_arn` ([docs/api-gateway.md](docs/api-gateway.md)). If AWS Firewall Manager attaches a web ACL to your APIs, leave both unset.
 
-## The upgrade
+## The Upgrade
 
 The commands assume the module block is named `aws_sso_elevator` and the default parameter names. Substitute yours. Run them with credentials for the deployment account and region.
 
@@ -79,7 +79,7 @@ The commands assume the module block is named `aws_sso_elevator` and the default
 
    You can also copy both secrets from the Slack app settings in step 10 instead.
 
-   Don't `terraform import` the existing parameters. With no write-only value to go on, the import stores the decrypted secret in state, and the next apply writes `REPLACE_ME` over the real value. That apply clears the secret from the current state, but the earlier state version still holds it. Both behaviours were confirmed against hashicorp/aws 6.67.0.
+   Do not `terraform import` the existing parameters. With no write-only value to go on, the import stores the decrypted secret in state, and the next apply writes `REPLACE_ME` over the real value. That apply clears the secret from the current state, but the earlier state version still holds it. Both behaviours were confirmed against hashicorp/aws 6.67.0.
 
 9. **Create only the two parameters.** Slack keeps working: the 4.x Lambdas still read the secrets from their environment.
 
@@ -91,7 +91,7 @@ The commands assume the module block is named `aws_sso_elevator` and the default
 
    Both parameters now hold the placeholder `REPLACE_ME`.
 
-10. **Write both secrets.** If you didn't save them in step 8, read them in from the Slack app settings without echoing them. Run each line, paste the value (first the Bot User OAuth Token, then the Signing Secret) and press Enter:
+10. **Write both secrets.** If you did not save them in step 8, read them in from the Slack app settings without echoing them. Run each line, paste the value (first the Bot User OAuth Token, then the Signing Secret) and press Enter:
 
     ```sh
     read -rs SLACK_BOT_TOKEN
@@ -108,12 +108,12 @@ The commands assume the module block is named `aws_sso_elevator` and the default
     unset SLACK_BOT_TOKEN SLACK_SIGNING_SECRET
     ```
 
-11. **Run the full `terraform apply`.** Downtime starts here. The apply switches the Lambdas to the 5.x image and to SSM, replaces the API, and publishes a SnapStart version of the requester; it takes a few extra minutes while Lambda takes the snapshot. The plan destroys the HTTP API, its access-log group and the Lambda Function URL, where they exist.
+11. **Run the full `terraform apply`.** Downtime starts here. The apply switches the Lambdas to the 5.x image and to SSM, replaces the API, and publishes a SnapStart version of the requester. It takes a few extra minutes while Lambda takes the snapshot. The plan destroys the HTTP API, its access-log group and the Lambda Function URL, where they exist.
 
-## After the apply
+## After the Apply
 
 12. **Slack.** In the Slack app settings, set the Interactivity Request URL (`request_url` in the manifest) to the `requester_api_endpoint_url` output.
-13. **CLI.** Every CLI user upgrades `elevator` to 5.0.0 or newer ([install](cmd/elevator/README.md)), then points it at the new route:
+13. **CLI.** Skip this step and the next with `enable_access_requester_cli = false`. Every CLI user upgrades `elevator` to 5.0.0 or newer ([install](cmd/elevator/README.md)), then points it at the new route:
 
     ```sh
     elevator configure --endpoint <requester_api_endpoint_url_cli output>
@@ -121,8 +121,8 @@ The commands assume the module block is named `aws_sso_elevator` and the default
 
     Behind a custom domain, first point its API mapping (base path) at the new REST API: the `requester_api_id` output, stage `default`. The old mapping names the deleted HTTP API, and the module does not manage domain mappings. Then pass the custom URL and add `--api-id` with the `requester_api_id` output. `configure --endpoint` clears a saved API id, so give both in one command. Update `ELEVATOR_ENDPOINT`, and `ELEVATOR_API_ID` for a custom domain, wherever scripts or CI set them: the environment overrides the saved config.
 14. **Cross-account callers.** Their permission sets need `execute-api:Invoke` on the `requester_api_execution_arn_cli` output. Replace the old ARN in any policy that still names it.
-15. **Verify.** Submit a Slack request and a CLI request, and check both are granted (or posted for approval). Fix anything that fails before going on.
-16. **Delete the requester's 4.x versions.** This step is required. Each published version keeps its own code and configuration and stays invocable as `function:<name>:<N>` by anyone allowed `lambda:InvokeFunction` on it. A 4.x version with the CLI route on trusts the caller identity in the event, which a direct invoke can forge, and every 4.x version holds the Slack secrets in its environment.
+15. **Verify.** Submit a Slack request and, with the CLI route on, a CLI request. Check that each is granted (or posted for approval). Fix anything that fails before going on.
+16. **Delete the requester's 4.x versions.** This step is required. Each published version keeps its own code and configuration and stays invocable as `function:<name>:<N>` by anyone allowed `lambda:InvokeFunction` on it. A 4.x version with the CLI route on trusts the caller identity in the event, which a direct invoke can forge. Every 4.x version also holds the Slack secrets in its environment.
 
     The revoker's nightly version pruning does not cover this. It keeps the version `live` points to and the newest Active version below it, and right after the upgrade that is the last 4.x version. Delete every version older than `live`. Set `FN` to your `requester_lambda_name`:
 
@@ -136,8 +136,8 @@ The commands assume the module block is named `aws_sso_elevator` and the default
     done
     ```
 
-    The revoker and attribute-syncer also published 4.x versions: the revoker's hold both Slack secrets in their environment, the attribute-syncer's the bot token. The next step makes that token worthless; delete those versions too if you prefer.
-17. **Rotate both Slack secrets.** The 4.x Terraform state holds them in the Lambda environment variables and in any `aws_ssm_parameter` data source values, and so do the 4.x Lambda versions. Generate a new bot token and signing secret in the Slack app settings and write them as in step 10. A new signing secret needs new access-requester containers right away; follow "Rotating a secret" in [docs/slack.md](docs/slack.md). Then purge every state version written before the full apply in your backend, including the one from the targeted apply in step 9, for example the noncurrent versions of the state object in a versioned S3 bucket.
+    The revoker and attribute-syncer also published 4.x versions: the revoker's hold both Slack secrets in their environment, the attribute-syncer's the bot token. Step 17 makes that token worthless, so deleting those versions is optional.
+17. **Rotate both Slack secrets.** The 4.x Terraform state holds them in the Lambda environment variables and in any `aws_ssm_parameter` data source values, and so do the 4.x Lambda versions. Generate a new bot token and signing secret in the Slack app settings and write them as in step 10. A new signing secret needs new access-requester containers right away; follow [Rotating a Secret](docs/slack.md#rotating-a-secret). Then purge from your backend every state version written before the full apply, including the one from the targeted apply in step 9. In a versioned S3 bucket, those are the noncurrent versions of the state object.
 
-    After rotating, check the Slack app is still a member of `slack_channel_id` and invite it again if not. Then repeat the Slack and CLI requests from step 15.
+    After rotating, check the Slack app is still a member of `slack_channel_id` and invite it again if not. Then repeat the requests from step 15.
 18. **Monitoring.** Update uptime checks and alerts that expect `401` from an unsigned POST to the Slack URL: it now gets `400` from API Gateway.

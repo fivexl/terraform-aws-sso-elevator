@@ -2,7 +2,7 @@
 
 Approval rules come from two inputs: `config` for account and permission-set requests, and `group_config` for group-membership requests. Each is a list of statements. The module writes both to `config/approval-config.json` in the config bucket, and the Lambdas load them from there.
 
-## Account statements (`config`)
+## Account Statements (`config`)
 
 Each statement says what can be requested, who approves it, and optionally who may request it.
 
@@ -12,8 +12,8 @@ Each statement says what can be requested, who approves it, and optionally who m
 - **Approvers**: an email or a list of emails.
 - **AllowSelfApproval**: `true` lets a requester who is in this statement's `Approvers` get access without anyone approving. `false` is an explicit deny (see below). Unset by default.
 - **ApprovalIsNotRequired**: `true` grants access without approval. `false` is an explicit deny. Unset by default.
-- **AllowedGroups**: optional. An SSO group ID or a list of them. See [Restricting who can request access](#restricting-who-can-request-access).
-- **AllowedUsers**: optional. An email or a list of emails. See [Restricting who can request access](#restricting-who-can-request-access).
+- **AllowedGroups**: optional. An SSO group ID or a list of them. See [Restricting Who Can Request Access](#restricting-who-can-request-access).
+- **AllowedUsers**: optional. An email or a list of emails. See [Restricting Who Can Request Access](#restricting-who-can-request-access).
 
 A field that takes a list also accepts a single string.
 
@@ -41,7 +41,7 @@ config = [
 ]
 ```
 
-## Group statements (`group_config`)
+## Group Statements (`group_config`)
 
 Group requests add the requester to an IAM Identity Center group for a limited time. They are Slack-only (the `group-access` global shortcut, see [Slack](slack.md)); the CLI requests account access only.
 
@@ -68,7 +68,7 @@ group_config = [
 
 Do not put a group managed by [attribute sync](attribute-sync.md) in `group_config`.
 
-## How a request is decided
+## How a Request Is Decided
 
 For a request, the Elevator collects every statement that matches it (the account and permission set, or the group) and that the requester may use. Then:
 
@@ -77,13 +77,13 @@ For a request, the Elevator collects every statement that matches it (the accoun
 3. **Approvers.** Otherwise the approvers are the union of `Approvers` across all those statements, minus the requester. A statement covering all accounts adds its approvers to every request, even where a narrower statement exists.
 4. **Nobody can approve.** If that set is empty, the request fails with "Nobody can approve this request." This is what happens when the requester is the only approver and self-approval is not allowed. If no statement matches, the request fails with "No statement in the configuration covers this request."
 
-Explicit deny only governs the automatic decision. When someone clicks Approve, the click counts if the clicker is in the `Approvers` of any matching statement, and, for a click on their own request, that statement sets `AllowSelfApproval = true`. So a requester denied self-approval by one statement can still approve their own request by clicking, if another matching statement lists them with `AllowSelfApproval = true`. Do not give one person both.
+Explicit deny only governs the automatic decision. When someone clicks Approve, the click counts if the clicker is in the `Approvers` of any matching statement. For a click on their own request, that statement must also set `AllowSelfApproval = true`. So a requester denied self-approval by one statement can still approve their own request by clicking, if another matching statement lists them with `AllowSelfApproval = true`. Do not give one person both.
 
 The diagram below shows steps 1-4. It predates `AllowedGroups`/`AllowedUsers`: statements the requester may not use are dropped before its first step.
 
 ![Diagram of processing a request](Diagram_of_processing_a_request.png)
 
-## Restricting who can request access
+## Restricting Who Can Request Access
 
 Without `AllowedGroups` or `AllowedUsers`, a statement says what can be requested and who approves it, but anyone the Elevator can resolve in IAM Identity Center may request it. The two fields restrict the requester, in both `config` and `group_config`:
 
@@ -127,24 +127,24 @@ group_config = [
 ]
 ```
 
-## How requesters are matched to IAM Identity Center users
+## How Requesters Are Matched to IAM Identity Center Users
 
 A Slack request is matched by the requester's Slack email. A CLI request is matched by the identity the CLI proves, never by email fallback.
 
-If two or more Identity Store users share an email case-insensitively, every request that resolves to that email fails with an "email collision" error until the duplicate is removed in the Identity Store.
+If two or more Identity Store users share an email case-insensitively, every request that resolves to that email fails with an "email collision" error. The error stays until someone removes the duplicate in the Identity Store.
 
-### Secondary domain fallback
+### Secondary Domain Fallback
 
 **Strongly discouraged: it can grant access to the wrong person.**
 
-When a Slack email's domain differs from the one in IAM Identity Center (Slack `john.doe@old.domain`, Identity Center `john.doe@new.domain`), `secondary_fallback_email_domains = ["@new.domain"]` makes the Elevator retry the lookup with the Slack local part and each listed domain, in order. Each entry starts with `@`.
+When a Slack email's domain differs from the one in IAM Identity Center, `secondary_fallback_email_domains` makes the Elevator retry the lookup with the Slack local part and each listed domain, in order. For example, with Slack `john.doe@old.domain` and Identity Center `john.doe@new.domain`, set `secondary_fallback_email_domains = ["@new.domain"]`. Each entry starts with `@`.
 
 - The Slack email is always tried first.
 - It applies to Slack requesters only. Approvers must have the same email in Slack as in the configuration.
 - The request message in Slack shows a :warning: line when a requester was matched through a fallback domain.
 - If different people share a local part across domains, a request can resolve to the wrong user. Use it only when you cannot align the domains, and remove the entries once you have.
 
-## Direct messages to requesters
+## Direct Messages to Requesters
 
 Some teams keep only approvers in the Elevator channel, so requesters never see what happened to their request. With `send_dm_if_user_not_in_channel = true` (the default), the Elevator sends the request status and result as a direct message to a requester who is not in the channel.
 

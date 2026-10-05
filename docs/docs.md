@@ -1,3 +1,3 @@
 ## SSO Delegation
 
-Moved to [Deployment → SSO delegation](deployment.md#sso-delegation).
+Moved to [Deployment → SSO Delegation](deployment.md#sso-delegation).

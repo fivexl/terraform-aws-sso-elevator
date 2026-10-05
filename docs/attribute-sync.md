@@ -2,7 +2,7 @@
 
 Attribute sync keeps IAM Identity Center group membership in line with user attributes (department, title, cost center and so on). It adds members for good, unlike `group_config`, which grants time-limited membership on request.
 
-## How it works
+## How It Works
 
 ```mermaid
 sequenceDiagram
@@ -61,7 +61,7 @@ The `attribute_sync_*` variables, `attribute_syncer_lambda_name` and `identity_s
 
 When `attribute_sync_enabled = true`, `terraform apply` fails if `attribute_sync_managed_groups` or `attribute_sync_rules` is empty, if a rule names a group missing from `attribute_sync_managed_groups`, or if `sso_instance_arn` is set without `identity_store_id`. The check runs as a `local-exec` during apply, not during plan.
 
-## Mapping rules
+## Mapping Rules
 
 Each rule has:
 
@@ -81,9 +81,9 @@ Any other name is never read, so the syncer treats it as unset. For example, use
 
 A missing attribute counts as the empty string, so a condition with value `""` matches every user who lacks that attribute, or names one the syncer does not read. Do not use empty values.
 
-A managed group name that does not exist in the Identity Store is logged as an error and its rules are skipped.
+The syncer logs a managed group name that does not exist in the Identity Store as an error and skips its rules.
 
-## Rolling it out
+## Rolling It Out
 
 Under the default `remove` policy, the first run removes every current member of a managed group who does not match its rules, including people you added by hand. To see what would happen first:
 
@@ -91,11 +91,11 @@ Under the default `remove` policy, the first run removes every current member of
 2. Read the Slack notifications and audit entries for manual assignments; fix the rules or the users' attributes.
 3. Switch to `remove`.
 
-Under `warn`, a user who stops matching (for example, changes department) stays in the group, and is reported on every run until removed by hand.
+Under `warn`, a user who stops matching (for example, changes department) stays in the group, and is reported on every run until someone removes them by hand.
 
 To turn the feature off, set `attribute_sync_enabled = false` and apply. The Lambda and its schedule are deleted; group memberships and audit entries stay as they are.
 
-## Audit entries
+## Audit Entries
 
 Each action is written to the audit bucket with one of these operation types:
 
@@ -103,14 +103,14 @@ Each action is written to the audit bucket with one of these operation types:
 - `sync_remove`: member removed because they match no rule (policy `remove`).
 - `manual_detected`: member matches no rule and was left in place (policy `warn`), written on every run.
 
-## Slack notifications
+## Slack Notifications
 
-The syncer posts to `slack_channel_id`: one message per user added, per manual assignment detected, and per manual assignment removed, plus a summary and any errors at the end of a run that changed something or hit an error. Runs with no changes post nothing.
+The syncer posts to `slack_channel_id` one message per user added, per manual assignment detected and per manual assignment removed. At the end of a run that changed something or hit an error, it also posts a summary and any errors. Runs with no changes post nothing.
 
-An error on one user or group does not stop the run; it is counted and reported in the summary. When the syncer cannot read a user's attributes (a failed `DescribeUser` call), it neither adds, removes nor warns about that user that run, and counts the failure in the summary and the error notification.
+An error on one user or group does not stop the run; it is counted and reported in the summary. When the syncer cannot read a user's attributes (a failed `DescribeUser` call), it skips that user for the run: no add, no removal, no warning. The summary and the error notification count the failure. A failed read of a group's members is the exception. The syncer logs it and treats the group as empty for that run: it tries to add every matching user, removes no one, and does not count the failure in the summary.
 
 A run that fails with a function error is not retried (`maximum_retry_attempts = 0`); the next scheduled run picks up the work. Lambda still redelivers the event after throttling or a Lambda system error.
 
-## Do not overlap with `group_config`
+## Do Not Overlap with `group_config`
 
-A managed group must not also appear in `group_config`. The revoker treats every member of a `group_config` group that it has no scheduled revocation for as an inconsistent assignment: it reports it in Slack and removes it on its scheduled revocation run. The syncer then adds the user back on its next run, and the two keep undoing each other. The module does not catch this: its overlap check compares `group_config` resources (group IDs) with managed group names, so it never matches.
+A managed group must not also appear in `group_config`. The revoker finds every member of a `group_config` group who has no scheduled revocation. It reports each one in Slack as an inconsistent assignment and removes it on its next sweep. The syncer then adds the user back on its next run, and the two keep undoing each other. The module does not catch this: its overlap check compares `group_config` resources (group IDs) with managed group names, so it never matches.

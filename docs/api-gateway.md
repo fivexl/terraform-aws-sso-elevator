@@ -9,21 +9,21 @@ It is a REST API rather than an HTTP API because only REST APIs support WAF, res
 
 Each route is throttled separately with `api_gateway_throttling_burst_limit` and `api_gateway_throttling_rate_limit`.
 
-Each apply that changes the Lambda publishes a new version and moves `live` to it. Async invokes of `live` (Slack lazy listeners, such as approve and deny) are not retried after a function error, though Lambda still redelivers them after throttling or a Lambda system error ([accepted risks](accepted-risks.md#async-retries-are-off-only-for-function-errors)).
+Each apply that changes the Lambda publishes a new version and moves `live` to it. Async invokes of `live` (Slack lazy listeners, such as approve and deny) are not retried after a function error. Lambda still redelivers them after throttling or a Lambda system error ([accepted risks](accepted-risks.md#async-retries-are-off-only-for-function-errors)).
 
-## Access logs
+## Access Logs
 
 Stage access logs are off by default. `api_gateway_access_logs_enabled = true` creates the log group `/aws/apigateway/<api_gateway_name>/default/access` (retention `logs_retention_in_days`) and turns them on. REST API logging needs the account-wide API Gateway CloudWatch Logs role (`aws_api_gateway_account`) to be set already, or the apply fails. The module does not set it, because other APIs in the account may depend on its current value.
 
 ## SnapStart
 
-Slack drops a request the Lambda hasn't answered within 3 seconds, and a cold start of the requester spends most of that on imports, the approval config from S3, both Slack secrets and Slack's `auth.test`. With `snap_start = true` (the default) Lambda takes a snapshot of the initialized requester when Terraform publishes a version, and new execution environments start from it.
+Slack drops a request that the Lambda has not answered within 3 seconds. A cold start of the requester spends most of that time on imports, the approval config from S3, both Slack secrets and Slack's `auth.test`. With `snap_start = true` (the default) Lambda takes a snapshot of the initialized requester when Terraform publishes a version, and new execution environments start from it.
 
 Set `snap_start = false` where Lambda does not offer SnapStart for the runtime and package type in your region: the apply fails there. The pre-built images are container images; see [Lambda images](deployment.md#lambda-images) for where they exist.
 
-The snapshot holds no approval rules and no Slack secrets. A SnapStart restore hook reads them after each restore, so a restored environment is never staler than a cold-started one. The hook's reads time out within seconds to fit Lambda's restore timeout; if one fails, Lambda fails the restore and the request errors rather than run with the snapshot's empty rules.
+The snapshot holds no approval rules and no Slack secrets. A SnapStart restore hook reads them after each restore, so a restored environment is never staler than a cold-started one. The hook's reads time out within seconds to fit Lambda's restore timeout. If one fails, Lambda fails the restore, and the request errors rather than run with the snapshot's empty rules.
 
-Lambda bills SnapStart for Python per cached version and per restore. Each apply that changes the requester publishes a version, so the revoker's nightly run (`schedule_expression`) deletes all but the version `live` points to and one Active version below it, kept for rollback. Versions above `live` are left alone, since one may be mid-publish. Pruning runs whatever `snap_start` is set to.
+Lambda bills SnapStart for Python per cached version and per restore. Each apply that changes the requester publishes a version. The revoker's nightly run (`schedule_expression`) deletes all but two of them: the version `live` points to and one Active version below it, kept for rollback. Versions above `live` are left alone, since one may be mid-publish. Pruning runs whatever `snap_start` is set to.
 
 With `snap_start = false` the requester reads everything at cold start.
 
@@ -31,8 +31,8 @@ With `snap_start = false` the requester reads everything at cold start.
 
 Optional, off by default. Two modes, which cannot be combined:
 
-- `waf_enabled = true`: the module creates a REGIONAL web ACL, associates it with the API stage and logs to the CloudWatch log group `aws-waf-logs-<api_gateway_name>`, with the `authorization`, `x-amz-security-token` and `x-slack-signature` headers redacted. CloudWatch metrics are on; request sampling is off, because redaction does not apply to sampled requests. Rules, in order:
-  1. A per-IP rate limit, `waf_rate_limit` requests per 5 minutes (default 1000, minimum 10). It stops one noisy IP from using up the API Gateway throttle that all callers share. All Slack traffic arrives from Slack's shared IPs and one access request takes about 5 calls, so a low limit blocks Slack bursts; the API Gateway throttle stays the tighter overall cap.
+- `waf_enabled = true`: the module creates a REGIONAL web ACL and associates it with the API stage. It logs to the CloudWatch log group `aws-waf-logs-<api_gateway_name>`, with the `authorization`, `x-amz-security-token` and `x-slack-signature` headers redacted. CloudWatch metrics are on; request sampling is off, because redaction does not apply to sampled requests. Rules, in order:
+  1. A per-IP rate limit, `waf_rate_limit` requests per 5 minutes (default 1000, minimum 10). It stops one noisy IP from using up the API Gateway throttle that all callers share. All Slack traffic arrives from Slack's shared IPs, and one access request takes about 5 calls. A low limit therefore blocks Slack bursts; the API Gateway throttle stays the tighter overall cap.
   2. `AWSManagedRulesCommonRuleSet`, with `SizeRestrictions_BODY` set to Count because Slack modal submissions can exceed its 8 KB limit.
   3. `AWSManagedRulesKnownBadInputsRuleSet`.
   4. `AWSManagedRulesAmazonIpReputationList`.
@@ -40,7 +40,7 @@ Optional, off by default. Two modes, which cannot be combined:
   Cost is about $9 a month plus $0.60 per million requests.
 - `waf_web_acl_arn = "<arn>"`: associates a REGIONAL web ACL you manage.
 
-The `waf_web_acl_arn` value must be known at plan time: it decides whether the association exists (`count`), so the ARN of a web ACL created in the same apply fails the plan with "Invalid count argument". Create the web ACL first, or pass a literal ARN. Setting both inputs also fails at plan.
+The `waf_web_acl_arn` value must be known at plan time, because it decides whether the association exists (`count`). The ARN of a web ACL created in the same apply therefore fails the plan with "Invalid count argument". Create the web ACL first, or pass a literal ARN. Setting both inputs also fails at plan.
 
 If AWS Firewall Manager associates a web ACL with your API Gateway stages, leave both unset: an association from the module would conflict with it.
 

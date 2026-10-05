@@ -1,4 +1,4 @@
-# Release testing
+# Release Testing
 
 Live checks to run on real AWS before a release that changes the Lambdas, the API
 Gateway, WAF, IAM or the Slack secret handling. Unit tests mock AWS and Slack, so they
@@ -12,7 +12,7 @@ output, scenario, result.
 
 - An AWS Organization with IAM Identity Center, a Slack app and a test channel.
 - Two deployments, because a delegated administrator cannot manage access to the
-  management account ([SSO delegation](deployment.md#sso-delegation)):
+  management account ([SSO Delegation](deployment.md#sso-delegation)):
   - **tooling**: the module in the delegated administrator account (the CLI route is on by
     default);
   - **management**: the module in the management account, approval statements scoped
@@ -25,12 +25,12 @@ output, scenario, result.
 
 ## Scenarios
 
-### Install and upgrade
+### Install and Upgrade
 
 1. **Fresh install.** Apply into an account without the module.
    - Expect: both SSM parameters hold `REPLACE_ME`, and an access-requester invoke fails at
      init (with SnapStart, at restore) with an error naming the parameter.
-   - Write the real secrets ("Fresh install" in [slack.md](slack.md)). Without a redeploy, the
+   - Write the real secrets ([Fresh Install](slack.md#fresh-install)). Without a redeploy, the
      next request succeeds.
 2. **Upgrade from the previous major.** Follow the release's upgrade guide (for 5.0.0,
    [UPGRADE-5.0.md](../UPGRADE-5.0.md)) step by step on a deployment running the previous release.
@@ -60,21 +60,21 @@ output, scenario, result.
    management deployment.
    - Expect: assignment created, revoked on expiry.
 
-### Background Lambdas and failure handling
+### Background Lambdas and Failure Handling
 
 10. **Revoker**: wait for the grants from 4–9 to expire.
     - Expect: each assignment removed; no errors in the revoker log.
 11. **Attribute syncer**: invoke with `{}`.
     - Expect: `success: true`, `error_count: 0`, no warnings.
 12. **Placeholder secret on a running deployment**: save both values, write `REPLACE_ME`
-    to both, force new containers on the `live` alias ("Rotating a secret" in [slack.md](slack.md)), then:
+    to both, force new containers on the `live` alias ([Rotating a Secret](slack.md#rotating-a-secret)), then:
     - invoke the access-requester: expect init (or SnapStart restore) failure;
     - invoke the attribute syncer: expect success with an error logged for the Slack token.
 
     Restore the values, check their hashes, force new containers again, and repeat a
     CLI request: expect success.
 
-## 5.0.0: REST API, WAF and CLI identity proof
+## 5.0.0: REST API, WAF and CLI Identity Proof
 
 Run on top of the scenarios above, on the release commit. Tick each box in the PR's test plan
 with its evidence.
@@ -119,7 +119,7 @@ WAF:
       apply is followed by a clean plan. Setting both fails at plan.
 - [ ] With the module web ACL, a Slack request and a CLI request both pass.
 
-Revoker and retries:
+Revoker and lazy-listener retries:
 
 - [ ] A scheduled revocation runs from its one-time schedule, not the daily
       `schedule_expression` run. Group revocation, approver reminders and request expiry

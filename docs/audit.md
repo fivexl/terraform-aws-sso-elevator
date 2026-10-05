@@ -6,13 +6,13 @@ Audit writes never block access expiry. While S3 is unavailable, the requester, 
 
 ## Fields
 
-The columns below follow `AuditEntry` in `src/s3.py`. Fields that don't apply to an entry hold the string `"NA"`.
+The columns below follow `AuditEntry` in `src/s3.py`. Fields that do not apply to an entry hold the string `"NA"`.
 
 `operation_type`:
 
 - `grant`, `revoke`: access given or taken away. `audit_entry_type` says whether it was an account assignment (`account`) or a group membership (`group`).
 - `declined`: the request ended without access. `decision_reason` holds a policy reason (such as `NoApprovers`, `NoStatements`, `RequesterNotAllowed` or `NoApproversFoundInSlack`), or `Discarded`, or `Expired`.
-- `incomplete`: an approved request failed. `error_message` holds the error, prefixed with the failed step when access was already granted; match it to its `grant` entry by `request_id` or `group_membership_id`. An `incomplete` entry whose `error_message` starts with `granted but grant audit write failed:` has no `grant` entry: the access was granted, and unless the message also names a failed revoke scheduling, it was scheduled for revocation as usual.
+- `incomplete`: an approved request failed. `error_message` holds the error, prefixed with the failed step when access was already granted; match it to its `grant` entry by `request_id` or `group_membership_id`. An `incomplete` entry whose `error_message` starts with `granted but grant audit write failed:` has no `grant` entry. The access was granted, and unless the message also names a failed revoke scheduling, it was scheduled for revocation as usual.
 - `sync_add`, `sync_remove`, `manual_detected`: [attribute sync](attribute-sync.md) changes. `sync_operation` is `attribute_sync`, and `matched_attributes` and `sso_user_email` are filled.
 
 Other fields worth knowing:
@@ -22,7 +22,7 @@ Other fields worth knowing:
 - `matched_attributes` is the string `"NA"` when absent but a JSON object when present, so the table declares it `string`; read the populated case with `json_extract`.
 - `version` is `2` from 5.0.0 on and null on older records.
 
-## Create the Athena table
+## Create the Athena Table
 
 Replace `bucket_name` and `s3_bucket_partition_prefix` (both places), and set the start of `projection.timestamp.range` to the date of your first record.
 

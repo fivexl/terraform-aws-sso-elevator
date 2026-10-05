@@ -11,18 +11,18 @@
 
 =========================================================================
 
-# Terraform module for implementing temporary elevated access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack
+# Terraform Module for Temporary Elevated Access via AWS IAM Identity Center (Successor to AWS Single Sign-On) and Slack
 
 AWS IAM Identity Center has no temporary permission set assignments. Teams end up with either tightly restricted permission sets or IAM role chaining, and both make the security model complex. The better default is no access (or read-only), with more granted only when needed and only for as long as needed.
 
-SSO Elevator does that. People request a permission set in an account, or membership in a group, from Slack or from the command line; approvers approve in Slack; the module grants the access and removes it when the requested duration ends. Every grant, revocation and declined request is written to an S3 audit log.
+SSO Elevator does that. People request a permission set in an account, or membership in a group, from Slack or from the command line. Approvers approve in Slack. The module grants the access and removes it when the requested duration ends. Every grant, revocation and declined request is written to an S3 audit log.
 
-AWS describes its own approach in [Managing temporary elevated access to your AWS environment](https://aws.amazon.com/blogs/security/managing-temporary-elevated-access-to-your-aws-environment/). SSO Elevator differs mainly in using Slack as the request and approval interface. AWS partners also offer temporary access for IAM Identity Center ([CyberArk Secure Cloud Access, Ermetic and Okta Access Requests](https://aws.amazon.com/about-aws/whats-new/2023/05/aws-partners-temporary-elevated-access-capabilities-iam-identity-center/)); if you already use one of them, check their offering first.
+AWS describes its own approach in [Managing temporary elevated access to your AWS environment](https://aws.amazon.com/blogs/security/managing-temporary-elevated-access-to-your-aws-environment/). SSO Elevator differs mainly in using Slack as the request and approval interface. Several AWS partners also offer temporary access for IAM Identity Center ([CyberArk Secure Cloud Access, Ermetic and Okta Access Requests](https://aws.amazon.com/about-aws/whats-new/2023/05/aws-partners-temporary-elevated-access-capabilities-iam-identity-center/)). If you already use one of them, check their offering first.
 
 Watch demo
 [![Demo](https://img.youtube.com/vi/iR3Rdjd7QMU/maxresdefault.jpg)](https://youtu.be/iR3Rdjd7QMU)
 
-## How it works
+## How It Works
 
 ```mermaid
 sequenceDiagram
@@ -44,13 +44,13 @@ sequenceDiagram
 
 - **Two ways to ask, one pipeline.** Slack and the [`elevator` CLI](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/cmd/elevator/README.md) both call one REST API in front of the access-requester Lambda. CLI requests go through the same approval rules and are posted to the same Slack channel for approval. The CLI requests account access only.
 - **Approval rules** in Terraform (`config`, `group_config`) decide per account, permission set or group who approves, whether approval is needed, and whether people may approve their own requests.
-- **Revocation.** Each grant gets a one-time EventBridge Scheduler schedule that triggers the access-revoker Lambda. The revoker also runs a sweep (`schedule_expression`, nightly by default) that removes access nobody scheduled for removal, and a check (`schedule_expression_for_check_on_inconsistency`, every 2 hours by default) that warns about it in Slack.
+- **Revocation.** Each grant gets a one-time EventBridge Scheduler schedule that triggers the access-revoker Lambda. The revoker also runs a sweep (`schedule_expression`, nightly by default) that removes access nobody scheduled for removal. A check (`schedule_expression_for_check_on_inconsistency`, every 2 hours by default) warns about such access in Slack.
 - **Audit.** Grants, revocations, declined requests and approved requests that failed partway are stored in S3 and can be queried with Athena. Audit writes never block access expiry: if S3 fails, access is still revoked on time and the entry goes to CloudWatch Logs instead.
 - **Optional:** [attribute-based group sync](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/attribute-sync.md) keeps group membership in line with Identity Store user attributes.
 
-## Important considerations
+## Important Considerations
 
-- **The revoker removes user-level assignments it did not create.** In every account named by an approval rule (all accounts if any rule uses `"Resource": "*"`), it removes user-level assignments of the permission sets the rules name (all permission sets if any rule uses `"PermissionSet": "*"`) that have no pending revocation schedule. Give permanent access (read-only in production, admin in sandboxes) by assigning permission sets to groups, which the revoker never touches, and make sure your administrators reach the IAM Identity Center account through a group before you deploy.
+- **The revoker removes user-level assignments it did not create.** In every account named by an approval rule, it removes user-level assignments of the permission sets the rules name that have no pending revocation schedule. A rule with `"Resource": "*"` extends this to all accounts, and one with `"PermissionSet": "*"` to all permission sets. Give permanent access (read-only in production, admin in sandboxes) by assigning permission sets to groups, which the revoker never touches. Before you deploy, make sure your administrators reach the IAM Identity Center account through a group.
 - **The same goes for groups.** Members of a group in `group_config` who have no pending revocation schedule are removed, however they were added.
 - **Users are matched by email.** The requester's Slack email must equal the email of their IAM Identity Center user (or match it under one of `secondary_fallback_email_domains`). CLI callers are matched the other way: SSO username, then that user's email, then the Slack user with that email.
 - **AWS Organization.** The CLI route, on by default, needs the deployment account to be in an AWS Organization and admits callers from any account in it. Set `enable_access_requester_cli = false` if you only use Slack. See [docs/cli.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/cli.md).
@@ -78,7 +78,7 @@ module "aws_sso_elevator" {
     {
       "ResourceType" : "Account",
       # One account to start. "*" makes the revoker act in every account:
-      # read "Important considerations" first.
+      # read "Important Considerations" first.
       "Resource" : ["111111111111"],
       "PermissionSet" : "ReadOnlyAccess",
       "Approvers" : ["lead@example.com"],
@@ -98,13 +98,13 @@ output "requester_api_endpoint_url_cli" {
 
 Then:
 
-1. Create the Slack app, point it at the `requester_api_endpoint_url` output and write the bot token and signing secret to SSM: [docs/slack.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/slack.md).
+1. Create the Slack app and point it at the `requester_api_endpoint_url` output. Then write the bot token and signing secret to SSM: [docs/slack.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/slack.md).
 2. Write your approval rules: [docs/configuration.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/configuration.md).
 3. For a fuller module block and the image options: [docs/deployment.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/deployment.md).
 
 ## Upgrading to 5.0
 
-5.0.0 has breaking changes: new Terraform and AWS provider minimums, removed inputs, Slack secrets moved to SSM, new Slack and CLI URLs, and CLI 5.0.0 or newer required. From 4.x, follow [UPGRADE-5.0.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/UPGRADE-5.0.md). On 3.x or older, upgrade to 4.4.3 first ([UPGRADE-4.0.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/UPGRADE-4.0.md)).
+5.0.0 has breaking changes. It raises the Terraform and AWS provider minimums, removes inputs, moves the Slack secrets to SSM, changes the Slack and CLI URLs, and requires CLI 5.0.0 or newer. From 4.x, follow [UPGRADE-5.0.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/UPGRADE-5.0.md). On 3.x or older, upgrade to 4.4.3 first ([UPGRADE-4.0.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/UPGRADE-4.0.md)).
 
 ## Documentation
 
@@ -120,7 +120,7 @@ Then:
 - [Changelog](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/CHANGELOG.md), [UPGRADE-5.0.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/UPGRADE-5.0.md), [UPGRADE-4.0.md](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/UPGRADE-4.0.md)
 - Contributors: [development](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/development.md), [releasing](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/releasing.md), [release testing](https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/release-testing.md)
 
-# Terraform docs 
+# Terraform Docs
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -289,6 +289,6 @@ Then:
 | <a name="output_waf_web_acl_arn"></a> [waf\_web\_acl\_arn](#output\_waf\_web\_acl\_arn) | ARN of the web ACL associated with the requester API: the module-created one (waf\_enabled) or waf\_web\_acl\_arn. null when neither is set. |
 <!-- END_TF_DOCS -->
 
-## More info
+## More Info
 - [Permission Set](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
 - [User and groups](https://docs.aws.amazon.com/singlesignon/latest/userguide/users-groups-provisioning.html)

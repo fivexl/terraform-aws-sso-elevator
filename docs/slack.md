@@ -2,22 +2,22 @@
 
 Users request and approve access through a Slack app. Setting it up takes a Terraform apply, the app itself, and two secrets written to SSM Parameter Store. Upgrading from 4.x, where the secrets were module inputs: follow [UPGRADE-5.0.md](../UPGRADE-5.0.md) instead.
 
-## Fresh install
+## Fresh Install
 
 1. Run a full `terraform apply`. The Lambdas start with placeholder secrets: the access-requester refuses to start, and the revoker and attribute-syncer run without Slack until step 3.
 2. [Create the Slack app](#create-the-slack-app) with the `requester_api_endpoint_url` output as its request URL.
 3. [Write both secrets](#slack-secrets-in-ssm-parameter-store) to SSM.
 4. Invite the app to the channel in `slack_channel_id` (`/invite @AWS SSO Access Elevator`). It can only post in channels it is a member of.
 
-No redeploy is needed. A failed access-requester start is not cached, so the next Slack request starts it again and it reads the new values; the revoker and attribute-syncer read the bot token on every invocation.
+No redeploy is needed. A failed access-requester start is not cached, so the next Slack request starts it again and it reads the new values. The revoker and attribute-syncer read the bot token on every invocation.
 
-## Create the Slack app
+## Create the Slack App
 
 1. Go to https://api.slack.com/apps and click **Create New App**.
 2. Choose **From a manifest**, select the workspace, and choose YAML.
 3. Paste the manifest below, with `request_url` set to the `requester_api_endpoint_url` Terraform output.
 4. Review the scopes and click **Create**, then **Install to Workspace**.
-5. From **Basic Information**, copy the **Signing Secret**. From **OAuth & Permissions**, copy the **Bot User OAuth Token** (`xoxb-...`). Write both to SSM as below.
+5. Copy the **Signing Secret** from **Basic Information** and the **Bot User OAuth Token** (`xoxb-...`) from **OAuth & Permissions**. Write both to SSM as below.
 
 ```yaml
 display_information:
@@ -66,13 +66,13 @@ settings:
 
 All Slack traffic (shortcuts, form submissions, button clicks) arrives on the interactivity request URL. The app needs no event subscriptions or slash commands. API Gateway rejects a POST without Slack's signature headers with `400` before it reaches the Lambda; the Lambda then verifies the signature with the signing secret.
 
-## Slack secrets in SSM Parameter Store
+## Slack Secrets in SSM Parameter Store
 
-The Lambdas read the bot token and signing secret from two SSM SecureString parameters at runtime. The module creates both with the placeholder `REPLACE_ME` through the write-only `value_wo` argument, and the Lambdas treat the placeholder as an unset secret. You write the real values with the AWS CLI.
+At runtime, the Lambdas read the bot token and signing secret from two SSM SecureString parameters. The module creates both with the placeholder `REPLACE_ME` through the write-only `value_wo` argument, and the Lambdas treat the placeholder as an unset secret. You write the real values with the AWS CLI.
 
 **Why by hand.** Terraform writes every value it manages into its state in plain text, including a SecureString parameter's `value`. Anyone who can read the state, or an old version of it in a versioned S3 backend, can read the secret. A write-only argument is the one kind of value Terraform never stores, so the module writes only the placeholder and the real secrets never pass through Terraform.
 
-Later applies leave your value alone, with three exceptions that replace the parameter with a fresh placeholder or delete it: changing `slack_*_ssm_parameter_name`, moving the module to a new address without a `moved` block, and `terraform destroy`.
+Later applies leave your value alone, with three exceptions. Changing `slack_*_ssm_parameter_name`, moving the module to a new address without a `moved` block, or running `terraform destroy` replaces the parameter with a fresh placeholder or deletes it.
 
 | Variable | Default | Read by |
 | -------- | ------- | ------- |
@@ -95,7 +95,7 @@ unset SLACK_BOT_TOKEN SLACK_SIGNING_SECRET
 
 Without `--key-id`, SSM encrypts with the AWS managed key `alias/aws/ssm`. To use a customer managed KMS key, add `--key-id <key-arn>`; its key policy must let IAM policies in the account grant access, as the default key policy does. The Lambda roles allow `kms:Decrypt` only through SSM and only for these parameters.
 
-### Rotating a secret
+### Rotating a Secret
 
 Write the new value with the same commands. The revoker and attribute-syncer pick up a new bot token on their next invocation.
 
@@ -112,6 +112,6 @@ aws lambda update-alias --function-name "$FN" --name live --function-version "$V
 
 Without the configuration change, `publish-version` returns the existing latest version instead of a new one. The next `terraform apply` sets the description back, which publishes another version and moves `live` to it.
 
-### When a secret is missing
+### When a Secret Is Missing
 
-If a secret cannot be read or still holds the placeholder, the access-requester fails at start and every Slack and CLI request errors. The revoker and attribute-syncer log the error and still revoke and sync, without Slack messages. Some revoker invocations then fail after their work is done: a scheduled revocation of a single assignment fails after revoking it, and the Slack-only events (inconsistency reports, removing buttons from expired requests, approver reminders) fail outright. These show up as Lambda errors and, if `aws_sns_topic_subscription_email` is set, as DLQ alerts.
+If a secret cannot be read or still holds the placeholder, the access-requester fails at start and every Slack and CLI request errors. The revoker and attribute-syncer log the error and still revoke and sync, without Slack messages. Some revoker invocations then fail after their work is done. A scheduled revocation of a single assignment fails after revoking it, and the Slack-only events (inconsistency reports, removing buttons from expired requests, approver reminders) fail outright. These show up as Lambda errors and, if `aws_sns_topic_subscription_email` is set, as DLQ alerts.

@@ -1,12 +1,12 @@
 # Deployment
 
-Deploying SSO Elevator has two parts: the Terraform module, which creates the Lambdas, the API and the audit bucket, and a Slack app, the interface users request and approve access through. The Slack app, its manifest and the Slack secrets are covered in [Slack](slack.md); approval rules in [Configuration](configuration.md).
+Deploying SSO Elevator has two parts. The Terraform module creates the Lambdas, the API and the audit bucket. A Slack app is the interface through which users request and approve access. [Slack](slack.md) covers the Slack app, its manifest and the Slack secrets; [Configuration](configuration.md) covers approval rules.
 
-## SSO delegation
+## SSO Delegation
 
-Deploy the module in a delegated SSO administrator account rather than the management account. AWS recommends delegating IAM Identity Center administration, and it keeps day-to-day access out of the management account: with a separate account you can grant SSO administration without building a role in the management account that limits itself to SSO. The module works in either account.
+Deploy the module in a delegated SSO administrator account rather than the management account. AWS recommends delegating IAM Identity Center administration, and it keeps day-to-day access out of the management account. With a separate account you can grant SSO administration without building a role in the management account that limits itself to SSO. The module works in either account.
 
-To delegate, create an account (we recommend a dedicated "sso-tooling" account) and register it as the IAM Identity Center delegated administrator, as described in the [AWS documentation](https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin-how-to-register.html), or with this Terraform in the management account:
+To delegate, create an account (we recommend a dedicated "sso-tooling" account). Register it as the IAM Identity Center delegated administrator, as the [AWS documentation](https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin-how-to-register.html) describes, or with this Terraform in the management account:
 
 ```hcl
 resource "aws_organizations_delegated_administrator" "sso" {
@@ -23,7 +23,7 @@ That is the only prerequisite for running the module in the delegated administra
 2. From the management account, assign that group and permission set to the management account.
 3. Request membership of `ManagementAccountAccess` through SSO Elevator's `group-access` Slack shortcut. The elevator only changes group membership, so it never touches the management account's permission set.
 
-## Lambda images
+## Lambda Images
 
 The module can get its Lambda code three ways:
 
@@ -54,7 +54,7 @@ Image tags:
 
 `main` and `pr-<N>-<sha>` images are for testing and expire once superseded. Set `ecr_repo_tag` to one of them to try an unreleased change.
 
-## Terraform example
+## Terraform Example
 
 ```hcl
 data "aws_ssoadmin_instances" "this" {}
@@ -101,13 +101,13 @@ module "aws_sso_elevator" {
     },
     # "Resource": "*" makes the revoker remove every user-level permission set
     # assignment the module did not create, in every account. Add it after
-    # testing with a single account.
+    # testing with a single account. No AllowSelfApproval here: it would let
+    # cto@corp.com grant themselves production admin without approval.
     {
       "ResourceType" : "Account",
       "Resource" : "*",
       "PermissionSet" : "*",
       "Approvers" : "cto@corp.com",
-      "AllowSelfApproval" : true,
     },
   ]
 
