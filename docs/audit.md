@@ -17,7 +17,7 @@ The columns below follow `AuditEntry` in `src/s3.py`. Fields that don't apply to
 
 Other fields worth knowing:
 
-- `request_source` is `slack` or `cli` on account-request entries the requester writes. Attribute-sync entries hold `attribute_sync`. Group entries and entries the revoker writes (revocations, expiries) hold `"NA"`, so a filter on `request_source = 'slack'` drops them. `verified_arn` is the STS-verified caller ARN of a CLI request.
+- `request_source` names the request behind the entry: `slack` or `cli` for account requests, and `slack` for every group entry, since group requests come only from Slack. A scheduled revocation holds the source of the request it ends, or `"NA"` if a version before 5.0.0 scheduled it. Entries for access the revoker's sweep removes with no request behind it hold `revoker`, and attribute-sync entries hold `attribute_sync`. `verified_arn` is the STS-verified caller ARN of a CLI request.
 - `permission_duration` is in seconds.
 - `matched_attributes` is the string `"NA"` when absent but a JSON object when present, so the table declares it `string`; read the populated case with `json_extract`.
 - `version` is `2` from 5.0.0 on and null on older records.
