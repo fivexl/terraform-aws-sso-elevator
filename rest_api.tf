@@ -2,7 +2,7 @@
 # enable_access_requester_cli is true, POST /access-requester-cli (CLI). REST rather than HTTP
 # API because only REST APIs support resource policies, request validation and WAF.
 
-# Organizations permissions the principal running Terraform needs: README "CLI tool".
+# Organizations permissions the principal running Terraform needs: docs/cli.md "Requirements".
 data "aws_organizations_organization" "current" {
   count = var.enable_access_requester_cli ? 1 : 0
 }

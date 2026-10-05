@@ -1,11 +1,11 @@
-# Accepted risks
+# Accepted Risks
 
 Known weaknesses we chose not to fix, and why. Report anything not listed here as described in
 [SECURITY.md](../SECURITY.md).
 
 ## Open
 
-### WAF Common rule set blocks some request reasons
+### WAF Common Rule Set Blocks Some Request Reasons
 
 - **What.** With `waf_enabled = true`, `AWSManagedRulesCommonRuleSet` blocks requests whose body
   matches its patterns. A reason containing markup such as `<script>` matches
@@ -18,7 +18,7 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
   request. If a rule blocks real traffic, set it to Count in a web ACL you manage and attach that
   with `waf_web_acl_arn` instead.
 
-### WAF inspects only the first 16 KB of a body
+### WAF Inspects Only the First 16 KB of a Body
 
 - **What.** API Gateway passes WAF the first 16 KB of a request body, and the module counts
   `SizeRestrictions_BODY` instead of blocking it. Content after 16 KB is not inspected.
@@ -27,7 +27,7 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
 - **Mitigation.** Every Slack request must carry a valid Slack signature, which the Lambda
   verifies. The Lambda rejects CLI bodies over 64 KiB and CLI payloads over 16 KiB.
 
-### The Slack header check tests presence, not validity
+### The Slack Header Check Tests Presence, Not Validity
 
 - **What.** The API Gateway request validator rejects a Slack-route POST only when
   `X-Slack-Signature` or `X-Slack-Request-Timestamp` is missing. A request with made-up values
@@ -37,7 +37,7 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
 - **Mitigation.** The Lambda verifies the signature and timestamp and rejects the request.
   API Gateway throttling and the optional WAF rate limit bound the volume.
 
-### A CLI proof can be replayed for about 90 seconds
+### A CLI Proof Can Be Replayed for About 90 Seconds
 
 - **What.** The Lambda accepts a CLI identity proof up to 60 seconds after it was signed, and up
   to 30 seconds ahead for clock skew. Within that window, someone holding the exact request body
@@ -54,7 +54,7 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
   proof. Sending the replay through API Gateway also needs a valid request signature from an
   organization principal.
 
-### Async retries are off only for function errors
+### Async Retries Are Off Only for Function Errors
 
 - **What.** The `live` alias has `maximum_retry_attempts = 0`, so Lambda does not retry a Slack
   lazy listener (approve, deny) after a function error. Lambda still redelivers an async event
@@ -63,25 +63,29 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
 - **Mitigation.** Redelivery needs the function to be throttled or Lambda to fail internally.
   Watch the function's `Throttles` metric.
 
-### The 5.0.0 upgrade has downtime
+### The 5.0.0 Upgrade Has Downtime
 
 - **What.** The apply that upgrades to 5.0.0 destroys the old API Gateway APIs and creates a new
   one with new URLs. Slack and the CLI fail until the Slack Request URL and CLI configuration are
   updated.
 - **Why accepted.** Running both APIs side by side for a release would keep the HTTP API, which
   supports neither WAF nor resource policies, alive longer.
-- **Mitigation.** The README's "Upgrade to 5.0.0" lists the steps to run right after the apply.
+- **Mitigation.** [UPGRADE-5.0.md](../UPGRADE-5.0.md) does everything that does not need the new API
+  before the apply, and lists the steps to run right after it.
 
-### Published 4.x versions keep the forgeable code
+### Published 4.x Versions Keep the Forgeable Code
 
 - **What.** Each published Lambda version keeps its own code and stays invocable by version
   number. Versions from 4.x with the CLI route on still trust the identity in the event, so
-  anyone allowed `lambda:InvokeFunction` on them can forge a CLI request for another user.
+  anyone allowed `lambda:InvokeFunction` on them can forge a CLI request for another user. Every
+  4.x version also holds the Slack secrets in its environment variables.
 - **Why accepted.** Terraform does not delete previously published versions, so the module cannot
   remove them during the upgrade.
-- **Mitigation.** The README's "Upgrade to 5.0.0" has the step that deletes them.
+- **Mitigation.** [UPGRADE-5.0.md](../UPGRADE-5.0.md) makes deleting the requester's 4.x versions
+  and rotating both Slack secrets required steps after the apply. The revoker's nightly pruning
+  keeps the newest version below `live`, the last 4.x one, so it does not remove them all.
 
-### An S3 outage loses audit records from the bucket
+### An S3 Outage Loses Audit Records from the Bucket
 
 - **What.** Audit writes fail open. When S3 fails or is slow, grants and revocations go ahead
   without their S3 audit record, so Athena queries miss them. A reconciliation sweep stops
@@ -92,7 +96,7 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
   then the record. A grant whose audit write failed shows a warning in its Slack thread and, when
   S3 accepts it, an `incomplete` entry.
 
-### Access outlives its expiry when both audit and scheduling fail
+### Access Outlives Its Expiry When Both Audit and Scheduling Fail
 
 - **What.** If the grant audit write and the revocation schedule both fail, nothing revokes the
   access at its end time. It lasts until the next reconciliation sweep (daily by default).
@@ -103,7 +107,7 @@ Known weaknesses we chose not to fix, and why. Report anything not listed here a
 
 ## Closed
 
-### Direct Lambda invoke could forge a CLI identity (fixed in 5.0.0)
+### Direct Lambda Invoke Could Forge a CLI Identity (Fixed in 5.0.0)
 
 Before 5.0.0 the Lambda took the CLI caller's identity from the API Gateway event, so anyone
 allowed `lambda:InvokeFunction` on it could invoke it directly with an event naming another

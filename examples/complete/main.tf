@@ -16,7 +16,7 @@ module "aws_sso_elevator" {
   aws_sns_topic_subscription_email = "email@gmail.com"
 
   # The module creates the Slack secret parameters with a placeholder; set the real
-  # values with `aws ssm put-parameter --overwrite` (see the README).
+  # values with `aws ssm put-parameter --overwrite` (see docs/slack.md).
   slack_channel_id                               = "***********"
   schedule_expression                            = "cron(0 23 * * ? *)" # revoke access schedule expression
   schedule_expression_for_check_on_inconsistency = "rate(1 hour)"
@@ -58,7 +58,7 @@ module "aws_sso_elevator" {
   # s3_name_of_the_existing_bucket = "sso_elevator_audit_logs_bucket-<some_sha>"
   # If you want to use your own bucket for storing SSO Elevator audit logs (logs about access requests), use the `s3_name_of_the_existing_bucket` variable.
   # If `s3_name_of_the_existing_bucket` is left empty, the module creates a new bucket name based on `s3_bucket_name_for_audit_entry`.
-  # In that case, remember to specify `s3_logging` with at least the `target_bucket` key to enable access logging, otherwise, module deployment will fail.
+  # Either way, specify `s3_logging` with at least the `target_bucket` key: the module always creates the config bucket with access logging, and deployment fails without it.
   s3_logging = {
     target_bucket = "some_access_logging_bucket"
     target_prefix = "some_prefix_for_access_logs"

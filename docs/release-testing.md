@@ -1,4 +1,4 @@
-# Release testing
+# Release Testing
 
 Live checks to run on real AWS before a release that changes the Lambdas, the API
 Gateway, WAF, IAM or the Slack secret handling. Unit tests mock AWS and Slack, so they
@@ -12,7 +12,7 @@ output, scenario, result.
 
 - An AWS Organization with IAM Identity Center, a Slack app and a test channel.
 - Two deployments, because a delegated administrator cannot manage access to the
-  management account ([SSO delegation](docs.md#sso-delegation)):
+  management account ([SSO Delegation](deployment.md#sso-delegation)):
   - **tooling**: the module in the delegated administrator account (the CLI route is on by
     default);
   - **management**: the module in the management account, approval statements scoped
@@ -25,18 +25,19 @@ output, scenario, result.
 
 ## Scenarios
 
-### Install and upgrade
+### Install and Upgrade
 
 1. **Fresh install.** Apply into an account without the module.
    - Expect: both SSM parameters hold `REPLACE_ME`, and an access-requester invoke fails at
      init (with SnapStart, at restore) with an error naming the parameter.
-   - Write the real secrets (README "Fresh install"). Without a redeploy, the next request
-     succeeds.
-2. **Upgrade from the previous major.** Follow the README upgrade section step by step on a
-   deployment running the previous release.
-   - Expect: the secret hashes match before and after; the Lambda environment holds parameter
-     names, not values. Whether Slack keeps working throughout depends on the release: see its
-     upgrade section (5.0.0 has downtime).
+   - Write the real secrets ([Fresh Install](slack.md#fresh-install)). Without a redeploy, the
+     next request succeeds.
+2. **Upgrade from the previous major.** Follow the release's upgrade guide (for 5.0.0,
+   [UPGRADE-5.0.md](../UPGRADE-5.0.md)) step by step on a deployment running the previous release.
+   - Expect: after the move to SSM, the secret hashes match the pre-upgrade values; after the
+     rotation step, both secrets have new values and Slack and CLI requests still work.
+     The Lambda environment holds parameter names, not values. Whether Slack keeps working
+     throughout depends on the release: see its upgrade guide (5.0.0 has downtime).
 3. **No drift.** Run `terraform plan -detailed-exitcode` right after each apply.
    - Expect: exit code 0.
 
@@ -59,21 +60,21 @@ output, scenario, result.
    management deployment.
    - Expect: assignment created, revoked on expiry.
 
-### Background Lambdas and failure handling
+### Background Lambdas and Failure Handling
 
 10. **Revoker**: wait for the grants from 4–9 to expire.
     - Expect: each assignment removed; no errors in the revoker log.
 11. **Attribute syncer**: invoke with `{}`.
     - Expect: `success: true`, `error_count: 0`, no warnings.
 12. **Placeholder secret on a running deployment**: save both values, write `REPLACE_ME`
-    to both, force new containers on the `live` alias (README "Rotating a secret"), then:
+    to both, force new containers on the `live` alias ([Rotating a Secret](slack.md#rotating-a-secret)), then:
     - invoke the access-requester: expect init (or SnapStart restore) failure;
     - invoke the attribute syncer: expect success with an error logged for the Slack token.
 
     Restore the values, check their hashes, force new containers again, and repeat a
     CLI request: expect success.
 
-## 5.0.0: REST API, WAF and CLI identity proof
+## 5.0.0: REST API, WAF and CLI Identity Proof
 
 Run on top of the scenarios above, on the release commit. Tick each box in the PR's test plan
 with its evidence.
@@ -84,9 +85,10 @@ Upgrade and install:
       before or while the `live` alias is created. Then toggle `use_pre_created_image`: the
       apply replaces the requester function cleanly, with no dependency cycle or
       "function in use" error.
-- [ ] Fresh install, then upgrade a 4.4.x deployment by following README "Upgrade to 5.0.0".
-      Expect: Slack and the CLI work again once steps 7–9 are done; old versions deleted by
-      step 10.
+- [ ] Fresh install, then upgrade a 4.4.x deployment by following [UPGRADE-5.0.md](../UPGRADE-5.0.md)
+      verbatim, with `ecr_repo_tag` on a pre-release image (`main` or `pr-<N>-<sha>`). The default `5.0.0`
+      image exists only after the tag is pushed. Expect: Slack and the CLI work again once the Slack, CLI and cross-account steps
+      after the apply are done; the 4.x requester versions are gone after the version-deletion step.
 - [ ] Slack: the access shortcut opens the modal, submitting it posts the request, and Approve
       and Deny both work (lazy listeners invoked through the `live` alias).
 - [ ] A POST to `requester_api_endpoint_url` without Slack headers gets `400` and the Lambda's
@@ -117,7 +119,7 @@ WAF:
       apply is followed by a clean plan. Setting both fails at plan.
 - [ ] With the module web ACL, a Slack request and a CLI request both pass.
 
-Revoker and retries:
+Revoker and lazy-listener retries:
 
 - [ ] A scheduled revocation runs from its one-time schedule, not the daily
       `schedule_expression` run. Group revocation, approver reminders and request expiry
@@ -131,8 +133,9 @@ Run with `snap_start = true` (the default), on the zip and on the container imag
 
 - [ ] Five cold clicks of the access shortcut (each after the requester has been idle long
       enough for its environments to be reclaimed), at `lambda_memory_size = 256` and at
-      `1769`: zero "Sorry, that hasn't worked" toasts. The log shows the restore hook's S3,
-      SSM and `auth.test` reads before each first request.
+      `1769`: zero "Sorry, that hasn't worked" toasts. The log shows the restore hook loading
+      the approval config from S3 before each first request (the SSM and `auth.test` reads
+      are not logged).
 - [ ] `apply` waits for the new version to finish its snapshot before `live` moves to it: the
       alias never points at a `Pending` version.
 - [ ] A forced init failure (for example, a broken import pushed for the test) fails `apply`,
