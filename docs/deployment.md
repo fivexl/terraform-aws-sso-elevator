@@ -66,8 +66,8 @@ module "aws_sso_elevator" {
   slack_channel_id = "C0123456789"
   sso_instance_arn = one(data.aws_ssoadmin_instances.this.arns)
 
-  # The module creates the audit bucket, which needs an access-logging target.
-  # Set s3_name_of_the_existing_bucket instead to use your own bucket.
+  # Always required: access logging for the config bucket, and for the audit
+  # bucket unless you set s3_name_of_the_existing_bucket to use your own.
   s3_logging = {
     target_bucket = "my-s3-access-logs-bucket"
     target_prefix = "sso-elevator/"
@@ -123,6 +123,10 @@ module "aws_sso_elevator" {
 output "requester_api_endpoint_url" {
   value = module.aws_sso_elevator.requester_api_endpoint_url
 }
+
+output "requester_api_endpoint_url_cli" {
+  value = module.aws_sso_elevator.requester_api_endpoint_url_cli
+}
 ```
 
-After the first apply, write the Slack secrets to SSM ([Slack](slack.md)) and put `requester_api_endpoint_url` in the Slack app manifest as the request URL.
+After the first apply, finish the [Slack fresh install](slack.md#fresh-install).

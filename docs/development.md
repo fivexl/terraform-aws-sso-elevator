@@ -8,7 +8,7 @@ Run from the repository root:
 bash run-tests.sh
 ```
 
-It syncs the `src/` environment with `uv` (dev extras), runs `pytest` from `src/`, then runs `pre-commit run -a` (ruff, codespell, `uv export` of both `requirements.txt` files, terraform fmt/validate/tflint/docs, trivy). CI runs the same script, so a clean local run means a clean CI run. Pre-commit needs `terraform`, `tflint`, `terraform-docs` v0.22.0 and `trivy` on `PATH`.
+It syncs the `src/` environment with `uv` (dev extras), runs `pytest` from `src/`, then runs `pre-commit run -a` (ruff, codespell, `uv export` of both `requirements.txt` files, terraform fmt/validate/tflint/docs, trivy). CI runs the same script, so a clean local run means a clean CI run. Pre-commit needs `terraform`, `tflint`, `terraform-docs` (the version CI installs in `.github/workflows/base.yml`) and `trivy` on `PATH`.
 
 The first argument is passed to `pytest`, relative to `src/`:
 

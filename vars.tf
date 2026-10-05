@@ -156,7 +156,7 @@ variable "s3_name_of_the_existing_bucket" {
   An audit log bucket is mandatory.
   If you specify this variable, the module will use your existing bucket.
   Otherwise, if you don't provide this variable, the module will create a new bucket named according to the "s3_bucket_name_for_audit_entry" variable.
-  If the module is creating an audit bucket for you, then you must provide a logging configuration via the s3_logging input variable, with at least the target_bucket key specified.
+  Either way, s3_logging is required (see its description).
   EOT
   type        = string
   default     = ""
@@ -188,8 +188,8 @@ variable "s3_object_lock_configuration" {
 variable "s3_logging" {
   description = <<EOT
   Map containing access bucket logging configuration.
-  If you are not providing s3_name_of_the_existing_bucket variable, then module will create bucket for you.
-  If the module is creating an audit bucket for you, then you must provide a logging configuration via this input variable, with at least the target_bucket key specified.
+  Required, with at least the target_bucket key: the module always creates the config bucket with access logging,
+  and also uses it for the audit bucket when it creates that one (s3_name_of_the_existing_bucket unset).
   EOT
   type        = map(string)
   default     = {}
@@ -356,7 +356,7 @@ variable "lambda_memory_size" {
 }
 
 variable "snap_start" {
-  description = "Enable Lambda SnapStart on the requester Lambda (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/api-gateway.md#snapstart). Set false where Lambda doesn't offer SnapStart for this runtime and package type, since apply fails there. At the time of writing that includes container images in Asia Pacific (New Zealand) and Asia Pacific (Taipei); the pre-built images are not published there anyway, so it matters for images you host yourself (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/deployment.md#lambda-images)."
+  description = "Enable Lambda SnapStart on the requester Lambda (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/api-gateway.md#snapstart). Set false where Lambda doesn't offer SnapStart for this runtime and package type; apply fails there."
   type        = bool
   default     = true
 }

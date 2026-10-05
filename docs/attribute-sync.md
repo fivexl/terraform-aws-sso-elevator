@@ -57,18 +57,7 @@ module "aws_sso_elevator" {
 }
 ```
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `attribute_sync_enabled` | Create the attribute-syncer Lambda and its schedule | `false` |
-| `attribute_sync_managed_groups` | Group display names the syncer manages | `[]` |
-| `attribute_sync_rules` | Mapping rules, see below | `[]` |
-| `attribute_sync_manual_assignment_policy` | `warn` or `remove` | `"remove"` |
-| `attribute_sync_schedule` | EventBridge schedule expression | `"rate(1 hour)"` |
-| `attribute_sync_lambda_memory` | Lambda memory in MB | `512` |
-| `attribute_sync_lambda_timeout` | Lambda timeout in seconds | `300` |
-| `attribute_syncer_lambda_name` | Lambda function name | `"attribute-syncer"` |
-| `attribute_sync_event_rule_name` | EventBridge rule name | `"sso-elevator-attribute-sync"` |
-| `identity_store_id` | Required when you set `sso_instance_arn`; discovered otherwise | `""` |
+The `attribute_sync_*` variables, `attribute_syncer_lambda_name` and `identity_store_id` are listed with their defaults in the [inputs table](https://github.com/fivexl/terraform-aws-sso-elevator#inputs).
 
 When `attribute_sync_enabled = true`, `terraform apply` fails if `attribute_sync_managed_groups` or `attribute_sync_rules` is empty, if a rule names a group missing from `attribute_sync_managed_groups`, or if `sso_instance_arn` is set without `identity_store_id`. The check runs as a `local-exec` during apply, not during plan.
 

@@ -67,7 +67,8 @@ module "aws_sso_elevator" {
 
   slack_channel_id = "C0123456789"
 
-  # Required when the module creates the audit bucket.
+  # Always required: access logging for the config bucket, and for the audit
+  # bucket unless you set s3_name_of_the_existing_bucket.
   s3_logging = {
     target_bucket = "my-s3-access-logs-bucket"
     target_prefix = "sso-elevator/"
@@ -76,12 +77,22 @@ module "aws_sso_elevator" {
   config = [
     {
       "ResourceType" : "Account",
-      "Resource" : "*",
+      # One account to start. "*" makes the revoker act in every account:
+      # read "Important considerations" first.
+      "Resource" : ["111111111111"],
       "PermissionSet" : "ReadOnlyAccess",
       "Approvers" : ["lead@example.com"],
       "AllowSelfApproval" : true,
     },
   ]
+}
+
+output "requester_api_endpoint_url" {
+  value = module.aws_sso_elevator.requester_api_endpoint_url
+}
+
+output "requester_api_endpoint_url_cli" {
+  value = module.aws_sso_elevator.requester_api_endpoint_url_cli
 }
 ```
 
@@ -239,9 +250,9 @@ Then:
 | <a name="input_revoker_post_update_to_slack"></a> [revoker\_post\_update\_to\_slack](#input\_revoker\_post\_update\_to\_slack) | Should revoker send a confirmation of the revocation to Slack? | `bool` | `true` | no |
 | <a name="input_s3_bucket_name_for_audit_entry"></a> [s3\_bucket\_name\_for\_audit\_entry](#input\_s3\_bucket\_name\_for\_audit\_entry) | The name of the S3 bucket that will be used by the module to store logs about every access request.<br/>  If s3\_name\_of\_the\_existing\_bucket is not provided, the module will create a new bucket with this name. | `string` | `"sso-elevator-audit-entry"` | no |
 | <a name="input_s3_bucket_partition_prefix"></a> [s3\_bucket\_partition\_prefix](#input\_s3\_bucket\_partition\_prefix) | The prefix for the S3 audit bucket object partitions.<br/>  Don't use slashes (/) in the prefix, as it will be added automatically, e.g. "logs" will be transformed to "logs/".<br/>  If you want to use the root of the bucket, leave this empty. | `string` | `"logs"` | no |
-| <a name="input_s3_logging"></a> [s3\_logging](#input\_s3\_logging) | Map containing access bucket logging configuration.<br/>  If you are not providing s3\_name\_of\_the\_existing\_bucket variable, then module will create bucket for you.<br/>  If the module is creating an audit bucket for you, then you must provide a logging configuration via this input variable, with at least the target\_bucket key specified. | `map(string)` | `{}` | no |
+| <a name="input_s3_logging"></a> [s3\_logging](#input\_s3\_logging) | Map containing access bucket logging configuration.<br/>  Required, with at least the target\_bucket key: the module always creates the config bucket with access logging,<br/>  and also uses it for the audit bucket when it creates that one (s3\_name\_of\_the\_existing\_bucket unset). | `map(string)` | `{}` | no |
 | <a name="input_s3_mfa_delete"></a> [s3\_mfa\_delete](#input\_s3\_mfa\_delete) | Whether to enable MFA delete for the S3 bucket | `bool` | `false` | no |
-| <a name="input_s3_name_of_the_existing_bucket"></a> [s3\_name\_of\_the\_existing\_bucket](#input\_s3\_name\_of\_the\_existing\_bucket) | Name of an existing S3 bucket to use for storing SSO Elevator audit logs.<br/>  An audit log bucket is mandatory.<br/>  If you specify this variable, the module will use your existing bucket.<br/>  Otherwise, if you don't provide this variable, the module will create a new bucket named according to the "s3\_bucket\_name\_for\_audit\_entry" variable.<br/>  If the module is creating an audit bucket for you, then you must provide a logging configuration via the s3\_logging input variable, with at least the target\_bucket key specified. | `string` | `""` | no |
+| <a name="input_s3_name_of_the_existing_bucket"></a> [s3\_name\_of\_the\_existing\_bucket](#input\_s3\_name\_of\_the\_existing\_bucket) | Name of an existing S3 bucket to use for storing SSO Elevator audit logs.<br/>  An audit log bucket is mandatory.<br/>  If you specify this variable, the module will use your existing bucket.<br/>  Otherwise, if you don't provide this variable, the module will create a new bucket named according to the "s3\_bucket\_name\_for\_audit\_entry" variable.<br/>  Either way, s3\_logging is required (see its description). | `string` | `""` | no |
 | <a name="input_s3_object_lock"></a> [s3\_object\_lock](#input\_s3\_object\_lock) | Enable object lock | `bool` | `false` | no |
 | <a name="input_s3_object_lock_configuration"></a> [s3\_object\_lock\_configuration](#input\_s3\_object\_lock\_configuration) | Object lock configuration | `any` | <pre>{<br/>  "rule": {<br/>    "default_retention": {<br/>      "mode": "GOVERNANCE",<br/>      "years": 2<br/>    }<br/>  }<br/>}</pre> | no |
 | <a name="input_schedule_expression"></a> [schedule\_expression](#input\_schedule\_expression) | recovation schedule expression (will revoke all user-level assignments unknown to the Elevator) | `string` | `"cron(0 23 * * ? *)"` | no |
@@ -253,7 +264,7 @@ Then:
 | <a name="input_slack_bot_token_ssm_parameter_name"></a> [slack\_bot\_token\_ssm\_parameter\_name](#input\_slack\_bot\_token\_ssm\_parameter\_name) | Name of the SSM SecureString parameter holding the Slack bot token, read by every Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/slack.md). | `string` | `"/sso-elevator/slack-bot-token"` | no |
 | <a name="input_slack_channel_id"></a> [slack\_channel\_id](#input\_slack\_channel\_id) | value for the Slack channel ID | `string` | n/a | yes |
 | <a name="input_slack_signing_secret_ssm_parameter_name"></a> [slack\_signing\_secret\_ssm\_parameter\_name](#input\_slack\_signing\_secret\_ssm\_parameter\_name) | Name of the SSM SecureString parameter holding the Slack signing secret, read by the access-requester Lambda. The module creates it with a placeholder; set the real value with `aws ssm put-parameter --overwrite` (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/slack.md). | `string` | `"/sso-elevator/slack-signing-secret"` | no |
-| <a name="input_snap_start"></a> [snap\_start](#input\_snap\_start) | Enable Lambda SnapStart on the requester Lambda (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/api-gateway.md#snapstart). Set false where Lambda doesn't offer SnapStart for this runtime and package type, since apply fails there. At the time of writing that includes container images in Asia Pacific (New Zealand) and Asia Pacific (Taipei); the pre-built images are not published there anyway, so it matters for images you host yourself (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/deployment.md#lambda-images). | `bool` | `true` | no |
+| <a name="input_snap_start"></a> [snap\_start](#input\_snap\_start) | Enable Lambda SnapStart on the requester Lambda (see https://github.com/fivexl/terraform-aws-sso-elevator/blob/main/docs/api-gateway.md#snapstart). Set false where Lambda doesn't offer SnapStart for this runtime and package type; apply fails there. | `bool` | `true` | no |
 | <a name="input_sso_instance_arn"></a> [sso\_instance\_arn](#input\_sso\_instance\_arn) | value for the SSO instance ARN | `string` | `""` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | A map of tags to assign to resources. | `map(string)` | `{}` | no |
 | <a name="input_use_pre_created_image"></a> [use\_pre\_created\_image](#input\_use\_pre\_created\_image) | If true, the image will be pulled from the ECR repository. If false, the image will be built using Docker from the source code. | `bool` | `true` | no |

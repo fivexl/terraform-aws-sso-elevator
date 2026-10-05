@@ -23,6 +23,7 @@ Give users these module outputs:
   }
   ```
 
+- Every CLI user needs a standing permission-set assignment somewhere in the organization, given outside SSO Elevator, to sign with. Access the elevator grants cannot bootstrap the CLI. Outside the deployment account, that permission set needs the statement above; the AWS managed `ReadOnlyAccess` policy does not include `execute-api:Invoke`.
 - Callers must sign with an IAM Identity Center (SSO) session. IAM users, other roles, and CI/OIDC roles are rejected.
 - The session name must be the caller's Identity Store username. IAM Identity Center sets it that way, so a normal `aws sso login` session qualifies. The Lambda matches it exactly (case-sensitive) against `UserName`, takes that user's primary email (or the first listed one), and looks up the Slack user with that email. If any step finds no match, the request is rejected with the same generic message as an invalid session. A username longer than 64 characters is truncated in the session name and therefore never matches.
 - The requester Lambda needs outbound HTTPS to the regional STS endpoint, `sts.<region>.amazonaws.com`. It runs outside a VPC, so it has that by default. In an opt-in region the regional STS endpoint must be active; this has not been tested.

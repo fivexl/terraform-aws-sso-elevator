@@ -58,11 +58,11 @@ PARTITIONED BY (`timestamp` string)
 ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
 LOCATION 's3://bucket_name/s3_bucket_partition_prefix/'
 TBLPROPERTIES (
-  'projection.enabled'='true', 
-  'projection.timestamp.format'='yyyy/MM/dd', 
+  'projection.enabled'='true',
+  'projection.timestamp.format'='yyyy/MM/dd',
   'projection.timestamp.interval'='1',
-  'projection.timestamp.interval.unit'='DAYS', 
-  'projection.timestamp.range'='2023/05/08,NOW',	
+  'projection.timestamp.interval.unit'='DAYS',
+  'projection.timestamp.range'='2023/05/08,NOW',
   'projection.timestamp.type'='date',
   'storage.location.template'='s3://bucket_name/s3_bucket_partition_prefix/${timestamp}/');
 ```

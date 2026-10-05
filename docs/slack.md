@@ -70,7 +70,7 @@ All Slack traffic (shortcuts, form submissions, button clicks) arrives on the in
 
 The Lambdas read the bot token and signing secret from two SSM SecureString parameters at runtime. The module creates both with the placeholder `REPLACE_ME` through the write-only `value_wo` argument, and the Lambdas treat the placeholder as an unset secret. You write the real values with the AWS CLI.
 
-**Why by hand.** Terraform writes every value it manages into its state in plain text, including a SecureString parameter's `value`. Anyone who can read the state, or an old version of it in a versioned S3 backend, can read the secret. A write-only argument is the one kind of value Terraform never stores, so the module writes only the placeholder and the real secrets never pass through Terraform. Write-only arguments need Terraform >= 1.11 and hashicorp/aws >= 6.28.
+**Why by hand.** Terraform writes every value it manages into its state in plain text, including a SecureString parameter's `value`. Anyone who can read the state, or an old version of it in a versioned S3 backend, can read the secret. A write-only argument is the one kind of value Terraform never stores, so the module writes only the placeholder and the real secrets never pass through Terraform.
 
 Later applies leave your value alone, with three exceptions that replace the parameter with a fresh placeholder or delete it: changing `slack_*_ssm_parameter_name`, moving the module to a new address without a `moved` block, and `terraform destroy`.
 
@@ -79,13 +79,13 @@ Later applies leave your value alone, with three exceptions that replace the par
 | `slack_bot_token_ssm_parameter_name` | `/sso-elevator/slack-bot-token` | access-requester, revoker, attribute-syncer |
 | `slack_signing_secret_ssm_parameter_name` | `/sso-elevator/slack-signing-secret` | access-requester |
 
-Write each secret like this, substituting your parameter names if you changed them:
+Write each secret like this, substituting your parameter names if you changed them. At each `read`, paste the value (first the Bot User OAuth Token, then the Signing Secret) and press Enter:
 
 ```sh
-read -rs SLACK_BOT_TOKEN        # paste the Bot User OAuth Token, then Enter
+read -rs SLACK_BOT_TOKEN
 printf '%s' "$SLACK_BOT_TOKEN" | aws ssm put-parameter --overwrite --type SecureString \
   --name /sso-elevator/slack-bot-token --value file:///dev/stdin
-read -rs SLACK_SIGNING_SECRET   # paste the Signing Secret, then Enter
+read -rs SLACK_SIGNING_SECRET
 printf '%s' "$SLACK_SIGNING_SECRET" | aws ssm put-parameter --overwrite --type SecureString \
   --name /sso-elevator/slack-signing-secret --value file:///dev/stdin
 unset SLACK_BOT_TOKEN SLACK_SIGNING_SECRET
@@ -99,14 +99,14 @@ Without `--key-id`, SSM encrypts with the AWS managed key `alias/aws/ssm`. To us
 
 Write the new value with the same commands. The revoker and attribute-syncer pick up a new bot token on their next invocation.
 
-The access-requester reads both secrets at cold start or [SnapStart](api-gateway.md#snapstart) restore, so warm containers keep the old values until they are recycled. A new bot token can wait for that. A new signing secret takes effect in Slack at once, and warm containers reject every Slack request until they restart, so force new containers right after writing it. API Gateway invokes the `live` alias, which points at a published version, so changing `$LATEST` alone is not enough: change the configuration, publish a version and move `live` to it.
+The access-requester reads both secrets at cold start or [SnapStart](api-gateway.md#snapstart) restore, so warm containers keep the old values until they are recycled. A new bot token can wait for that. A new signing secret takes effect in Slack at once, and warm containers reject every Slack request until they restart, so force new containers right after writing it. API Gateway invokes the `live` alias, which points at a published version, so changing `$LATEST` alone is not enough: change the configuration, publish a version and move `live` to it. Set `FN` to your `requester_lambda_name`. With SnapStart, the `wait function-active-v2` step waits until the snapshot is ready.
 
 ```sh
-FN=access-requester   # your requester_lambda_name
+FN=access-requester
 aws lambda update-function-configuration --function-name "$FN" --description "Slack secret rotated $(date +%s)"
 aws lambda wait function-updated --function-name "$FN"
 VERSION=$(aws lambda publish-version --function-name "$FN" --query Version --output text)
-aws lambda wait function-active-v2 --function-name "$FN" --qualifier "$VERSION"   # SnapStart: until the snapshot is ready
+aws lambda wait function-active-v2 --function-name "$FN" --qualifier "$VERSION"
 aws lambda update-alias --function-name "$FN" --name live --function-version "$VERSION"
 ```
 

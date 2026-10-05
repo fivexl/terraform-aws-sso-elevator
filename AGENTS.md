@@ -23,10 +23,9 @@
 
 ## Configuration Management
 
-When adding new configuration parameters:
-- Update all relevant shell scripts
-- Update Docker files
-- Ensure consistency across all runtime environments
+Wire a new configuration parameter through `vars.tf`, the
+`environment_variables` of each Lambda that reads it (`*_lambda.tf`), and
+`src/config.py` (or `src/sync_config.py` for the attribute syncer).
 
 ## External Tools & Resources
 - Use AWS knowledge MCP tools for AWS service documentation and best practices

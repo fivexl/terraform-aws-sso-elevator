@@ -43,7 +43,7 @@ config = [
 
 ## Group statements (`group_config`)
 
-Group requests add the requester to an IAM Identity Center group for a limited time. They are Slack-only (the `/group-access` shortcut, see [Slack](slack.md)); the CLI requests account access only.
+Group requests add the requester to an IAM Identity Center group for a limited time. They are Slack-only (the `group-access` global shortcut, see [Slack](slack.md)); the CLI requests account access only.
 
 A group statement takes the same fields as an account statement, with two differences: there is no `ResourceType` or `PermissionSet`, and `Resource` holds group IDs, not account IDs. The Elevator only offers groups listed in some statement's `Resource`.
 
