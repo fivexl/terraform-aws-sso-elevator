@@ -40,7 +40,7 @@ Optional, off by default. Two modes, which cannot be combined:
   Cost is about $9 a month plus $0.60 per million requests.
 - `waf_web_acl_arn = "<arn>"`: associates a REGIONAL web ACL you manage.
 
-Setting both fails at plan when the ARN is known then; an ARN of a web ACL created in the same apply defers that check to apply time.
+The `waf_web_acl_arn` value must be known at plan time: it decides whether the association exists (`count`), so the ARN of a web ACL created in the same apply fails the plan with "Invalid count argument". Create the web ACL first, or pass a literal ARN. Setting both inputs also fails at plan.
 
 If AWS Firewall Manager associates a web ACL with your API Gateway stages, leave both unset: an association from the module would conflict with it.
 

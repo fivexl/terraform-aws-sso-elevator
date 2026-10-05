@@ -2,7 +2,7 @@
 
 Access requests can also be submitted from the command line, without Slack, with the `elevator` CLI. It posts to `POST /access-requester-cli`, signed with the caller's own AWS credentials, and the request goes through the same approval rules and audit log as a Slack request. This page is the operator side; for install and usage, see [`cmd/elevator/README.md`](../cmd/elevator/README.md).
 
-The route is on by default (`enable_access_requester_cli = true`). Set it to `false` if you only use Slack: the route, its Lambda permission and the Organizations lookup are then not created, and the Lambda rejects CLI requests.
+The route is on by default (`enable_access_requester_cli = true`). Set it to `false` if you only use Slack: the route, its Lambda permission and the Organizations lookup are then not created, and the Lambda rejects CLI requests. When turning an existing route off, the stage keeps serving it (API Gateway answers `500`) until you run `terraform apply -replace=module.<name>.aws_api_gateway_deployment.requester`.
 
 Give users these module outputs:
 

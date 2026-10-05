@@ -133,8 +133,9 @@ Run with `snap_start = true` (the default), on the zip and on the container imag
 
 - [ ] Five cold clicks of the access shortcut (each after the requester has been idle long
       enough for its environments to be reclaimed), at `lambda_memory_size = 256` and at
-      `1769`: zero "Sorry, that hasn't worked" toasts. The log shows the restore hook's S3,
-      SSM and `auth.test` reads before each first request.
+      `1769`: zero "Sorry, that hasn't worked" toasts. The log shows the restore hook loading
+      the approval config from S3 before each first request (the SSM and `auth.test` reads
+      are not logged).
 - [ ] `apply` waits for the new version to finish its snapshot before `live` moves to it: the
       alias never points at a `Pending` version.
 - [ ] A forced init failure (for example, a broken import pushed for the test) fails `apply`,
