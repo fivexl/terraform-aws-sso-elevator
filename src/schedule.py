@@ -1,6 +1,7 @@
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import botocore.exceptions
 import jmespath as jp
@@ -174,6 +175,7 @@ def schedule_revoke_event(  # noqa: PLR0913
     user_account_assignment: sso.UserAccountAssignment,
     channel_id: str,
     message_ts: str,
+    request_source: Literal["slack", "cli"],
 ) -> list[RevokeEvent | GroupRevokeEvent]:
     """Returns the revoke events this one replaced."""
     logger.info("Scheduling revoke event")
@@ -187,6 +189,7 @@ def schedule_revoke_event(  # noqa: PLR0913
         permission_duration=permission_duration,
         channel_id=channel_id,
         message_ts=message_ts,
+        request_source=request_source,
     )
     _create_revoke_schedule(schedule_client, "event_bridge_revoke", revoke_event, replaced)
     return replaced

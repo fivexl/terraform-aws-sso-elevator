@@ -89,6 +89,7 @@ def handle_request_for_group_access_submittion(
                 permission_duration=request.permission_duration,
                 sso_user_principal_id="NA",
                 audit_entry_type="group",
+                request_source="slack",  # group requests have no CLI path
                 decision_reason="NoApproversFoundInSlack",
             ),
         )
@@ -153,6 +154,7 @@ def handle_group_button_click(payload: slack_helpers.ButtonClickedPayload, clien
                     permission_duration=request.permission_duration,
                     sso_user_principal_id="NA",
                     audit_entry_type="group",
+                    request_source="slack",  # group requests have no CLI path
                     decision_reason="Discarded",
                 ),
             )

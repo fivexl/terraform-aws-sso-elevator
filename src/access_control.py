@@ -513,6 +513,7 @@ def execute_decision(  # noqa: PLR0913
             user_account_assignment=account_assignment,
             channel_id=channel_id,
             message_ts=message_ts,
+            request_source=request_source,
         )
     except Exception as e:
         if sso.is_grant_conflict(e):
@@ -570,6 +571,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
                     permission_duration=permission_duration,
                     sso_user_principal_id="NA",
                     audit_entry_type="group",
+                    request_source="slack",  # group requests have no CLI path
                     decision_reason=decision.reason.value,  # type: ignore # noqa: PGH003
                 ),
             )
@@ -597,6 +599,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
                 permission_duration=permission_duration,
                 sso_user_principal_id=sso_user_principal_id,
                 audit_entry_type="group",
+                request_source="slack",  # group requests have no CLI path
                 secondary_domain_was_used=secondary_domain_was_used,
                 error_message=error_message,
             )
@@ -641,6 +644,7 @@ def execute_decision_on_group_request(  # noqa: PLR0913
                 operation_type="grant",
                 permission_duration=permission_duration,
                 audit_entry_type="group",
+                request_source="slack",  # group requests have no CLI path
                 sso_user_principal_id=sso_user_principal_id,
                 secondary_domain_was_used=secondary_domain_was_used,
             ),

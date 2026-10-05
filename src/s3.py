@@ -38,11 +38,9 @@ class AuditEntry:
     # New fields for attribute sync operations
     sync_operation: str = "NA"  # "attribute_sync" for sync operations
     matched_attributes: dict | None = None  # Attributes that triggered the match
-    # "slack" or "cli" -- which intake path this request came through, plus
-    # the SigV4-verified ARN for "cli" ones. Without this, a disputed
-    # self-approved grant reads identically regardless of which path
-    # requested it, and approvers can't apply extra scrutiny to the newer
-    # (CLI) trust path when reviewing history.
+    # Intake path of the request behind the entry: "slack" or "cli" (plus the
+    # SigV4-verified ARN for "cli"); "revoker" when the revoker's sweep removed
+    # access no request accounts for; "NA" when unknown, e.g. a revocation scheduled before it was recorded.
     request_source: str = "NA"
     verified_arn: str = "NA"
     sso_user_email: str = "NA"  # Human-readable email for the SSO user
