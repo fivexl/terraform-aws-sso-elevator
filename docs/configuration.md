@@ -137,7 +137,9 @@ If two or more Identity Store users share an email case-insensitively, every req
 
 **Strongly discouraged: it can grant access to the wrong person.**
 
-When a Slack email's domain differs from the one in IAM Identity Center, `secondary_fallback_email_domains` makes the Elevator retry the lookup with the Slack local part and each listed domain, in order. For example, with Slack `john.doe@old.domain` and Identity Center `john.doe@new.domain`, set `secondary_fallback_email_domains = ["@new.domain"]`. Each entry starts with `@`.
+When a Slack email's domain differs from the one in IAM Identity Center, `secondary_fallback_email_domains` makes the Elevator retry the lookup with the Slack local part and each listed domain, in order. For example, with Slack `john.doe@old.domain` and Identity Center `john.doe@new.domain`, set `secondary_fallback_email_domains = ["@new.domain"]`.
+
+**Each entry must start with `@`.** The Elevator appends the entry directly to the Slack local part (`john.doe` + `@new.domain`), so a bare `new.domain` would look up `john.doenew.domain` and never match. The module rejects entries without the `@` at plan time.
 
 - The Slack email is always tried first.
 - It applies to Slack requesters only. Approvers must have the same email in Slack as in the configuration.

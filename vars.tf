@@ -265,7 +265,8 @@ variable "secondary_fallback_email_domains" {
   default     = []
   description = <<EOT
 
-Value example: ["@new.domain", "@second.domain"], every domain name should start with "@".
+Value example: ["@new.domain", "@second.domain"]. Every entry MUST start with "@": SSO Elevator appends the entry
+directly to the local part of the Slack email ("john.doe" + "@new.domain"), so a bare "new.domain" never matches.
 WARNING: 
 This feature is STRONGLY DISCOURAGED because it can introduce security risks and open up potential avenues for abuse.
 
@@ -301,6 +302,13 @@ Notes:
 - SSO Elevator adds a one-line :warning: to the request message in Slack if it uses a secondary fallback domain to find a user in AWS SSO.
 - The secondary domain feature works **ONLY** for the requester, approvers in the configuration must have the same email domain as in Slack.
 EOT
+
+  validation {
+    # src/sso.py builds the candidate as local_part + entry, so an entry without the
+    # leading "@" ("new.domain") yields "john.doenew.domain" and silently never matches.
+    condition     = alltrue([for d in var.secondary_fallback_email_domains : can(regex("^@[^@\\s]+\\.[^@\\s]+$", d))])
+    error_message = "Each entry in secondary_fallback_email_domains must be a domain prefixed with \"@\", for example \"@new.domain\", not \"new.domain\"."
+  }
 }
 
 variable "api_gateway_throttling_burst_limit" {
