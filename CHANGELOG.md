@@ -2,6 +2,14 @@
 
 Notable changes to the Terraform module, the `elevator` CLI and the Lambda images, which share one version. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.0.1] - 2026-10-14
+
+### Changed
+
+- `secondary_fallback_email_domains` entries must start with `@`. The module now rejects a bare domain such as `new.domain` at plan time. Such an entry never matched anyone, because the Elevator appends the entry to the local part of the Slack email (#265).
+
+The Lambda images are unchanged: `ecr_repo_tag` stays at `5.0.0`.
+
 ## [5.0.0] - 2026-10-05
 
 Breaking release with downtime. Follow [UPGRADE-5.0.md](UPGRADE-5.0.md).
