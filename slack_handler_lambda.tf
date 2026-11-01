@@ -1,6 +1,6 @@
 module "access_requester_slack_handler" {
   source  = "terraform-aws-modules/lambda/aws"
-  version = "8.8.2"
+  version = "8.12.0"
 
   function_name = var.requester_lambda_name
   description   = "Receive requests from slack and grants temporary access"
@@ -105,7 +105,7 @@ module "access_requester_slack_handler" {
 # alias moves to it -- the hook SnapStart and provisioned concurrency need.
 module "access_requester_alias" {
   source  = "terraform-aws-modules/lambda/aws//modules/alias"
-  version = "8.8.2"
+  version = "8.12.0"
 
   name             = local.requester_alias_name
   function_name    = module.access_requester_slack_handler.lambda_function_name
