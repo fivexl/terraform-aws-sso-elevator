@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # OIDC role for the ECR push
 
 # A new push to a PR supersedes the previous build; main and release runs each
 # get a unique group so they are never cancelled.
@@ -39,8 +40,9 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          # PRs push through their own role so CloudTrail tells test images
+          # from main and release images.
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ github.event_name == 'pull_request' && 'ecr-push-aws-sso-elevator-pr' || 'ecr-push-aws-sso-elevator' }}
           aws-region: eu-central-1
 
       - name: Login to Amazon ECR
